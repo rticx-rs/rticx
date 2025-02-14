@@ -172,11 +172,9 @@ impl<'a> CodeGen<'a> {
 
             let def_core_type = generate_core_type(app.core);
 
-            let doc = format!(" CORE {}", app.core);
+            let doc = format!(" # CORE {}", app.core);
             quote! {
-                #[doc = " ===================================="]
                 #[doc = #doc]
-                #[doc = " ==================================== "]
                 // define static mut shared resources
                 #def_shared
                 // init task
