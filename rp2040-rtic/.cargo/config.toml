@@ -19,7 +19,7 @@ rustflags = [
     "-C",
     "link-arg=-Tdefmt.x",
     "-C",
-    "inline-threshold=5",
+    "llvm-args=--inline-threshold=5",
     "-C",
     "no-vectorize-loops",
 ]
