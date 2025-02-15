@@ -34,14 +34,17 @@ In this experiment project
 
 - `rtic-sw-pass` is the default crate that provides a software tasks pass. It does that by simply generating the necessary queues for message passing and then declaring the dispatchers as hardware tasks. Resource management and binding to interrupts and all other initialization steps will be taken care of by the hardware pass in`rtic-core`
 
+- `rtic-deadline-pass` is a compilation pass that makes a simple "deadlines-to-priorities" conversion for tasks.
+
 - `rp2040-rtic`: is an example RTIC distribution (multicore) specific to the RP2040 which defines the rp2040 specific hardware details and provides them to  `rtic-core` , `rtic-sw-pass` and other compilation passes crates to create the desired distribution.  
 
-- other ones.. todo
+- `stm32-renode-rtic`: Another multicore distribution targeting a renode simulation of a modified stm32f1c3 MCU architecture.
+
+- `hippo-rtic`: an distribution targeting a single (soft-)core RISC-V MCU. 
 
 
 ### More
 
-- [Multicore rtic application example](rtic_mc.md)
 - [Rust code documentation](https://zakimadaoui.github.io/rtic-mc-experiments/)
 
 ### Other useful links

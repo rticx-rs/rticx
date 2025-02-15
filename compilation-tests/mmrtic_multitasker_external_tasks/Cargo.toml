@@ -26,7 +26,7 @@ rp2040-hal = "0.9.1"
 
 # portable-atomic = { version = "1", features = ["critical-section"] }
 # futures = "0.3.29"
-rtic = { path = "../../rp2040-rtic" , features = ["swtasks"]}
+rtic = { path = "../../distributions/rp2040-rtic" , features = ["swtasks"]}
 
 itoa = "1.0.11"
 base64 = {version = "0.22.1", default-features = false}

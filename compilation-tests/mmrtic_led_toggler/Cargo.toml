@@ -26,4 +26,4 @@ rp2040-hal = "0.9.1"
 
 # portable-atomic = { version = "1", features = ["critical-section"] }
 # futures = "0.3.29"
-rtic = { path = "../../rp2040-rtic" }
+rtic = { path = "../../distributions/rp2040-rtic" }
