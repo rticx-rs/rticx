@@ -111,7 +111,7 @@ impl CorePassBackend for HippoRtic {
         completed_lock_fn
     }
 
-    fn set_entry_name(&self, _core: u32) -> Ident {
+    fn entry_name(&self, _core: u32) -> Ident {
         // same entry name for both cores.
         // two main() functions will be generated but both will be guarded by #[cfg(core = "X")]
         // each generated binary will have have one entry
@@ -128,7 +128,7 @@ impl CorePassBackend for HippoRtic {
     }
 
     /// further analysis of parsed user code
-    fn pre_codgen_validation(
+    fn pre_codegen_validation(
         &self,
         _app: &rtic_core::App,
         _analysis: &rtic_core::Analysis,
