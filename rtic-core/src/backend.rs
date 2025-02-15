@@ -66,18 +66,18 @@ pub trait CorePassBackend {
     /// ## Contract
     ///
     ///* The returned value representing the populated function must have the same signature as `incomplete_lock_fn'.
-    ///     
+    ///
     ///* The implementation must be according to SRP rules such that:
     ///    * System interrupt priority ceiling is raised to the value of `CEILING`.
     ///    * The closure `f` is called and `resource_ref` is passed to it as a parameter. (to execute the resource critical section).
-    ///    * System interrupt priority ceiling should be restored back to `task_priority` value.     
+    ///    * System interrupt priority ceiling should be restored back to `task_priority` value.
     ///* If global definitions need to be generated for use in the locking implementation, the trait method which will be described next should be used to cover such need.
     ///
     /// ## Note
     /// This trait method is called for every shared resource in every sub-application.
     ///
     /// ## Debugging Tip
-    /// Use ```eprintln("{}", incomplete_lock_fn.to_tokenstream().to_string())``` to see the `incomplete_lock_fn` signature and already provided logic inside it.
+    /// Use ```eprintln("{}", incomplete_lock_fn.to_token_stream().to_string())``` to see the `incomplete_lock_fn` signature and already provided logic inside it.
     fn generate_resource_proxy_lock_impl(
         &self,
         app_args: &AppArgs,
@@ -133,7 +133,7 @@ pub trait CorePassBackend {
     /// other unique identifiers.
     ///
     /// ## Contract
-    /// - For single-core and multi-binary multicore distributions, this trait method should always return "main" as the entry name.  
+    /// - For single-core and multi-binary multicore distributions, this trait method should always return "main" as the entry name.
     /// - For single-binary multicore distributions, return "main" once only, then different identifiers should be used for other cores entries.
     ///
     /// See rp2040 distribution for a real world example.
@@ -145,7 +145,7 @@ pub trait CorePassBackend {
     /// }
     /// ```
     ///
-    fn set_entry_name(&self, core: u32) -> Ident;
+    fn entry_name(&self, core: u32) -> Ident;
 
     /// # Customizing the default behavior of idle task
     /// When the user doesn't define an idle task, RTIC automatically defines one with a default implementation.
@@ -213,7 +213,7 @@ pub trait CorePassBackend {
     /// In certain cases, some checks/validation related to implementation/hardware specific details need to be made before allowing the user code to be expanded.
     /// An example, could be that the user has attempted to use an Exception line as for a dispatcher, but the distribution needs to forbid that.
     /// Implementing this trait method, gives the ability to enforcing such checks.
-    fn pre_codgen_validation(&self, app: &App, analysis: &Analysis) -> syn::Result<()>;
+    fn pre_codegen_validation(&self, app: &App, analysis: &Analysis) -> syn::Result<()>;
 
     /// Implementation must return the default task priority to be used in idle task and tasks when priority argument value is not provided by the user.
     fn default_task_priority(&self) -> u16;

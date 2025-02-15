@@ -100,7 +100,6 @@ impl<'a> CodeGen<'a> {
                 .chain(sub_app.mc_sw_tasks.iter_mut());
             // Re-generate the software tasks definitions and generate the spawn() api for each task
             let sw_tasks = tasks_iter.map(|task| {
-                
                 // We will rename the "sw_task" attribute to "task" so that the standard pass recognizes this as a task
                 // also, we will add the `task_trait = RticSwTask` argument.
 
@@ -111,11 +110,10 @@ impl<'a> CodeGen<'a> {
                     .iter()
                     .position(|attr| attr.path().is_ident("sw_task"))
                     .expect("A sw task must have a sw_task attribute");
-                
 
                 // Then remove the old attribute as we will reconstruct it
-                let attr = task.task_struct.attrs.remove(attr_idx); 
-                
+                let attr = task.task_struct.attrs.remove(attr_idx);
+
                 // Now we parse and reconstruct the task attribute
                 let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap(); // FIXME: propagate error
                 let _ = reconstructed_task_attr.name.insert(format_ident!("task"));
@@ -258,7 +256,9 @@ impl SoftwareTask {
         let ready_queue_name = utils::priority_queue_ident(&prio_ty);
 
         let critical_section_fn = format_ident!("{}", rtic_core::rtic_functions::INTERRUPT_FREE_FN);
-        let interrupt_ty = backend.custom_interrupt_path(self.params.core).unwrap_or(parse_quote!(#peripheral_crate::Interrupt));
+        let interrupt_ty = backend
+            .custom_interrupt_path(self.params.core)
+            .unwrap_or(parse_quote!(#peripheral_crate::Interrupt));
 
         // spawn for core-local tasks
         if self.params.core == self.params.spawn_by {
@@ -272,7 +272,7 @@ impl SoftwareTask {
                     pub fn spawn(input : #inputs_ty) -> Result<(), #inputs_ty> {
                         let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};
-                        /// need to protect by a critical section due to many producers of different priorities can spawn/enqueue this task
+                        /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                         #critical_section_fn(|| -> Result<(), #inputs_ty>  {
                             // enqueue inputs
                             inputs_producer.enqueue(input)?;
@@ -299,7 +299,7 @@ impl SoftwareTask {
                     pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), #inputs_ty> {
                         let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};
-                        /// need to protect by a critical section due to many producers of different priorities can spawn/enqueue this task
+                        /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                         #critical_section_fn(|| -> Result<(), #inputs_ty>  {
                             // enqueue inputs
                             inputs_producer.enqueue(input)?;

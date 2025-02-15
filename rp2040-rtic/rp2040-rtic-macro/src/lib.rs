@@ -174,7 +174,7 @@ impl CorePassBackend for Rp2040Rtic {
         completed_lock_fn
     }
 
-    fn set_entry_name(&self, core: u32) -> Ident {
+    fn entry_name(&self, core: u32) -> Ident {
         match core {
             0 => format_ident!("main"),
             _ => format_ident!("core{core}_entry"),
@@ -189,7 +189,7 @@ impl CorePassBackend for Rp2040Rtic {
         None
     }
 
-    fn pre_codgen_validation(
+    fn pre_codegen_validation(
         &self,
         _app: &rtic_core::App,
         _analysis: &rtic_core::Analysis,
