@@ -12,7 +12,7 @@ bench = false
 [dependencies]
 
 rtic-macro = { path = "rtic-macro" }
-rtic-sw-pass = { path = "../rtic-sw-pass", default-features = false }
+rtic-sw-pass = { path = "../../compilation_passes/rtic-sw-pass", default-features = false }
 
 cortex-m-semihosting = "0.3.2"
 cortex-m = "0.7.7"
@@ -22,7 +22,7 @@ panic-halt = "0.2.0"
 stm32f1xx-hal = { version = "0.10.0", features = ["stm32f103", "rt"] }
 cortex-m-rt = "0.7.3"
 volatile-register = "0.2.2"
-# microamp = { path = "../microamp_experimental" } # enabled this if multi-binary support is needed
+# microamp = { path = "../../microamp_experimental" } # enabled this if multi-binary support is needed
 
 
 [dev-dependencies]

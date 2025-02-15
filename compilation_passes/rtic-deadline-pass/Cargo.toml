@@ -13,8 +13,8 @@ syn = { version = "2.0.53", features = [
     "extra-traits",
     "full",
 ], optional = true }
-rtic-core = { path = "../rtic-core", optional = true }
-# rtic-spsc = { path = "../rtic-spsc" }
+rtic-core = { path = "../../rtic-core", optional = true }
+# rtic-spsc = { path = "../../rtic-spsc" }
 
 [features]
 std = ["dep:heck", "dep:proc-macro2", "dep:quote", "dep:syn", "dep:rtic-core"]

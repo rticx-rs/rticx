@@ -21,8 +21,8 @@ The RTIC framework modularity problem can be solved like in any other software p
 
 Solving those two problems lead to what is known as **RTIC distributions and External Compilation passes**
 
-- [Compilation passes](compilation_passes.md) 
-- [RTIC distributions](rtic_distributions.md) 
+- [Compilation passes](compilation_passes/compilation_passes.md) 
+- [RTIC distributions](distributions/rtic_distributions.md) 
 
 ### Project structure
 

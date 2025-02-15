@@ -12,10 +12,10 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
-rtic-core = { path = "../../rtic-core", features = [
+rtic-core = { path = "../../../rtic-core", features = [
     # "debug_expand",
 ] }
-rtic-auto-assign = { path = "../../rtic-auto-assign" }
+rtic-auto-assign = { path = "../../../compilation_passes/rtic-auto-assign" }
 syn = { version = "2.0.52", features = ["extra-traits", "full"] }
 # rtic-sw-pass = { path = "../../rtic-sw-pass", features = ["multibin"] }
-rtic-sw-pass = { path = "../../rtic-sw-pass" }
+rtic-sw-pass = { path = "../../../compilation_passes/rtic-sw-pass" }

@@ -1,4 +1,5 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/backend.rs`."><title>backend.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="rtic_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.1 (3f5fd8dd4 2024-08-06)" data-channel="1.80.1" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/backend.rs`."><title>backend.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="rtic_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.83.0 (90b35a623 2024-11-26)" data-channel="1.83.0" data-search-js="search-f0d225181b97f9a4.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">rtic_core/</div>backend.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -220,7 +221,42 @@
 <a href="#220" id="220">220</a>
 <a href="#221" id="221">221</a>
 <a href="#222" id="222">222</a>
-</pre></div><pre class="rust"><code><span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a></pre></div><pre class="rust"><code><span class="kw">use super</span>::<span class="kw-2">*</span>;
 
 <span class="doccomment">/// Interface for providing the low-level hardware bindings specific for a target(s) (A.k.a The Backend) to be used during code generation phase
 /// of the **Core Compilation Pass*.
@@ -288,18 +324,18 @@
     /// ## Contract
     ///
     ///* The returned value representing the populated function must have the same signature as `incomplete_lock_fn'.
-    ///     
+    ///
     ///* The implementation must be according to SRP rules such that:
     ///    * System interrupt priority ceiling is raised to the value of `CEILING`.
     ///    * The closure `f` is called and `resource_ref` is passed to it as a parameter. (to execute the resource critical section).
-    ///    * System interrupt priority ceiling should be restored back to `task_priority` value.     
+    ///    * System interrupt priority ceiling should be restored back to `task_priority` value.
     ///* If global definitions need to be generated for use in the locking implementation, the trait method which will be described next should be used to cover such need.
     ///
     /// ## Note
     /// This trait method is called for every shared resource in every sub-application.
     ///
     /// ## Debugging Tip
-    /// Use ```eprintln("{}", incomplete_lock_fn.to_tokenstream().to_string())``` to see the `incomplete_lock_fn` signature and already provided logic inside it.
+    /// Use ```eprintln("{}", incomplete_lock_fn.to_token_stream().to_string())``` to see the `incomplete_lock_fn` signature and already provided logic inside it.
     </span><span class="kw">fn </span>generate_resource_proxy_lock_impl(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         app_args: <span class="kw-2">&amp;</span>AppArgs,
@@ -355,7 +391,7 @@
     /// other unique identifiers.
     ///
     /// ## Contract
-    /// - For single-core and multi-binary multicore distributions, this trait method should always return "main" as the entry name.  
+    /// - For single-core and multi-binary multicore distributions, this trait method should always return "main" as the entry name.
     /// - For single-binary multicore distributions, return "main" once only, then different identifiers should be used for other cores entries.
     ///
     /// See rp2040 distribution for a real world example.
@@ -367,7 +403,7 @@
     /// }
     /// ```
     ///
-    </span><span class="kw">fn </span>set_entry_name(<span class="kw-2">&amp;</span><span class="self">self</span>, core: u32) -&gt; Ident;
+    </span><span class="kw">fn </span>entry_name(<span class="kw-2">&amp;</span><span class="self">self</span>, core: u32) -&gt; Ident;
 
     <span class="doccomment">/// # Customizing the default behavior of idle task
     /// When the user doesn't define an idle task, RTIC automatically defines one with a default implementation.
@@ -435,11 +471,47 @@
     /// In certain cases, some checks/validation related to implementation/hardware specific details need to be made before allowing the user code to be expanded.
     /// An example, could be that the user has attempted to use an Exception line as for a dispatcher, but the distribution needs to forbid that.
     /// Implementing this trait method, gives the ability to enforcing such checks.
-    </span><span class="kw">fn </span>pre_codgen_validation(<span class="kw-2">&amp;</span><span class="self">self</span>, app: <span class="kw-2">&amp;</span>App, analysis: <span class="kw-2">&amp;</span>Analysis) -&gt; syn::Result&lt;()&gt;;
+    </span><span class="kw">fn </span>pre_codegen_validation(<span class="kw-2">&amp;</span><span class="self">self</span>, app: <span class="kw-2">&amp;</span>App, analysis: <span class="kw-2">&amp;</span>Analysis) -&gt; syn::Result&lt;()&gt;;
 
     <span class="doccomment">/// Implementation must return the default task priority to be used in idle task and tasks when priority argument value is not provided by the user.
     </span><span class="kw">fn </span>default_task_priority(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u16;
 
-    <span class="comment">//FIXME: need to add a trait method that returns the distribution crate name to use instead of rtic::path::to::something...
-</span>}
+    <span class="doccomment">/// Attribute macros to add to the entry point
+    ///
+    /// Used often to annotate the runtime entry point for bare metal applications.
+    ///
+    /// # Examples
+    ///
+    /// `entry_attrs` allows to add attribute macros to the main entry point, enabling the following
+    /// common use case:
+    ///
+    /// ```rust
+    /// #[riscv_rt::entry]
+    /// fn main() -&gt; ! {
+    ///     loop {}
+    /// }
+    /// ```
+    </span><span class="kw">fn </span>entry_attrs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;syn::Attribute&gt; {
+        <span class="comment">// vec![syn::parse_quote!(#[some_random_attr1]) , syn::parse_quote!(#[some_random_attr2])]
+        </span><span class="macro">vec!</span>[]
+    }
+
+    <span class="doccomment">/// Attribute macros to add to tasks
+    ///
+    /// Used by some implementations to inject custom pre- and postambles to task handlers.
+    ///
+    /// # Examples
+    ///
+    /// `task_attrs` allows to add attribute macros to the main entry point, enabling the following
+    /// common use case:
+    ///
+    /// ```rust
+    /// #[riscv_rt::interrupt]
+    /// fn Uart() {}
+    /// ```
+    </span><span class="kw">fn </span>task_attrs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;syn::Attribute&gt; {
+        <span class="comment">// vec![syn::parse_quote!(#[some_random_attr1]) , syn::parse_quote!(#[some_random_attr2])]
+        </span><span class="macro">vec!</span>[]
+    }
+}
 </code></pre></div></section></main></body></html>

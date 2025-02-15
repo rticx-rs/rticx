@@ -2,8 +2,8 @@
 //!
 //! In addition, this crate provides utilities for building the actual RTIC crate (known as an **RTIC distribution**) that exports the RTIC framework attribute procedural macro for a specific target hardware architecture. Further more, the same utilizes allow extending the **core syntax** provided by this crate through the concept of **Compilation passes**. As a result, this crate is not meant to be used directly by users who want to write RTIC applications, instead it is used by **RTIC distribution** implementors.
 //!
-#![doc = include_str!("../../compilation_passes.md")]
-#![doc = include_str!("../../rtic_distributions.md")]
+#![doc = include_str!("../../compilation_passes/compilation_passes.md")]
+#![doc = include_str!("../../distributions/rtic_distributions.md")]
 //!
 //! ### Guidelines for implementing new distributions, links, and link to template distribution
 //! TODO...
