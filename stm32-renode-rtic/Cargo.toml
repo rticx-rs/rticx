@@ -23,7 +23,7 @@ panic-halt = "0.2.0"
 stm32f1xx-hal = { version = "0.10.0", features = ["stm32f103", "rt"] }
 cortex-m-rt = "0.7.3"
 volatile-register = "0.2.2"
-microamp = { path = "/home/zakaria/myrtic/microamp_experimental" }
+microamp = { path = "../microamp_experimental" }
 
 
 [dev-dependencies]

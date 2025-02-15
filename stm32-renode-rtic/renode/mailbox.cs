@@ -6,7 +6,7 @@ using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Utilities;
 using Antmicro.Renode.Peripherals.Bus;
 
-namespace Zakaria.Rtic {
+namespace MMRtic {
 
     public class MailboxPeripheral : IKnownSize, IDoubleWordPeripheral, IMailbox
     {

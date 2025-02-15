@@ -2,6 +2,7 @@
 name = "rtic"
 version = "0.1.0"
 edition = "2021"
+authors = ["Zakaria Madaoui"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -13,9 +14,7 @@ bench = false
 rtic-macro = { path = "rtic-macro" }
 rtic-sw-pass = { path = "../rtic-sw-pass", default-features = false }
 
-# stm32 stuff
 cortex-m-semihosting = "0.3.2"
-# cortex-m = "0.5.8"
 cortex-m = "0.7.7"
 nb = "0.1.1"
 embedded-hal = { version = "1.0.0" }
@@ -23,7 +22,7 @@ panic-halt = "0.2.0"
 stm32f1xx-hal = { version = "0.10.0", features = ["stm32f103", "rt"] }
 cortex-m-rt = "0.7.3"
 volatile-register = "0.2.2"
-microamp = { path = "/home/zakaria/myrtic/microamp" }
+# microamp = { path = "../microamp_experimental" } # enabled this if multi-binary support is needed
 
 
 [dev-dependencies]
@@ -31,7 +30,6 @@ cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 
 embedded-hal = "0.2.7"
-# futures = "0.3.29"
 panic-halt = "0.2.0"
 
 

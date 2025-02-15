@@ -45,20 +45,20 @@ cpu1: CPU.CortexM @ sysbus
 
 // Custom mailbox peripherals ------------------------------------------------------------------------------------------
 
-mailbox0: Zakaria.Rtic.MailboxPeripheral @ sysbus new Bus.BusPointRegistration { 
+mailbox0: MMRtic.MailboxPeripheral @ sysbus new Bus.BusPointRegistration { 
     address: 0x40030000; // this memory region seems reserved in the reference manual, so we could use it for renode sim
     cpu: cpu0 
     }
     irq -> nvic0@59 // NOTE that we are stealing the 59th line irq to be used for mailbox interrupts
 
-mailbox1: Zakaria.Rtic.MailboxPeripheral @ sysbus new Bus.BusPointRegistration { 
+mailbox1: MMRtic.MailboxPeripheral @ sysbus new Bus.BusPointRegistration { 
     address: 0x40030000; /* this memory region seems reserved in the reference manual, so we could use it for renode sim */ 
     cpu: cpu1 
     }
     irq -> nvic1@59 // NOTE that we are stealing the 59th line irq to be used for mailbox interrupts
 
 // A proxy was needed to get the two mailboxes to cross reference each other
-proxy: Zakaria.Rtic.MailboxProxy
+proxy: MMRtic.MailboxProxy
     m0: mailbox0
     m1: mailbox1
 
