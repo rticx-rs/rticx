@@ -233,13 +233,9 @@ pub trait CorePassBackend {
     ///     loop {}
     /// }
     /// ```
-    ///
-    /// # Developer notes
-    ///
-    /// Return type `Option<proc_macro2::TokenStream2>` is too permissive. We should be returning
-    /// just `syn::Attribute` but I couldn't figure out how to effectively generate that.
-    fn entry_attrs(&self) -> Option<TokenStream2> {
-        None
+    fn entry_attrs(&self) -> Vec<syn::Attribute> {
+        // vec![syn::parse_quote!(#[some_random_attr1]) , syn::parse_quote!(#[some_random_attr2])]
+        vec![]
     }
 
     /// Attribute macros to add to tasks
@@ -255,12 +251,8 @@ pub trait CorePassBackend {
     /// #[riscv_rt::interrupt]
     /// fn Uart() {}
     /// ```
-    ///
-    /// # Developer notes
-    ///
-    /// Return type `Option<proc_macro2::TokenStream2>` is too permissive. We should be returning
-    /// just `syn::Attribute` but I couldn't figure out how to effectively generate that.
-    fn task_attrs(&self) -> Option<TokenStream2> {
-        None
+    fn task_attrs(&self) -> Vec<syn::Attribute> {
+        // vec![syn::parse_quote!(#[some_random_attr1]) , syn::parse_quote!(#[some_random_attr2])]
+        vec![]
     }
 }

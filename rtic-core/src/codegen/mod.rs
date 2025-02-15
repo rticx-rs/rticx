@@ -165,7 +165,7 @@ impl<'a> CodeGen<'a> {
 
             // priority masks
             let priority_masks = implementation.generate_global_definitions(args, app, analysis);
-            let entry_attrs = implementation.entry_attrs().unwrap_or(quote!());
+            let entry_attrs = implementation.entry_attrs();
             let entry_name = implementation.entry_name(app.core);
 
             let interrupt_free = format_ident!("{}", INTERRUPT_FREE_FN);
@@ -200,7 +200,7 @@ impl<'a> CodeGen<'a> {
                 #[doc = r" Entry of "]
                 #[doc = #doc]
                 #cfg_core
-                #entry_attrs
+                #(#entry_attrs)*
                 #[no_mangle]
                 fn #entry_name() -> ! {
                     // Disable interrupts during initialization
