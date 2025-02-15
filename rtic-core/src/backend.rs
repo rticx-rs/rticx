@@ -217,4 +217,50 @@ pub trait CorePassBackend {
 
     /// Implementation must return the default task priority to be used in idle task and tasks when priority argument value is not provided by the user.
     fn default_task_priority(&self) -> u16;
+
+    /// Attribute macros to add to the entry point
+    ///
+    /// Used often to annotate the runtime entry point for bare metal applications.
+    ///
+    /// # Examples
+    ///
+    /// `entry_attrs` allows to add attribute macros to the main entry point, enabling the following
+    /// common use case:
+    ///
+    /// ```rust
+    /// #[riscv_rt::entry]
+    /// fn main() -> ! {
+    ///     loop {}
+    /// }
+    /// ```
+    ///
+    /// # Developer notes
+    ///
+    /// Return type `Option<proc_macro2::TokenStream2>` is too permissive. We should be returning
+    /// just `syn::Attribute` but I couldn't figure out how to effectively generate that.
+    fn entry_attrs(&self) -> Option<TokenStream2> {
+        None
+    }
+
+    /// Attribute macros to add to tasks
+    ///
+    /// Used by some implementations to inject custom pre- and postambles to task handlers.
+    ///
+    /// # Examples
+    ///
+    /// `task_attrs` allows to add attribute macros to the main entry point, enabling the following
+    /// common use case:
+    ///
+    /// ```rust
+    /// #[riscv_rt::interrupt]
+    /// fn Uart() {}
+    /// ```
+    ///
+    /// # Developer notes
+    ///
+    /// Return type `Option<proc_macro2::TokenStream2>` is too permissive. We should be returning
+    /// just `syn::Attribute` but I couldn't figure out how to effectively generate that.
+    fn task_attrs(&self) -> Option<TokenStream2> {
+        None
+    }
 }
