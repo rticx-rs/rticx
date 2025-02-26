@@ -22,7 +22,7 @@ impl DeadlineToPriorityPass {
 
 impl RticPass for DeadlineToPriorityPass {
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
-        let params = RticAttr::parse_from_tokens(&args)?;
+        let params = RticAttr::parse_from_tokens(args.clone())?;
 
         let mut parsed = App::parse(&params, app_mod)?;
 

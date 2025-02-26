@@ -34,7 +34,7 @@ impl RticAttr {
                     None
                 };
 
-                let mut parsed = Self::parse_from_tokens(&list.tokens)?;
+                let mut parsed = Self::parse_from_tokens(list.tokens.clone())?;
                 parsed.name = name;
                 Ok(parsed)
             }
@@ -43,7 +43,7 @@ impl RticAttr {
     }
 
     /// Parse the tokenstream representation of the arguments of an #[app(arg1="val1", ...)] macro attribute
-    pub fn parse_from_tokens(tokens: &TokenStream2) -> syn::Result<Self> {
+    pub fn parse_from_tokens(tokens: TokenStream2) -> syn::Result<Self> {
         let mut elements = HashMap::new();
         syn::meta::parser(|meta| {
             let value: syn::Expr = meta.value()?.parse()?;
@@ -52,7 +52,7 @@ impl RticAttr {
             }
             Ok(())
         })
-        .parse2(tokens.clone())?;
+        .parse2(tokens)?;
 
         Ok(Self {
             name: None,
