@@ -18,7 +18,7 @@ pub struct SubApp {
     pub mc_sw_tasks: Vec<SoftwareTask>,
 }
 
-/// Type to represent an RTIC application (withing software pass context)
+/// Type to represent an RTIC application (within software pass context)
 /// The application contains one or more sub-applications (one application per-core)
 pub struct App {
     pub mod_visibility: Visibility,
