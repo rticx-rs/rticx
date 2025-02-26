@@ -7,6 +7,7 @@ use syn::{parse::Parser, parse_quote, Attribute, Meta};
 
 #[derive(Debug)]
 pub struct RticAttr {
+    /// E.g., `task`
     pub name: Option<syn::Ident>,
     pub elements: HashMap<String, syn::Expr>,
 }
