@@ -39,18 +39,18 @@ impl App {
 
         for item in app_mod_items {
             match item {
-                Item::Struct(strct) => {
-                    if let Some(attr_idx) = Self::is_struct_with_attr(&strct, "sw_task") {
-                        sw_task_structs.push((strct, attr_idx))
+                Item::Struct(struct_) => {
+                    if let Some(attr_idx) = Self::is_struct_with_attr(&struct_, "sw_task") {
+                        sw_task_structs.push((struct_, attr_idx))
                     } else {
-                        rest_of_code.push(Item::Struct(strct))
+                        rest_of_code.push(Item::Struct(struct_))
                     }
                 }
-                Item::Impl(impel) => {
-                    if let Some(implementor) = Self::get_sw_task_implementor(&impel) {
-                        sw_task_impls.insert(implementor.clone(), impel);
+                Item::Impl(impl_) => {
+                    if let Some(implementor) = Self::get_sw_task_implementor(&impl_) {
+                        sw_task_impls.insert(implementor.clone(), impl_);
                     } else {
-                        rest_of_code.push(Item::Impl(impel))
+                        rest_of_code.push(Item::Impl(impl_))
                     }
                 }
                 _ => rest_of_code.push(item),
