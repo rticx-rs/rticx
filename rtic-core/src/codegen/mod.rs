@@ -72,14 +72,14 @@ impl<'a> CodeGen<'a> {
                 // if multibin feature is enabled, add the this use statement
                 #use_multibin_shared
 
-                /// ================================== user includes ====================================
+                // ================================== user includes ====================================
                 #(#user_includes)*
-                /// ==================================== rtic traits ====================================
+                // ==================================== rtic traits ====================================
                 #rtic_traits_mod
-                /// ================================== rtic functions ===================================
+                // ================================== rtic functions ===================================
                 /// critical section function
                 #interrupt_free_fn
-                /// ==================================== User code ======================================
+                // ==================================== User code ======================================
                 #(#user_code)*
 
                 // sub applications
@@ -172,11 +172,9 @@ impl<'a> CodeGen<'a> {
 
             let def_core_type = generate_core_type(app.core);
 
-            let doc = format!(" CORE {}", app.core);
+            let doc = format!(" # CORE {}", app.core);
             quote! {
-                #[doc = " ===================================="]
                 #[doc = #doc]
-                #[doc = " ==================================== "]
                 // define static mut shared resources
                 #def_shared
                 // init task

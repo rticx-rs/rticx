@@ -14,7 +14,7 @@ pub struct AutoAssignPass;
 
 impl RticPass for AutoAssignPass {
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
-        let params = RticAttr::parse_from_tokens(&args)?;
+        let params = RticAttr::parse_from_tokens(args.clone())?;
         let mut parsed = App::parse(&params, app_mod)?;
         auto_assign::run(&mut parsed)?;
         let code = CodeGen::new(parsed).run();

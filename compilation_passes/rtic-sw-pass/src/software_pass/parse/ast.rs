@@ -12,7 +12,7 @@ pub struct AppParameters {
 impl AppParameters {
     pub fn parse(args: &TokenStream) -> syn::Result<Self> {
         let args_span = args.span();
-        let mut args = RticAttr::parse_from_tokens(args)?;
+        let mut args = RticAttr::parse_from_tokens(args.clone())?;
 
         // parse the number of cores
         let cores = args.elements.remove("cores");

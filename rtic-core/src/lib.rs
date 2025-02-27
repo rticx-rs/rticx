@@ -89,8 +89,8 @@ impl RticMacroBuilder {
         self
     }
 
-    /// Once the **CorePass** low level hardware bindings are provided, and a selection of **Compilation Passes** are binded
-    /// too, use this method to run the **app** proc macro logic.
+    /// Once the **CorePass** low level hardware bindings are provided, and a selection of
+    /// **Compilation Passes** are bound too, use this method to run the **app** proc macro logic.
     ///
     /// Returns a TokenStream of the expanded user application.
     pub fn build_rtic_macro(self, args: TokenStream, input: TokenStream) -> TokenStream {
@@ -100,7 +100,7 @@ impl RticMacroBuilder {
         let mut args = TokenStream2::from(args);
         let mut app_mod = parse_macro_input!(input as ItemMod);
 
-        // First, run extra passes  (in the order of their insertion)
+        // First, run extra passes (in the order of their insertion)
         for pass in self.pre_std_passes {
             let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
                 Ok(out) => out,
@@ -120,7 +120,7 @@ impl RticMacroBuilder {
         let mut parsed_app = match App::parse(args, app_mod) {
             Ok(parsed) => parsed,
             Err(e) => {
-                eprintln!("An error occurred during the `core` compilation pass during the  user code `parsing` phase.");
+                eprintln!("An error occurred during the `core` compilation pass during the user code `parsing` phase.");
                 return e.to_compile_error().into();
             }
         };

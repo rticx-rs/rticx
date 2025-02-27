@@ -96,7 +96,13 @@ impl TaskArgs {
             }
             Ok(())
         })
-        .parse2(args.tokens)?;
+        .parse2(args.tokens.clone())
+        .inspect_err(|_e| {
+            eprintln!(
+                "An error occurred while parsing: {:?}",
+                args.tokens.to_string()
+            );
+        })?;
 
         let interrupt_handler_name = interrupt_handler_name
             .map(|i| Ident::new(&i.to_token_stream().to_string(), Span::call_site()));
@@ -243,7 +249,7 @@ impl AppArgs {
     pub fn parse(args: proc_macro2::TokenStream) -> syn::Result<Self> {
         let args_span = args.span();
 
-        let mut args = RticAttr::parse_from_tokens(&args)?;
+        let mut args = RticAttr::parse_from_tokens(args.clone())?;
 
         // parse the number of cores
         let cores = args.elements.remove("cores");

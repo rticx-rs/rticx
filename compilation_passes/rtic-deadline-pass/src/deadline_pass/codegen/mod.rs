@@ -16,7 +16,9 @@ impl CodeGen {
         let tasks = self.app.tasks.iter_mut().map(|task| {
             let task_attribute = &task.params;
             let task_struct = &mut task.task_struct;
-            task_struct.attrs.remove(task.attr_idx); // remove the older task attribute and replace with the updated one which includes an automatically assinged core
+            // remove the older task attribute and replace with the updated one which includes an
+            // automatically assigned core
+            task_struct.attrs.remove(task.attr_idx);
             quote! {
                 #task_attribute
                 #task_struct

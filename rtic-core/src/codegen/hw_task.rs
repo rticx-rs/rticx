@@ -129,13 +129,13 @@ impl HardwareTask {
         let task_static_handle = &self.name_uppercase();
         let task_irq_handler = &self.args.interrupt_handler_name.clone()?;
 
-        let defaut_task_dispatch_call = quote! {
+        let default_task_dispatch_call = quote! {
             unsafe {#task_static_handle.assume_init_mut().exec()};
         };
 
         let task_dispatch_call = implementation
-            .wrap_task_execution(self.args.priority, defaut_task_dispatch_call.clone())
-            .unwrap_or(defaut_task_dispatch_call);
+            .wrap_task_execution(self.args.priority, default_task_dispatch_call.clone())
+            .unwrap_or(default_task_dispatch_call);
 
         Some(quote! {
             #cfg_core

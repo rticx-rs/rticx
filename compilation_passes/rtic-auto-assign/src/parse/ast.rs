@@ -14,9 +14,11 @@ pub struct RticTask {
     pub attr_idx: usize,
     pub shared_items: Vec<syn::Ident>,
     pub task_struct: ItemStruct,
-    pub core: Option<u32>, // core to be assinged (if not already by user) during automatic core assinged part.
-                           // Note that this may still be None after the auto assignment part
-                           // if the task doesn't use any shared resources (explicit assingment required)
+    /// Core to be assigned during automatic core assignment, if not set already by user
+    ///
+    /// Note that this may still be None after the auto assignment part if the
+    /// task doesn't use any shared resources (explicit assingment required).
+    pub core: Option<u32>,
 }
 
 impl RticTask {
