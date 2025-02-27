@@ -47,7 +47,11 @@ impl RticAttr {
     pub fn parse_from_tokens(tokens: TokenStream2) -> syn::Result<Self> {
         let mut elements = HashMap::new();
         syn::meta::parser(|meta| {
-            let value: syn::Expr = meta.value()?.parse()?;
+            let value: syn::Expr = meta
+                .value()
+                // Try parsing the assignment operator. On failure, set value = ().
+                .map(|v| v.parse())
+                .unwrap_or_else(|_| Ok(parse_quote!(())))?;
             if let Some(ident) = meta.path.get_ident() {
                 elements.insert(ident.to_string(), value);
             }

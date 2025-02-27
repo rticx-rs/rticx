@@ -4,8 +4,8 @@ use heck::ToSnakeCase;
 use proc_macro2::Span;
 use quote::{format_ident, ToTokens};
 use syn::{
-    parse::Parser, spanned::Spanned, Expr, ExprArray, ExprLit, Ident, ItemFn, ItemImpl, ItemStruct,
-    Lit, LitInt, Meta,
+    parse::Parser, parse_quote, spanned::Spanned, Expr, ExprArray, ExprLit, Ident, ItemFn,
+    ItemImpl, ItemStruct, Lit, LitInt, Meta,
 };
 
 use crate::{
@@ -92,7 +92,11 @@ impl TaskArgs {
                 task_trait = Some(meta.value()?.parse()?);
             } else {
                 // this is needed to advance the values iterator
-                let _: syn::Result<Expr> = meta.value()?.parse();
+                let _: syn::Result<Expr> = meta
+                    .value()
+                    // Try parsing the assignment operator. On failure, set value = ().
+                    .map(|v| v.parse())
+                    .unwrap_or_else(|_| Ok(parse_quote!(())));
             }
             Ok(())
         })
