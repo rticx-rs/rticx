@@ -127,7 +127,7 @@ impl HardwareTask {
         let cfg_core = multibin::multibin_cfg_core(self.args.core);
         let task_attrs = implementation.task_attrs();
         let task_static_handle = &self.name_uppercase();
-        let task_irq_handler = &self.args.interrupt_handler_name.clone()?;
+        let task_irq_handler = &self.args.binds.clone()?;
 
         let default_task_dispatch_call = quote! {
             unsafe {#task_static_handle.assume_init_mut().exec()};

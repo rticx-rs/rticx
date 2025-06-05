@@ -52,10 +52,11 @@ impl InitTaskArgs {
 
 #[derive(Debug)]
 pub struct TaskArgs {
-    pub interrupt_handler_name: Option<syn::Ident>,
+    /// Interrupt handler name
+    pub binds: Option<syn::Ident>,
     pub priority: u16,
-    // list of identifiers for shared resources
-    pub shared_idents: Vec<Ident>,
+    /// Shared resources, stored as a list of [identifiers](`proc_macro2::Ident`)
+    pub shared: Vec<Ident>,
     pub core: u32,
     // tells whether a task is native to this compilation pass or if another compilation pass handles its trait implementation
     pub task_trait: Ident,
@@ -65,27 +66,27 @@ impl TaskArgs {
     pub fn parse(args: Meta) -> syn::Result<Self> {
         let Meta::List(args) = args else {
             return Ok(TaskArgs {
-                interrupt_handler_name: None,
+                binds: None,
                 priority: DEFAULT_TASK_PRIORITY.load(Ordering::Relaxed),
-                shared_idents: Default::default(),
+                shared: Default::default(),
                 core: 0,
                 task_trait: format_ident!("{HWT_TRAIT_TY}"),
             });
         };
 
-        let mut interrupt_handler_name: Option<syn::Path> = None;
+        let mut binds: Option<syn::Path> = None;
         let mut task_trait: Option<Ident> = None;
         let mut priority: Option<LitInt> = None;
-        let mut shared: Option<ExprArray> = None;
+        let mut shared_res: Option<ExprArray> = None;
         let mut core: Option<LitInt> = None;
 
         syn::meta::parser(|meta| {
             if meta.path.is_ident("binds") {
-                interrupt_handler_name = Some(meta.value()?.parse()?);
+                binds = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("priority") {
                 priority = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("shared") {
-                shared = Some(meta.value()?.parse()?);
+                shared_res = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("core") {
                 core = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("task_trait") {
@@ -108,8 +109,7 @@ impl TaskArgs {
             );
         })?;
 
-        let interrupt_handler_name = interrupt_handler_name
-            .map(|i| Ident::new(&i.to_token_stream().to_string(), Span::call_site()));
+        let binds = binds.map(|i| Ident::new(&i.to_token_stream().to_string(), Span::call_site()));
 
         let priority = priority
             .and_then(|p| p.base10_parse().ok())
@@ -120,21 +120,19 @@ impl TaskArgs {
             .unwrap_or_default();
         let task_trait = task_trait.unwrap_or(format_ident!("{HWT_TRAIT_TY}"));
 
-        let shared_idents = if let Some(shared) = shared {
-            let mut elements = Vec::with_capacity(shared.elems.len());
-            for element in shared.elems {
-                let element = Ident::new(&element.to_token_stream().to_string(), Span::call_site());
-                elements.push(element);
-            }
-            elements
-        } else {
-            Vec::new()
-        };
+        let shared_res = shared_res
+            .map(|expr| {
+                expr.elems
+                    .into_iter()
+                    .map(|elem| Ident::new(&elem.to_token_stream().to_string(), Span::call_site()))
+                    .collect()
+            })
+            .unwrap_or_else(|| Vec::new());
 
         Ok(Self {
-            interrupt_handler_name,
+            binds,
             priority,
-            shared_idents,
+            shared: shared_res,
             core,
             task_trait,
         })

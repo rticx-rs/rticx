@@ -61,7 +61,7 @@ impl SubAnalysis {
         let used_interrupts = app
             .tasks
             .iter()
-            .filter_map(|t| Some((t.args.interrupt_handler_name.clone()?, t.args.priority)))
+            .filter_map(|t| Some((t.args.binds.clone()?, t.args.priority)))
             .collect();
 
         let user_initializable_tasks = app
@@ -93,7 +93,7 @@ fn update_resource_priorities(
     let Some(shared) = shared else { return Ok(()) };
     for task in hw_tasks.iter() {
         let task_priority = task.args.priority;
-        for resource_ident in task.args.shared_idents.iter() {
+        for resource_ident in task.args.shared.iter() {
             if let Some(shared_element) = shared.get_field_mut(resource_ident) {
                 if shared_element.priority < task_priority {
                     shared_element.priority = task_priority

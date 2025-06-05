@@ -74,7 +74,7 @@ impl SharedResources {
 
     pub fn generate_shared_for_task(&self, task: &RticTask) -> TokenStream2 {
         let cfg_core = multibin::multibin_cfg_core(self.args.core);
-        let task_resources_idents = &task.args.shared_idents;
+        let task_resources_idents = &task.args.shared;
         if task_resources_idents.is_empty() {
             return quote!();
         }
