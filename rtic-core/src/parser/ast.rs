@@ -77,7 +77,7 @@ impl TaskArgs {
         let mut binds: Option<syn::Path> = None;
         let mut task_trait: Option<Ident> = None;
         let mut priority: Option<LitInt> = None;
-        let mut shared_res: Option<ExprArray> = None;
+        let mut shared: Option<ExprArray> = None;
         let mut core: Option<LitInt> = None;
 
         syn::meta::parser(|meta| {
@@ -86,7 +86,7 @@ impl TaskArgs {
             } else if meta.path.is_ident("priority") {
                 priority = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("shared") {
-                shared_res = Some(meta.value()?.parse()?);
+                shared = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("core") {
                 core = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("task_trait") {
@@ -120,19 +120,19 @@ impl TaskArgs {
             .unwrap_or_default();
         let task_trait = task_trait.unwrap_or(format_ident!("{HWT_TRAIT_TY}"));
 
-        let shared_res = shared_res
+        let shared = shared
             .map(|expr| {
                 expr.elems
                     .into_iter()
                     .map(|elem| Ident::new(&elem.to_token_stream().to_string(), Span::call_site()))
                     .collect()
             })
-            .unwrap_or_else(|| Vec::new());
+            .unwrap_or_default();
 
         Ok(Self {
             binds,
             priority,
-            shared: shared_res,
+            shared,
             core,
             task_trait,
         })
