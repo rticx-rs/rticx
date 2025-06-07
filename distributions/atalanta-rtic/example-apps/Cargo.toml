@@ -1,0 +1,25 @@
+[package]
+name = "atalanta_rtic_examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rtic = { path = "../../atalanta-rtic"}
+bsp = { package = "atalanta-bsp", git = "https://github.com/soc-hub-fi/atalanta.git", tag = "v0.2.1", features = [
+    "rt",
+] }
+ufmt = { version = "0.2.0", optional = true }
+
+[profile.dev]
+codegen-units = 1
+opt-level = "s"
+
+[profile.release]
+debug = true
+opt-level = "s"
+
+[features]
+fpga = ["bsp/fpga"]
+rtl-tb = ["bsp/rtl-tb"]
+default = ["ufmt"]
+ufmt = ["dep:ufmt", "bsp/ufmt"]
