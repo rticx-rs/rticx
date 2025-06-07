@@ -83,8 +83,6 @@ mod app {
     static mut TASK2_COUNT: usize = 0;
     static mut TASK3_COUNT: usize = 0;
 
-    const USE_PCS: bool = false;
-
     #[init]
     fn init() -> Shared {
         // Assert that periph clk div is as configured
@@ -93,7 +91,7 @@ mod app {
         write_u32(CFG_BASE + PERIPH_CLK_DIV_OFS, PERIPH_CLK_DIV as u32);
 
         let mut serial = ApbUart::init(CPU_FREQ, 115_200);
-        sprintln!("[periodic_tasks (PCS={:?})]", USE_PCS);
+        sprintln!("[periodic_tasks]");
         sprintln!(
             "Periph CLK div = {}",
             read_u32(CFG_BASE + PERIPH_CLK_DIV_OFS)
@@ -110,13 +108,6 @@ mod app {
             TEST_DURATION.to_micros(),
             TEST_DURATION.to_nanos()
         );
-
-        if USE_PCS {
-            Clic::ie(Interrupt::Timer0Cmp).set_pcs(true);
-            Clic::ie(Interrupt::Timer1Cmp).set_pcs(true);
-            Clic::ie(Interrupt::Timer2Cmp).set_pcs(true);
-            Clic::ie(Interrupt::Timer3Cmp).set_pcs(true);
-        }
 
         // Make sure serial is done printing before proceeding to the test case
         unsafe { serial.flush().unwrap_unchecked() };
@@ -154,13 +145,13 @@ mod app {
         Shared {}
     }
 
-    #[task(binds = Timer0Cmp, priority=1)]
+    #[task(binds = Timer0Cmp, priority=1, fast)]
     struct T0 {}
-    #[task(binds = Timer1Cmp, priority=2)]
+    #[task(binds = Timer1Cmp, priority=2, fast)]
     struct T1 {}
-    #[task(binds = Timer2Cmp, priority=3)]
+    #[task(binds = Timer2Cmp, priority=3, fast)]
     struct T2 {}
-    #[task(binds = Timer3Cmp, priority=4)]
+    #[task(binds = Timer3Cmp, priority=4, fast)]
     struct T3 {}
 
     impl RticTask for T0 {
@@ -270,12 +261,10 @@ mod app {
             tear_irq(Interrupt::Timer2Cmp);
             tear_irq(Interrupt::Timer3Cmp);
             tear_irq(Interrupt::MachineTimer);
-            if USE_PCS {
-                Clic::ie(Interrupt::Timer0Cmp).set_pcs(false);
-                Clic::ie(Interrupt::Timer1Cmp).set_pcs(false);
-                Clic::ie(Interrupt::Timer2Cmp).set_pcs(false);
-                Clic::ie(Interrupt::Timer3Cmp).set_pcs(false);
-            }
+            Clic::ie(Interrupt::Timer0Cmp).set_pcs(false);
+            Clic::ie(Interrupt::Timer1Cmp).set_pcs(false);
+            Clic::ie(Interrupt::Timer2Cmp).set_pcs(false);
+            Clic::ie(Interrupt::Timer3Cmp).set_pcs(false);
 
             let mut serial = unsafe { ApbUart::instance() };
 

@@ -9,17 +9,29 @@ extern crate proc_macro;
 
 struct AtalantaRtic;
 
+#[cfg(feature = "pcs-pass")]
+use pcs_pass::PcsPass;
 use rtic_sw_pass::SoftwarePass;
 
 const MIN_TASK_PRIORITY: u16 = 1; // lowest Atalanta priority
 
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
+    let mut builder = RticMacroBuilder::new(AtalantaRtic);
+
     // use the standard software pass provided by rtic-sw-pass crate
     let sw_pass = SoftwarePass::new(SwPassBackend);
-
-    let mut builder = RticMacroBuilder::new(AtalantaRtic);
     builder.bind_pre_core_pass(sw_pass);
+
+    #[cfg(feature = "pcs-pass")]
+    {
+        // Number of PCS slots provided by hardware
+        const MAX_NUM_PCS: usize = 4;
+        let pcs_pass = PcsPass::new(MAX_NUM_PCS);
+        builder.bind_pre_core_pass(pcs_pass);
+        println!("--- PCS pass added --- ");
+    }
+
     builder.build_rtic_macro(args, input)
 }
 
@@ -35,27 +47,53 @@ impl CorePassBackend for AtalantaRtic {
         _sub_app: &SubApp,
         app_analysis: &SubAnalysis,
     ) -> Option<TokenStream2> {
-        let initialize_dispatcher_interrupts =
+        let mut out = TokenStream2::new();
+
+        // Append general interrupt controller initialization
+        out.extend(quote! {
+            // Use 8 bits for level. Omitting this will cause the hardware to not respect interrupt
+            // level.
+            bsp::clic::Clic::smclicconfig().set_mnlbits(8);
+
+            const PCS_FALSE: bool = false;
+        });
+
+        let pcs_dispatchers = if cfg!(feature = "pcs-pass") {
+            pcs_pass::PCS_DISPATCHERS.with(|ds| ds.borrow().clone())
+        } else {
+            vec![]
+        };
+        if !pcs_dispatchers.is_empty() {
+            out.extend(quote! {
+                const PCS_TRUE: bool = true;
+            });
+        }
+
+        // Append dispatchers
+        let init_dispatcher_interrupts =
             app_analysis.used_irqs.iter().map(|(irq_name, priority)| {
-                let priority = priority.max(&MIN_TASK_PRIORITY); // limit piority to minmum
+                let priority = priority.max(&MIN_TASK_PRIORITY); // limit priority to minimum
+                let pcs = if pcs_dispatchers.contains(irq_name) {
+                    quote!(PCS_TRUE)
+                } else {
+                    quote!(PCS_FALSE)
+                };
                 quote! {
-                    //set interrupt priority
+                    // Set interrupt priority
                     rtic::export::enable(
                         rtic::export::interrupts::#irq_name,
                         #priority as u8,
-                        false
+                        #pcs
                     );
                 }
             });
-
-        Some(quote! {
-            // Use 8 bits for level. Omitting this will cause the hardware to not respect interrupt level.
-            bsp::clic::Clic::smclicconfig().set_mnlbits(8);
-
+        out.extend(quote! {
             unsafe {
-                #(#initialize_dispatcher_interrupts)*
+                #(#init_dispatcher_interrupts)*
             }
-        })
+        });
+
+        Some(out)
     }
 
     fn populate_idle_loop(&self) -> Option<TokenStream2> {
@@ -131,7 +169,11 @@ impl CorePassBackend for AtalantaRtic {
     }
 
     fn task_attrs(&self) -> Vec<syn::Attribute> {
-        vec![syn::parse_quote!(#[bsp::nested_interrupt])]
+        vec![
+            // Interrupt wrapper generation is delegated to PCS pass if enabled
+            #[cfg(not(feature = "pcs-pass"))]
+            syn::parse_quote!(#[bsp::nested_interrupt]),
+        ]
     }
 }
 

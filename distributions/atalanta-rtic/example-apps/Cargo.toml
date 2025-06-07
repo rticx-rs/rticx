@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rtic = { path = "../../atalanta-rtic"}
+rtic = { path = "../../atalanta-rtic", features = ["pcs-pass"] }
 bsp = { package = "atalanta-bsp", git = "https://github.com/soc-hub-fi/atalanta.git", tag = "v0.2.1", features = [
     "rt",
 ] }

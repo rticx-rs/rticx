@@ -7,7 +7,7 @@ name = "atalanta-bsp"
 version = "0.1.0"
 source = "git+https://github.com/soc-hub-fi/atalanta.git?tag=v0.2.1#216c9193a792c513acc4a758b05c3a1020b34ac9"
 dependencies = [
- "atalanta-bsp-macros",
+ "atalanta-bsp-macros 0.1.0 (git+https://github.com/soc-hub-fi/atalanta.git?tag=v0.2.1)",
  "bitmask-enum",
  "embedded-io",
  "fugit",
@@ -16,6 +16,15 @@ dependencies = [
  "riscv-peripheral",
  "riscv-rt",
  "ufmt",
+]
+
+[[package]]
+name = "atalanta-bsp-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -171,6 +180,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
+name = "pcs-pass"
+version = "0.1.0"
+dependencies = [
+ "atalanta-bsp-macros 0.1.0",
+ "proc-macro2",
+ "quote",
+ "rtic-core",
+ "syn 2.0.66",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.84"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -275,6 +295,7 @@ dependencies = [
 name = "rtic-macro"
 version = "0.1.0"
 dependencies = [
+ "pcs-pass",
  "proc-macro2",
  "quote",
  "rtic-core",

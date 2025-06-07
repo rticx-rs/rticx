@@ -16,5 +16,6 @@ bsp = { package = "atalanta-bsp", git = "https://github.com/soc-hub-fi/atalanta.
 
 [features]
 deadline-pass = ["rtic-macro/deadline-pass"]
+pcs-pass = ["rtic-macro/pcs-pass"]
 fpga = ["bsp/fpga"]
 rtl-tb = ["bsp/rtl-tb"]
