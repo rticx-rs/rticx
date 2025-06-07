@@ -80,8 +80,8 @@ pub unsafe fn lock<T, R>(ptr: *mut T, priority: u8, ceiling: u8, f: impl FnOnce(
     }
 }
 
-/// Sets the given software interrupt as pending
 
+/// Sets the given software interrupt as pending
 pub fn pend<T: Interrupt>(_int: T) {
     unsafe { <T as Interrupt>::pend_int() };
 }

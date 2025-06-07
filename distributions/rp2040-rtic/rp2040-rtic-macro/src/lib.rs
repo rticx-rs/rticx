@@ -111,7 +111,7 @@ impl CorePassBackend for Rp2040Rtic {
 
         // irq names from hadware tasks
         let irq_list_as_u32 = app_info.tasks.iter().filter_map(|t| {
-            let irq_name = t.args.interrupt_handler_name.as_ref()?;
+            let irq_name = t.args.binds.as_ref()?;
             Some(quote! { #peripheral_crate::Interrupt::#irq_name as u32, })
         });
 
@@ -119,7 +119,7 @@ impl CorePassBackend for Rp2040Rtic {
         for hw_task in app_info.tasks.iter() {
             let prio = hw_task.args.priority;
             if (1..=3).contains(&prio) {
-                let Some(irq_name) = hw_task.args.interrupt_handler_name.as_ref() else {
+                let Some(irq_name) = hw_task.args.binds.as_ref() else {
                     continue;
                 };
                 irq_prio_map[(prio - 1) as usize].push(quote! {
