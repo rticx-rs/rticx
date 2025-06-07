@@ -5,7 +5,7 @@
 pub use rtic_sw_pass::export::*;
 
 /// Exports required by core-pass
-pub use cortex_m::interrupt::InterruptNumber as AbstractInterrupt; // a trait that abstracts an interrupt type
+pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 
 /// re-exports needed from the code generation in internal rp2040-rtic-macro crate
 pub use rp2040_hal::multicore::{Multicore, Stack};

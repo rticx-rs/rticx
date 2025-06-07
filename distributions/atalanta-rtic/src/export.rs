@@ -7,7 +7,7 @@ use bsp::clic::Trig;
 pub use rtic_sw_pass::export::*;
 
 /// Exports required by core-pass
-pub use bsp::clic::InterruptNumber as AbstractInterrupt; // a trait that abstracts an interrupt type
+pub use bsp::clic::InterruptNumber; // a trait that abstracts an interrupt type
 
 /// Re-exports needed from the code generation in internal rtic-macro crate
 pub use bsp::register::mintthresh;
@@ -54,16 +54,16 @@ pub unsafe fn lock<T, R>(ptr: *mut T, priority: u8, ceiling: u8, f: impl FnOnce(
 }
 
 /// Sets the given software interrupt as pending
-pub fn pend<T: AbstractInterrupt>(irq: T) {
+pub fn pend<T: InterruptNumber>(irq: T) {
     unsafe { Clic::ip(irq).pend() };
 }
 
 /// Sets the given software interrupt as not pending
-pub fn unpend<T: AbstractInterrupt>(irq: T) {
+pub fn unpend<T: InterruptNumber>(irq: T) {
     unsafe { Clic::ip(irq).unpend() };
 }
 
-pub fn enable<T: AbstractInterrupt>(irq: T, level: u8, set_pcs: bool) {
+pub fn enable<T: InterruptNumber>(irq: T, level: u8, set_pcs: bool) {
     Clic::attr(irq).set_trig(Trig::Edge);
     Clic::attr(irq).set_polarity(Polarity::Pos);
     Clic::attr(irq).set_shv(true);

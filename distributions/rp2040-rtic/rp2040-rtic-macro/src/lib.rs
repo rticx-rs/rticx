@@ -206,7 +206,7 @@ impl SwPassBackend for SwPassBackendImpl {
     fn generate_local_pend_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
         // #[doc(hidden)]
         // #[inline]
-        // pub fn __rtic_local_irq_pend<I: rtic::export::AbstractInterrupt>(irq_nbr : I) {
+        // pub fn __rtic_local_irq_pend<I: rtic::export::InterruptNumber>(irq_nbr : I) {
         let body = parse_quote!({
             rtic::export::NVIC::pend(irq_nbr);
         });
@@ -219,9 +219,9 @@ impl SwPassBackend for SwPassBackendImpl {
     fn generate_cross_pend_fn(&self, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
         // #[doc(hidden)]
         // #[inline]
-        // pub fn __rtic_cross_irq_pend<I: rtic::export::AbstractInterrupt>(irq_nbr : I, core: u32) {
+        // pub fn __rtic_cross_irq_pend<I: rtic::export::InterruptNumber>(irq_nbr : I, core: u32) {
         let body = parse_quote!({
-            use rtic::export::AbstractInterrupt;
+            use rtic::export::InterruptNumber;
             let _ = rtic::export::cross_core::pend_irq(irq_nbr.number());
         });
         // }

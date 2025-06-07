@@ -65,7 +65,7 @@ impl<'a> CodeGen<'a> {
         let pend_fn_empty = parse_quote! {
             #[doc(hidden)]
             #[inline]
-            pub fn #pend_fn_ident<I: rtic::export::AbstractInterrupt>(irq_nbr : I) {
+            pub fn #pend_fn_ident<I: rtic::export::InterruptNumber>(irq_nbr : I) {
                 // To be implemented by distributor
                 // example:
                 // NVIC::pend( irq );
@@ -79,7 +79,7 @@ impl<'a> CodeGen<'a> {
         let pend_fn_empty = parse_quote! {
             #[doc(hidden)]
             #[inline]
-            pub fn #pend_fn_ident<I: rtic::export::AbstractInterrupt>(irq_nbr : I, core: u32) { // TODO: this function should return a result, as pending can fail in multicore !
+            pub fn #pend_fn_ident<I: rtic::export::InterruptNumber>(irq_nbr : I, core: u32) { // TODO: this function should return a result, as pending can fail in multicore !
                 // To be implemented by distributor
                 // How do you pend an interrupt on the other core ?
             }

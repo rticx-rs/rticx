@@ -5,7 +5,7 @@
 pub use rtic_sw_pass::export::*;
 
 /// Exports required by core-pass
-pub use hippomenes_core::Interrupt as AbstractInterrupt; // a trait that abstracts an interrupt type
+pub use hippomenes_core::Interrupt as InterruptNumber; // a trait that abstracts an interrupt type
 
 /// re-exports needed from the code generation in internal rtic-macro crate
 // use core::cell::Cell;
