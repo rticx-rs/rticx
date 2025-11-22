@@ -82,7 +82,7 @@ fn is_struct_with_attr(strct: &ItemStruct, attr_name: &str) -> Option<usize> {
 
 fn parse_cores_arg(params: &RticAttr) -> Result<u32, syn::Error> {
     let cores = if let Some(Expr::Lit(syn::ExprLit {
-        lit: Lit::Int(ref cores),
+        lit: Lit::Int(cores),
         ..
     })) = params.elements.get("cores")
     {

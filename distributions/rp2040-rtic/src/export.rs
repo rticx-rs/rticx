@@ -7,16 +7,16 @@ pub use rtic_sw_pass::export::*;
 /// Exports required by core-pass
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 
-/// re-exports needed from the code generation in internal rp2040-rtic-macro crate
-pub use rp2040_hal::multicore::{Multicore, Stack};
-pub use rp2040_hal::sio::Sio;
 pub use cortex_m::{
+    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
-    Peripherals,
+    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
 };
+/// re-exports needed from the code generation in internal rp2040-rtic-macro crate
+pub use rp2040_hal::multicore::{Multicore, Stack};
+pub use rp2040_hal::sio::Sio;
 
 /// Mask is used to store interrupt masks on systems without a BASEPRI register (M0, M0+, M23).
 /// It needs to be large enough to cover all the relevant interrupts in use.
@@ -42,7 +42,9 @@ impl<const M: usize> Mask<M> {
         let block = bit / 32;
 
         if block as usize >= M {
-            panic!("Generating masks for thumbv6/thumbv8m.base failed! Are you compiling for thumbv6 on an thumbv7 MCU or using an unsupported thumbv8m.base MCU?");
+            panic!(
+                "Generating masks for thumbv6/thumbv8m.base failed! Are you compiling for thumbv6 on an thumbv7 MCU or using an unsupported thumbv8m.base MCU?"
+            );
         }
 
         let offset = bit - (block * 32);
@@ -130,17 +132,17 @@ pub unsafe fn lock<T, const M: usize>(
     if current < ceiling {
         if ceiling >= 4 {
             // execute closure under protection of raised system ceiling
-            interrupt::free(|_| f(&mut *ptr));
+            interrupt::free(|_| f(unsafe { &mut *ptr }));
         } else {
             let mask = compute_mask(current as u8, ceiling as u8, masks);
-            clear_enable_mask(mask);
+            unsafe { clear_enable_mask(mask) };
             // execute closure under protection of raised system ceiling
-            f(&mut *ptr);
-            set_enable_mask(mask);
+            f(unsafe { &mut *ptr });
+            unsafe { set_enable_mask(mask) };
         }
     } else {
         // execute closure without raising system ceiling
-        f(&mut *ptr)
+        f(unsafe { &mut *ptr })
     }
 }
 
@@ -161,7 +163,7 @@ unsafe fn set_enable_mask<const M: usize>(mask: Mask<M>) {
     for i in 0..M {
         // This check should involve compile time constants and be optimized out.
         if mask.0[i] != 0 {
-            (*NVIC::PTR).iser[i].write(mask.0[i]);
+            unsafe { (*NVIC::PTR).iser[i].write(mask.0[i]) };
         }
     }
 }
@@ -173,7 +175,7 @@ unsafe fn clear_enable_mask<const M: usize>(mask: Mask<M>) {
     for i in 0..M {
         // This check should involve compile time constants and be optimized out.
         if mask.0[i] != 0 {
-            (*NVIC::PTR).icer[i].write(mask.0[i]);
+            unsafe { (*NVIC::PTR).icer[i].write(mask.0[i]) };
         }
     }
 }
@@ -243,7 +245,7 @@ pub mod cross_core {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 fn SIO_IRQ_PROC0() {
     if let Some(signal) = cross_core::get_pended_irq() {
@@ -252,7 +254,7 @@ fn SIO_IRQ_PROC0() {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 fn SIO_IRQ_PROC1() {
     if let Some(signal) = cross_core::get_pended_irq() {

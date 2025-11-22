@@ -11,13 +11,13 @@ mod app {
     use core::sync::atomic::{AtomicU32, Ordering};
     use fugit::{MicrosDurationU32, RateExtU32};
     use heapless::String;
+    use rp2040_hal::Clock;
     use rp2040_hal::gpio::bank0::{Gpio0, Gpio1, Gpio25};
     use rp2040_hal::gpio::{FunctionSio, FunctionUart, Pin, PullDown, SioOutput};
     use rp2040_hal::timer::{Alarm, Alarm0};
     use rp2040_hal::uart::{
         DataBits, Reader as UartReader, StopBits, UartConfig, UartPeripheral, Writer,
     };
-    use rp2040_hal::Clock;
     // Alias for our PAC crate
     use rp2040_hal::pac::{self};
     // Some traits we need
@@ -47,7 +47,7 @@ mod app {
     /// External high-speed crystal on the Raspberry Pi Pico board is 12 MHz. Adjust
     /// if your board has a different frequency
     const XTAL_FREQ_HZ: u32 = 12_000_000u32;
-    
+
     #[shared]
     struct Shared {
         uart_tx: UartTx,

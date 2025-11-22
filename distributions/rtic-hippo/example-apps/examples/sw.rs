@@ -236,12 +236,12 @@ pub mod app {
         }
     }
     #[allow(non_snake_case)]
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     fn Interrupt0() {
         unsafe { SOME_TASK.assume_init_mut().exec() };
     }
     #[allow(non_snake_case)]
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     fn Interrupt2() {
         unsafe { CORE0_PRIORITY1_DISPATCHER.assume_init_mut().exec() };
     }
@@ -279,7 +279,7 @@ pub mod app {
     }
     /// Entry of
     /// CORE 0
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub fn main() -> ! {
         __rtic_interrupt_free(|| {
             unsafe {

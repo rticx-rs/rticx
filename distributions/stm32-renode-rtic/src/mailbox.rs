@@ -106,7 +106,7 @@ pub mod cross_core {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 #[export_name = "DMA2_CHANNEL4_5"] // DMA2 channel 4_5 interrupt is repurposed for mailbox usage
 fn MAILBOX_INTERRUPT() {

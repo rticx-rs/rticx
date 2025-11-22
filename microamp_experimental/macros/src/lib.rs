@@ -63,7 +63,7 @@ pub fn shared(args: TokenStream, input: TokenStream) -> TokenStream {
             #(#attrs)*
             #[cfg(microamp)]
             #[link_section = ".shared"]
-            #[no_mangle]
+            #[unsafe(no_mangle)]
             static #ident: #ty = {
                 fn assert() {
                     microamp::export::is_data::<#ty>();

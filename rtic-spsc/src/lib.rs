@@ -63,7 +63,7 @@ impl<T: Clone, const DEPTH: usize> Queue<T, DEPTH> {
     ///
     /// If the queue is empty this operation will return uninitialized memory.
     pub unsafe fn dequeue_unchecked(&mut self) -> T {
-        let data = self.buffer[self.read_idx % DEPTH].assume_init_read();
+        let data = unsafe { self.buffer[self.read_idx % DEPTH].assume_init_read() };
         self.read_idx += 1;
         data
     }
@@ -96,7 +96,7 @@ impl<'a, T: Clone, const DEPTH: usize> Producer<'a, T, DEPTH> {
     /// to create a copy of `item`, which could result in `T`'s destructor running on `item`
     /// twice.
     pub unsafe fn enqueue_unchecked(&mut self, data: T) {
-        self.q.enqueue_unchecked(data)
+        unsafe { self.q.enqueue_unchecked(data) }
     }
 }
 
@@ -116,7 +116,7 @@ impl<'a, T: Clone, const DEPTH: usize> Consumer<'a, T, DEPTH> {
     ///
     /// If the queue is empty this operation will return uninitialized memory.
     pub unsafe fn dequeue_unchecked(&mut self) -> T {
-        self.q.dequeue_unchecked()
+        unsafe { self.q.dequeue_unchecked() }
     }
 }
 

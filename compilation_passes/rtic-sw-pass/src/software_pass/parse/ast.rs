@@ -1,7 +1,7 @@
 use proc_macro2::{Span, TokenStream};
 use rtic_core::{errors::ParseError, parse_utils::RticAttr};
 use std::collections::HashMap;
-use syn::{spanned::Spanned, Expr, Ident, ItemImpl, ItemStruct, Lit, Path};
+use syn::{Expr, Ident, ItemImpl, ItemStruct, Lit, Path, spanned::Spanned};
 
 pub struct AppParameters {
     pub dispatchers: HashMap<u32, Vec<Path>>,
@@ -58,20 +58,20 @@ impl AppParameters {
 
         // dispatchers
         let mut dispatchers = HashMap::with_capacity(cores as usize);
-        if let Some(Expr::Array(ref arr)) = args.elements.get("dispatchers") {
+        if let Some(Expr::Array(arr)) = args.elements.get("dispatchers") {
             for (i, element) in arr.elems.iter().enumerate() {
-                if let Expr::Path(ref path) = element {
+                if let Expr::Path(path) = element {
                     dispatchers
                         .entry(0)
                         .or_insert(Vec::new())
                         .push(path.path.clone())
-                } else if let Expr::Array(ref arr) = element {
+                } else if let Expr::Array(arr) = element {
                     let core = i;
                     let a = arr
                         .elems
                         .iter()
                         .map(|element| {
-                            if let Expr::Path(ref path) = element {
+                            if let Expr::Path(path) = element {
                                 path.path.clone()
                             } else {
                                 panic!("wrong syntax")

@@ -1,13 +1,13 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_quote, ImplItem, ImplItemFn};
+use syn::{ImplItem, ImplItemFn, parse_quote};
 
 #[cfg(feature = "multibin")]
 use crate::multibin::{multibin_cfg_core, multibin_cfg_not_core};
 use crate::{
+    CorePassBackend,
     codegen::utils,
     parser::ast::{HardwareTask, RticTask, SharedResources},
-    CorePassBackend,
 };
 use crate::{
     multibin::{self},
@@ -140,7 +140,7 @@ impl HardwareTask {
         Some(quote! {
             #cfg_core
             #[allow(non_snake_case)]
-            #[no_mangle]
+            #[unsafe(no_mangle)]
             #(#task_attrs)*
             fn #task_irq_handler() {
                 #task_dispatch_call

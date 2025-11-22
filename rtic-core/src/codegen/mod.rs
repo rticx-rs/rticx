@@ -1,16 +1,16 @@
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote, ToTokens};
+use quote::{ToTokens, format_ident, quote};
 use task_init::{generate_late_init_tasks_struct, generate_late_tasks_init_calls};
 
+use crate::CorePassBackend;
 use crate::analysis::Analysis;
 use crate::multibin::multibin_cfg_core;
 use crate::parser::ast::{RticTask, SharedResources};
-use crate::parser::{ast::IdleTask, App};
+use crate::parser::{App, ast::IdleTask};
 use crate::rtic_functions::{
-    generate_task_traits_check_functions, get_interrupt_free_fn, INTERRUPT_FREE_FN,
+    INTERRUPT_FREE_FN, generate_task_traits_check_functions, get_interrupt_free_fn,
 };
 use crate::rtic_traits::get_rtic_traits_mod;
-use crate::CorePassBackend;
 
 pub mod hw_task;
 pub use utils::multibin;
@@ -199,7 +199,7 @@ impl<'a> CodeGen<'a> {
                 #[doc = #doc]
                 #cfg_core
                 #(#entry_attrs)*
-                #[no_mangle]
+                #[unsafe(no_mangle)]
                 fn #entry_name() -> ! {
                     // Disable interrupts during initialization
                     #interrupt_free(||{
