@@ -5,7 +5,7 @@ use quote::{format_ident, quote, ToTokens, TokenStreamExt};
 use std::collections::HashMap;
 use syn::{parse::Parser, parse_quote, Attribute, Meta};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RticAttr {
     /// E.g., `task`
     pub name: Option<syn::Ident>,
