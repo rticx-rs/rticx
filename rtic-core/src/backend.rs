@@ -52,7 +52,7 @@ pub trait CorePassBackend {
     /// impl RticMutex for __resource1_mutex {
     ///     type ResourceType = R1Type;
     ///     // this is what the trait method argument `incomplete_lock_fn` expands to
-    ///     fn lock(&mut self, f: impl FnOnce(&mut Self::ResourceType)) {
+    ///     fn lock<R>(&mut self, f: impl FnOnce(&mut Self::ResourceType) -> R) -> R {
     ///         const CEILING: u16 = 3u16; // resource ceiling
     ///         let task_priority = self.task_priority; // current task priority
     ///         let resource_ref = unsafe { &mut SHARED.assume_init_mut().resource1 };
