@@ -35,7 +35,7 @@ pub(crate) fn get_resource_proxy_lock_fn(
     let ceiling = resource.priority;
     let resource_ident = &resource.ident;
     let lock_fn = parse_quote! {
-        fn lock(&mut self, f: impl FnOnce(&mut Self::ResourceType)) {
+        fn lock<R>(&mut self, f: impl FnOnce(&mut Self::ResourceType) -> R) -> R {
             // `self` refers to the resource proxy struct
 
             const CEILING: u16 = #ceiling; // resource priority ceiling

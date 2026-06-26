@@ -166,7 +166,7 @@ impl CorePassBackend for Rp2040Rtic {
         let masks_ident = format_ident!("__rtic_internal_MASKS_core{core}"); // already computed by `compute_lock_static_args(...)`
 
         let lock_impl: syn::Block = parse_quote! {
-            { unsafe { rtic::export::lock(resource_ptr, task_priority, CEILING, &#masks_ident, f); } }
+            { unsafe { rtic::export::lock(resource_ptr, task_priority, CEILING, &#masks_ident, f) } }
         };
 
         let mut completed_lock_fn = incomplete_lock_fn;

@@ -109,7 +109,7 @@ impl CorePassBackend for RenodeRtic {
     ) -> syn::ImplItemFn {
         let lock_impl: syn::Block = parse_quote! {
             {
-                unsafe { rtic::export::lock(resource_ptr, CEILING as u8, NVIC_PRIO_BITS, f); }
+                unsafe { rtic::export::lock(resource_ptr, CEILING as u8, NVIC_PRIO_BITS, f) }
             }
         };
 

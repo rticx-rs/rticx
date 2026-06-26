@@ -56,7 +56,7 @@ fn mutex_trait() -> TokenStream2 {
     quote! {
         pub trait #mutex {
             type ResourceType;
-            fn lock(&mut self, f: impl FnOnce(&mut Self::ResourceType));
+            fn lock<R>(&mut self, f: impl FnOnce(&mut Self::ResourceType) -> R) -> R;
         }
     }
 }
