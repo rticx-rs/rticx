@@ -22,4 +22,3 @@ rtic-spsc = { path = "../../rtic-spsc" }
 # This should be enabled only in the inner proc-macro crate within a distribution
 proc-macro = ["dep:heck", "dep:proc-macro2", "dep:quote", "dep:syn", "dep:rtic-core"]
 
-multibin = ["rtic-core/multibin", "proc-macro"]

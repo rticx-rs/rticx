@@ -13,8 +13,6 @@ pub use cortex_m::{
     Peripherals,
 };
 
-pub use microamp;
-
 
 #[inline]
 #[must_use]

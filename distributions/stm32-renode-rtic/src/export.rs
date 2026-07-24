@@ -18,7 +18,6 @@ pub use cortex_m::{
     Peripherals,
 };
 pub use mailbox::cross_core;
-pub use microamp;
 
 #[inline]
 #[must_use]

@@ -17,7 +17,6 @@ rtic-core = { path = "../../../rtic-core", features = [
 ] }
 rtic-auto-assign = { path = "../../../compilation-passes/rtic-auto-assign" }
 syn = { version = "2.0.52", features = ["extra-traits", "full"] }
-# rtic-sw-pass = { path = "../../rtic-sw-pass", features = ["multibin", "proc-macro"] }
 rtic-sw-pass = { path = "../../../compilation-passes/rtic-sw-pass", features = [
     "proc-macro",
 ] }

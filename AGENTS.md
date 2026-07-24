@@ -47,7 +47,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | Distribution | Path | Target | Notes |
 |--------------|------|--------|-------|
 | `rp2040-rtic` | `distributions/rp2040-rtic/` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ | Single binary; starts core 1 from `post_init`. |
-| `stm32-renode-rtic` | `distributions/stm32-renode-rtic/` | Renode-simulated multicore STM32F1C3-like | Multi-binary (`multibin` / μAMP). |
+| `stm32-renode-rtic` | `distributions/stm32-renode-rtic/` | Renode-simulated multicore STM32F1C3-like | Multi-binary. |
 | `rtic-hippo` | `distributions/rtic-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
 | `atalanta-rtic` | `distributions/atalanta-rtic/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
 | `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | not meant to be compiled |
@@ -57,7 +57,6 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | Directory | Path | Role |
 |-----------|------|------|
 | `compilation-tests` | `compilation-tests/` | Embedded example applications and comparison baselines for `rp2040-rtic`, RTIC v1, and RTIC v2. |
-| `microamp_experimental` | `microamp_experimental/` | μAMP (asymmetric multiprocessing) support: shared memory, macros, and build tooling. |
 
 ---
 
@@ -132,7 +131,6 @@ Notable methods:
 | `default_task_priority() -> u16` | Fallback priority when the user omits one. |
 | `entry_attrs() -> Vec<Attribute>` | Attributes injected onto entry points (e.g., `#[riscv_rt::entry]`). |
 | `task_attrs() -> Vec<Attribute>` | Attributes injected onto task interrupt handlers. |
-| `multibin_shared_macro_path() -> syn::Path` | Required when `rtic-core` is built with the `multibin` feature. Returns the path to the shared-memory macro (e.g., `rtic::export::microamp::shared`). |
 
 ### `SwPassBackend`
 
@@ -156,7 +154,6 @@ Default method:
 Core RTIC syntax attributes are parsed in `rtic-core/src/parser/ast.rs`:
 
 - `#[app(device = path, cores = N, dispatchers = [...])]` — single PAC.
-- `#[app(device = [pac0, pac1, ...], cores = N)]` — per-core PAC list (requires `multipac` feature).
 - `#[app(cores = N)]` — number of cores (default 1).
 - `#[app(dispatchers = [irq0, irq1, ...])]` — single-core dispatchers.
 - `#[app(dispatchers = [[irq0], [irq1], ...])]` — per-core dispatchers (used by `rtic-sw-pass`).
@@ -180,8 +177,6 @@ Auto-assign and deadline passes read:
 
 | Crate | Feature | Effect |
 |-------|---------|--------|
-| `rtic-core` | `multibin` | Multi-binary output via `#[cfg(core = "N")]` guards. |
-| `rtic-core` | `multipac` | Per-core PAC list in `#[app(device = [...])]`. |
 | `rtic-core` | `debug_expand` | Writes expanded code to `examples/{binary_name}_expanded.rs`. |
 | `rp2040-rtic` | `autoassign` | Enables `rtic-auto-assign`. |
 | `rp2040-rtic` | `swtasks` | Enables `rtic-sw-pass`. |
@@ -204,17 +199,7 @@ Test rtic-core integration tests using the mock backend
 ```bash
 cd rtic-core
 
-# Single-core tests only
 cargo test
-
-# Multi-PAC tests
-cargo test --features multipac
-
-# Multi-binary tests
-cargo test --features multibin
-
-# Multi-binary + Multipac tests (covers new branches)
-cargo test --features multibin,multipac
 ```
 
 Build a pass crate
@@ -225,12 +210,12 @@ cd compilation-passes/rtic-sw-pass && cargo build
 ### Building distribution examples
 
 ```bash
-# RP2040 single-core software-tasks example
+# RP2040 single-core example
 cd distributions/rp2040-rtic
-cargo build --example hello_rtic --features swtasks
+cargo build --example hello_rtic
 
 # RP2040 multicore ping-pong example
-cargo build --example ping_pong --features swtasks
+cargo build --example ping_pong
 
 # Hippomenes examples
 cd distributions/rtic-hippo/example-apps
@@ -243,15 +228,7 @@ cargo build --example <example_name>
 
 ### Multi-binary builds for `stm32-renode-rtic`
 
-`stm32-renode-rtic` uses the `multibin` feature. Each core is compiled separately with a `--cfg` flag:
-
-```bash
-cd distributions/stm32-renode-rtic
-RUSTFLAGS='--cfg core="0"' cargo build --example ping_pong
-RUSTFLAGS='--cfg core="1"' cargo build --example ping_pong
-```
-
-The `microamp-tools` crate in `microamp_experimental/` is used to assemble the multi-binary image.
+WIP: unsupported at the moment
 
 ### Running the comparison test suite
 

@@ -186,26 +186,6 @@ pub trait CorePassBackend {
     /// - The generated function must re-enable interrupts at end of the critical section.
     fn generate_interrupt_free_fn(&self, empty_body_fn: syn::ItemFn) -> syn::ItemFn;
 
-    /// # The "multibin" feature additional requirements
-    /// If a distribution enables `multibin` feature to allow targeting a multi-binary target, then the distibution must:
-    /// - re-export microamp crate
-    /// - implement this trait method to provide  te path to the re-exported `shared` attribute macro from microamp crate.
-    ///
-    /// Example implementation can be
-    /// ```rust
-    /// fn multibin_shared_macro_path() -> syn::Path {
-    ///     syn::parse_quote! { rtic::export::microamp::shared }
-    /// }
-    ///
-    /// This will be used by RTIC internally to generate the statement:
-    /// ```rust
-    /// use rtic::export::microamp::shared as multibin_shared;
-    ///
-    /// where multibin_shared is the proc macro attribute used to indicate shared data across cores
-    /// ```
-    #[cfg(feature = "multibin")]
-    fn multibin_shared_macro_path(&self) -> syn::Path;
-
     /// # Additional user code validation
     /// Implement this method to validate/analyze the resulting parsed and analyzed user application before the code generation phase starts.
     ///

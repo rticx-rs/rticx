@@ -4,7 +4,7 @@ use quote::{format_ident, quote};
 use syn::{ImplItemFn, ItemFn, parse_quote};
 
 use crate::{
-    Analysis, AppArgs, CorePassBackend, SubApp, multibin,
+    Analysis, AppArgs, CorePassBackend, SubApp,
     parser::ast::{RticTask, SharedElement},
 };
 
@@ -58,11 +58,8 @@ pub(crate) fn trait_check_call_for(task: &RticTask) -> TokenStream {
     let task_trait = &task.args.task_trait;
     let task_ty = &task.task_struct.ident;
     let check_fn_name = task_trait_check_fn_name(task_trait);
-    let core = task.args.core;
-    let cfg_core = multibin::multibin_cfg_core(core);
 
     quote! {
-        #cfg_core
         const _: fn() = || {
             __rtic_trait_checks::#check_fn_name::<#task_ty>();
         };

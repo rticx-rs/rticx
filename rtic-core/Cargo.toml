@@ -22,9 +22,5 @@ syn = { version = "2.0.48", features = ["extra-traits", "full"] }
 thiserror = "1.0.63"
 
 [features]
-# This feature should be enabled for systems where it is expected to produce multiple binaries from one RTIC application source
-multibin = []
-# This feature should be enabled for systems where multiple paths to PACs are needed to be provided to the `device` argument in the #[app(device = ... )], the syntax will become: #[app(device = [path1, path2...path_cores_nbr] )]
-multipac = []
 # This feature can be enabled to produce an examples/expanded.rs of a successfully compiled application
 debug_expand = []

@@ -50,15 +50,4 @@ pub mod export {
 
 For a working reference, see the `rp2040-rtic` distribution. For a conceptual starting point, see `distributions/distribution-template/`. Note that the template is intentionally minimal and is not expected to compile against the current `rtic-core`.
 
-#### Multi-binary and multi-PAC distributions
 
-Some multicore targets use the `multibin` feature of `rtic-core` to produce one binary per core. In that case, the backend must provide the shared-memory macro path via `CorePassBackend::multibin_shared_macro_path()`.
-
-For targets where each core has a different PAC, the `multipac` feature allows the `device` argument to take a list of paths:
-
-```rust
-#[rtic::app(device = [pac0, pac1], cores = 2)]
-mod my_app { ... }
-```
-
-See `stm32-renode-rtic` for a `multibin` example.

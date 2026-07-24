@@ -13,7 +13,6 @@ pub use common_internal::rtic_traits;
 pub use analysis::{Analysis, SubAnalysis};
 pub use backend::CorePassBackend;
 use codegen::CodeGen;
-pub use codegen::multibin;
 pub use parser::ast::AppArgs;
 pub use parser::{App, SubApp};
 

@@ -6,7 +6,6 @@ use crate::software_pass::parse::ast::SoftwareTask;
 use crate::software_pass::parse::{App, SWT_TRAIT_TY};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
-use rtic_core::multibin;
 use rtic_core::parse_utils::RticAttr;
 use syn::{ItemFn, ItemMod, LitInt, Path, parse_quote};
 
@@ -166,7 +165,6 @@ fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis) -> TokenStream {
     let core = sub_analysis.core;
     let dispatchers = &sub_analysis.dispatcher_priority_map;
     let dispatcher_tasks = sub_analysis.tasks_priority_map.iter().map(|(prio, tasks)| {
-        let multibin_shared = multibin::multibin_shared();
         let prio_ty = utils::priority_ty_ident(*prio, core);
 
         // generate the branches of the match statement for the dispatcher task
@@ -198,9 +196,6 @@ fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis) -> TokenStream {
                 #(#tasks,)*
             }
 
-            // TODO: not all dispatcher queues need to be made #multibin_shared. So suring analysis, one needs to detect & inform
-            // which dispatchers will dispatch core-local tasks, VS cross-core tasks
-            #multibin_shared
             #[doc(hidden)]
             #[allow(non_upper_case_globals)]
             static mut #ready_queue_name: rtic::export::Queue<#prio_ty, #ready_queue_size> = rtic::export::Queue::new();
@@ -245,8 +240,6 @@ impl SoftwareTask {
         peripheral_crate: &Path,
         backend: &dyn SwPassBackend,
     ) -> TokenStream {
-        let cfg_core = multibin::multibin_cfg_core(self.params.core);
-        let multibin_shared = multibin::multibin_shared();
         let task_name = self.name();
         let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
         let task_trait_name = format_ident!("{}", SWT_TRAIT_TY);
@@ -264,10 +257,8 @@ impl SoftwareTask {
         if self.params.core == self.params.spawn_by {
             let pend_fn = format_ident!("{SC_PEND_FN_NAME}");
             quote! {
-                #cfg_core
                 static mut #task_inputs_queue: rtic::export::Queue<#inputs_ty, 2> = rtic::export::Queue::new();
 
-                #cfg_core
                 impl #task_name {
                     pub fn spawn(input : #inputs_ty) -> Result<(), #inputs_ty> {
                         let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
@@ -292,7 +283,6 @@ impl SoftwareTask {
             let pend_fn = format_ident!("{MC_PEND_FN_NAME}");
             let core = self.params.core;
             quote! {
-                #multibin_shared
                 static mut #task_inputs_queue: rtic::export::Queue<#inputs_ty, 2> = rtic::export::Queue::new();
 
                 impl #task_name {

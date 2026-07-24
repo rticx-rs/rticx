@@ -88,11 +88,6 @@ impl CorePassBackend for MockCoreBackend {
     fn default_task_priority(&self) -> u16 {
         1
     }
-
-    #[cfg(feature = "multibin")]
-    fn multibin_shared_macro_path(&self) -> syn::Path {
-        parse_quote!(crate::mock_shared)
-    }
 }
 
 impl Default for MockCoreBackend {

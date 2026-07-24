@@ -1,5 +1,4 @@
-.PHONY: all ci fmt fmt-check clippy test \
-        test-default test-multipac test-multibin test-multipac-multibin
+.PHONY: all ci fmt fmt-check clippy test
 
 export RUSTFLAGS := -Dwarnings
 
@@ -16,16 +15,6 @@ fmt-check:
 clippy:
 	cargo clippy --all-targets --all-features
 
-test: test-default test-multipac test-multibin test-multipac-multibin
-
-test-default:
+test:
 	cargo test
 
-test-multipac:
-	cargo test --features multipac
-
-test-multibin:
-	cargo test --features multibin
-
-test-multipac-multibin:
-	cargo test --features multipac,multibin

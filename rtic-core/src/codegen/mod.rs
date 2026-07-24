@@ -4,7 +4,6 @@ use task_init::{generate_late_init_tasks_struct, generate_late_tasks_init_calls}
 
 use crate::CorePassBackend;
 use crate::analysis::Analysis;
-use crate::multibin::multibin_cfg_core;
 use crate::parser::ast::{RticTask, SharedResources};
 use crate::parser::{App, ast::IdleTask};
 use crate::rtic_functions::{
@@ -13,7 +12,6 @@ use crate::rtic_functions::{
 use crate::rtic_traits::get_rtic_traits_mod;
 
 pub mod hw_task;
-pub use utils::multibin;
 pub mod shared_resources;
 pub mod task_init;
 pub mod utils;
@@ -41,14 +39,6 @@ impl<'a> CodeGen<'a> {
         let app = self.app;
         let implementation = self.implementation;
 
-        #[cfg(feature = "multibin")]
-        let use_multibin_shared = {
-            let multibin_shared_path = self.implementation.multibin_shared_macro_path();
-            Some(quote!(use #multibin_shared_path as multibin_shared;))
-        };
-        #[cfg(not(feature = "multibin"))]
-        let use_multibin_shared: Option<TokenStream2> = None;
-
         let app_mod = &app.app_name;
         let peripheral_crate = generate_use_pac_statement(app);
         let user_includes = &app.user_includes;
@@ -69,9 +59,6 @@ impl<'a> CodeGen<'a> {
                 /// Include peripheral crate(s) that defines the vector table
                 #peripheral_crate
 
-                // if multibin feature is enabled, add the this use statement
-                #use_multibin_shared
-
                 // ================================== user includes ====================================
                 #(#user_includes)*
                 // ==================================== rtic traits ====================================
@@ -87,7 +74,6 @@ impl<'a> CodeGen<'a> {
 
                 /// Utility functions used to enforce implementing appropriate task traits
                 #task_trait_check_functions
-
             }
         }
     }
@@ -101,7 +87,6 @@ impl<'a> CodeGen<'a> {
             .zip(self.analysis.sub_analysis.iter());
         let args = &self.app.args;
         let apps = iter.map(|(app, analysis)| {
-            let cfg_core = multibin::multibin_cfg_core(app.core);
             let post_init = implementation.post_init(args, app, analysis);
 
             // init
@@ -173,12 +158,12 @@ impl<'a> CodeGen<'a> {
             let def_core_type = generate_core_type(app.core);
 
             let doc = format!(" # CORE {}", app.core);
+            let entry_of = format!(" # Entry of CORE {}", app.core);
             quote! {
                 #[doc = #doc]
                 // define static mut shared resources
                 #def_shared
                 // init task
-                #cfg_core
                 #def_init_task
                 // idle task
                 #def_idle_task
@@ -195,9 +180,7 @@ impl<'a> CodeGen<'a> {
                 /// Type representing tasks that need explicit user initialization
                 #late_init_struct
 
-                #[doc = r" Entry of "]
-                #[doc = #doc]
-                #cfg_core
+                #[doc = #entry_of]
                 #(#entry_attrs)*
                 #[unsafe(no_mangle)]
                 fn #entry_name() -> ! {
@@ -275,43 +258,11 @@ fn generate_core_type(core: u32) -> TokenStream2 {
     }
 }
 
-/// This will generate the `user path::to::pac` statement. The output varies based on what features the distribution enables:
-///
-/// 1) If both `multipac` and `multibin` features are enabled, and the user provides a list of paths to PACs (i.e #app(device = [ path1, path2, ..])) the following will be generated
-/// ```
-/// #[cfg(core = '0')]
-/// use path1 as _;
-///
-/// #[cfg(core = '1')]
-/// use path2 as _;
-/// ```
-///
-/// 2) If only `multipac` feature is enabled, and the user provides a list of paths to PACs (i.e #app(device = [ path1, path2, ..])) the following will be generated
-/// ```
-/// use path1 as _;
-/// use path2 as _;
-/// ```
-///
-/// 3) If neither `multipac`, nor `multibin` features are enabled, or if the user provides a single path to PACs (i.e #app(device = path::to::pac ) the following will be generated
-/// ```
-/// use  path::to::pac as _;
-/// ```
+/// This will generate the `use path::to::pac as _` statement.
+/// This is usually needed as the PAC needs to be imported as it defines the vector table
 fn generate_use_pac_statement(app: &App) -> TokenStream2 {
-    if cfg!(feature = "multipac") && app.args.pacs.len() != 1 {
-        let iter = app.args.pacs.iter().enumerate().map(|(core, pac)| {
-            let cfg_core = multibin_cfg_core(core as u32);
-            quote! {
-             #cfg_core
-             use #pac as _;
-            }
-        });
-        quote! {
-            #(#iter)*
-        }
-    } else {
-        let path_to_pac = &app.args.pacs[0];
-        quote! {
-            use #path_to_pac as _;
-        }
+    let path_to_pac = &app.args.pacs[0];
+    quote! {
+        use #path_to_pac as _;
     }
 }

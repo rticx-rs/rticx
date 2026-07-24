@@ -243,7 +243,6 @@ impl SharedResources {
 pub struct AppArgs {
     // path to peripheral crate
     pub pacs: Vec<syn::Path>,
-    pub peripherals: bool,
     pub cores: u32,
 }
 
@@ -295,10 +294,6 @@ impl AppArgs {
             _ => return Err(ParseError::DeviceNotPath.to_syn(args_span)),
         };
 
-        Ok(Self {
-            pacs,
-            peripherals: false, // TODO: not supported yet
-            cores,
-        })
+        Ok(Self { pacs, cores })
     }
 }

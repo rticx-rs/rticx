@@ -4,19 +4,16 @@ use quote::{format_ident, quote};
 use crate::parser::ast::{RticTask, SharedResources};
 use crate::rtic_functions::get_resource_proxy_lock_fn;
 use crate::rtic_traits::MUTEX_TY;
-use crate::{AppArgs, CorePassBackend, SubApp, multibin};
+use crate::{AppArgs, CorePassBackend, SubApp};
 
 impl SharedResources {
     pub fn generate_shared_resources_def(&self) -> TokenStream2 {
-        let cfg_core = multibin::multibin_cfg_core(self.args.core);
         let shared_struct = &self.strct;
         let resources_ty = &shared_struct.ident;
         let static_instance_name = &self.name_uppercase();
 
         quote! {
-            #cfg_core
             static mut #static_instance_name: core::mem::MaybeUninit<#resources_ty> = core::mem::MaybeUninit::uninit();
-            #cfg_core
             #shared_struct
         }
     }
@@ -33,7 +30,6 @@ impl SharedResources {
             let element_ty = &element.ty;
             let proxy_name = utils::get_proxy_name(element_name);
             let mutex_ty = format_ident!("{}", MUTEX_TY);
-            let cfg_core = multibin::multibin_cfg_core(self.args.core);
 
             // generate the implementation of lock function, using external implementation
             let impl_lock_fn = get_resource_proxy_lock_fn(
@@ -46,13 +42,11 @@ impl SharedResources {
 
             quote! {
                 // Resource proxy for `#element_name`
-                #cfg_core
                 pub struct #proxy_name {
                     #[doc(hidden)]
                     task_priority: u16,
                 }
 
-                #cfg_core
                 impl #proxy_name {
                     #[inline(always)]
                     pub fn new(task_priority: u16) -> Self {
@@ -60,7 +54,6 @@ impl SharedResources {
                     }
                 }
 
-                #cfg_core
                 impl #mutex_ty for #proxy_name {
                     type ResourceType = #element_ty;
                     #impl_lock_fn
@@ -73,7 +66,6 @@ impl SharedResources {
     }
 
     pub fn generate_shared_for_task(&self, task: &RticTask) -> TokenStream2 {
-        let cfg_core = multibin::multibin_cfg_core(self.args.core);
         let task_resources_idents = &task.args.shared;
         if task_resources_idents.is_empty() {
             return quote!();
@@ -100,7 +92,6 @@ impl SharedResources {
             format_ident!("__{}_shared_resources", task.name_snakecase());
         quote! {
             // Shared resources access through shared() API for `#task_ty`
-            #cfg_core
             impl #task_ty {
                 pub fn shared(&self) -> #task_shared_resources_struct {
                     const TASK_PRIORITY: u16 = #task_prio;
@@ -109,12 +100,10 @@ impl SharedResources {
             }
 
             // internal struct for `#task_ty` resource proxies
-            #cfg_core
             pub struct #task_shared_resources_struct {
                 #(pub #field_and_proxytype ,)*
             }
 
-            #cfg_core
             impl #task_shared_resources_struct {
                 #[inline(always)]
                 pub fn new(priority: u16) -> Self {

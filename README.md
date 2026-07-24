@@ -30,14 +30,13 @@ This repository maintains the core framework and a set of reference distribution
 | `distributions/atalanta-rtic/` | `atalanta-rtic` | Single-core RISC-V Atalanta MCU distribution. |
 | `distributions/distribution-template/` | `distribution-template` | Conceptual starting point for new distributions. |
 | `compilation-tests/` | `compilation-tests` | Embedded example apps and comparison baselines. |
-| `microamp_experimental/` | `microamp_experimental` | μAMP (asymmetric multiprocessing) shared-memory support. |
 
 ## Supported distributions
 
 | Distribution | Target | Features |
 |--------------|--------|----------|
 | `rp2040-rtic` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | `autoassign`, `swtasks` |
-| `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like | `multibin` |
+| `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like | N/A |
 | `rtic-hippo` | Single-core RISC-V Hippomenes MCU | `deadline-pass` |
 | `atalanta-rtic` | Single-core RISC-V Atalanta MCU | `deadline-pass` |
 

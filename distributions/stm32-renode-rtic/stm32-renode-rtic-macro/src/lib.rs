@@ -136,10 +136,6 @@ impl CorePassBackend for RenodeRtic {
         })
     }
 
-    fn multibin_shared_macro_path(&self) -> syn::Path {
-        parse_quote!(rtic::export::microamp::shared)
-    }
-
     fn pre_codegen_validation(
         &self,
         _app: &rtic_core::App,
