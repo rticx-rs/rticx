@@ -1,0 +1,25 @@
+[package]
+name = "cortex_m_rtic_example_armv6m"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[example]]
+name = "hello_rtic"
+path = "examples/hello_rtic.rs"
+
+[dependencies]
+# `armv6m` selects interrupt source-masking locking (Cortex-M0/M0+/M23).
+rtic = { path = "../..", features = ["armv6m"] }
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.3"
+panic-halt = "0.2.0"
+# Bare PAC for STM32F030 (Cortex-M0 / armv6-m, 31 IRQs, 2 priority bits).
+stm32f0 = { version = "0.15.1", features = ["stm32f0x0", "rt"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"

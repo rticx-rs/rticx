@@ -24,6 +24,7 @@ This repository maintains the core framework and a set of reference distribution
 | `compilation-passes/rtic-sw-pass/` | `rtic-sw-pass` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
 | `compilation-passes/rtic-auto-assign/` | `rtic-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
 | `compilation-passes/rtic-deadline-pass/` | `rtic-deadline-pass` | Converts `deadline = D` attributes into RTIC priorities. |
+| `distributions/cortex-m-rtic/` | `cortex-m-rtic` | Single-core Cortex-M (armv6-m and armv7-m and above) distribution. |
 | `distributions/rp2040-rtic/` | `rp2040-rtic` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |
 | `distributions/stm32-renode-rtic/` | `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like distribution. |
 | `distributions/rtic-hippo/` | `rtic-hippo` | Single-core RISC-V Hippomenes MCU distribution. |
@@ -35,6 +36,7 @@ This repository maintains the core framework and a set of reference distribution
 
 | Distribution | Target | Features |
 |--------------|--------|----------|
+| `cortex-m-rtic` | Single-core Cortex-M (armv6-m and armv7-m and above) | `swtasks` (default), `armv6m` |
 | `rp2040-rtic` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | `autoassign`, `swtasks` |
 | `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like | N/A |
 | `rtic-hippo` | Single-core RISC-V Hippomenes MCU | `deadline-pass` |
@@ -42,12 +44,14 @@ This repository maintains the core framework and a set of reference distribution
 
 ## Quick start
 
-There is no root `Cargo.toml`; each crate is built independently. The fastest way to see the framework in action is to build one of the `rp2040-rtic` examples:
+There is no root `Cargo.toml`; each crate is built independently. The fastest way to see the framework in action is to build one of the `cortex-m-rtic` examples:
 
 ```bash
-cd distributions/rp2040-rtic
+cd distributions/cortex-m-rtic/example-apps/armv7m-app
 cargo build --example hello_rtic
-cargo build --example ping_pong
+
+cd distributions/cortex-m-rtic/example-apps/armv6m-app
+cargo build --example hello_rtic
 ```
 
 ## Examples

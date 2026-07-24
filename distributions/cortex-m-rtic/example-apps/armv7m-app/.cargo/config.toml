@@ -1,0 +1,8 @@
+[build]
+target = "thumbv7m-none-eabi"
+
+[target.thumbv7m-none-eabi]
+# `link.x` is provided by cortex-m-rt; it `INCLUDE`s memory.x (found via build.rs).
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+]

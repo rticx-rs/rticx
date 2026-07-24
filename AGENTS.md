@@ -49,6 +49,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | `rp2040-rtic` | `distributions/rp2040-rtic/` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ | Single binary; starts core 1 from `post_init`. |
 | `stm32-renode-rtic` | `distributions/stm32-renode-rtic/` | Renode-simulated multicore STM32F1C3-like | Multi-binary. |
 | `rtic-hippo` | `distributions/rtic-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
+| `cortex-m-rtic` | `distributions/cortex-m-rtic/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default. |
 | `atalanta-rtic` | `distributions/atalanta-rtic/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
 | `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | not meant to be compiled |
 
@@ -180,6 +181,8 @@ Auto-assign and deadline passes read:
 | `rtic-core` | `debug_expand` | Writes expanded code to `examples/{binary_name}_expanded.rs`. |
 | `rp2040-rtic` | `autoassign` | Enables `rtic-auto-assign`. |
 | `rp2040-rtic` | `swtasks` | Enables `rtic-sw-pass`. |
+| `cortex-m-rtic` | `swtasks` | Enables `rtic-sw-pass` (on by default). |
+| `cortex-m-rtic` | `armv6m` | Selects interrupt source-masking locking (Cortex-M0/M0+/M23). When disabled (default), BASEPRI-based locking is used (armv7-m and above). |
 | `rtic-hippo` | `deadline-pass` | Enables `rtic-deadline-pass`. |
 | `atalanta-rtic` | `deadline-pass` | Enables `rtic-deadline-pass`. |
 | `atalanta-rtic` | `pcs-pass` | Enables the PCS pass. |
@@ -217,13 +220,13 @@ cargo build --example hello_rtic
 # RP2040 multicore ping-pong example
 cargo build --example ping_pong
 
-# Hippomenes examples
-cd distributions/rtic-hippo/example-apps
-cargo build --example rtic_uart_sw
+# Cortex-M (armv7-m / BASEPRI) example
+cd distributions/cortex-m-rtic/example-apps/armv7m-app
+cargo build --example hello_rtic
 
-# Atalanta examples
-cd distributions/atalanta-rtic/example-apps
-cargo build --example <example_name>
+# Cortex-M (armv6-m / source masking) example
+cd distributions/cortex-m-rtic/example-apps/armv6m-app
+cargo build --example hello_rtic
 ```
 
 ### Multi-binary builds for `stm32-renode-rtic`

@@ -1,0 +1,9 @@
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    # No SIMD / loop vectorization on thumbv6-m.
+    "-C", "no-vectorize-loops",
+]
