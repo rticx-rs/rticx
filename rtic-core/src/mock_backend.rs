@@ -63,8 +63,12 @@ impl CorePassBackend for MockCoreBackend {
         Some(dispatch_task_call)
     }
 
-    fn entry_name(&self, _core: u32) -> Ident {
-        format_ident!("main")
+    fn entry_name(&self, core: u32) -> Ident {
+        if core == 0 {
+            format_ident!("main")
+        } else {
+            format_ident!("main_{core}")
+        }
     }
 
     fn populate_idle_loop(&self) -> Option<TokenStream2> {

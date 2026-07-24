@@ -165,3 +165,64 @@ fn parse_task_args_defaults() {
     // checking the shape of the defaults, not the exact value.
     assert_eq!(args.shared.len(), 0);
 }
+
+#[test]
+fn task_adjusts_default_init_args() {
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct Shared {
+                pub counter: u32,
+            }
+
+            #[init]
+            fn init() -> Shared {
+                Shared { counter: 0 }
+            }
+
+            #[task(binds = UART, priority = 2)]
+            struct UartTask;
+
+            impl RticTask for UartTask {
+                type InitArgs = ();
+                fn init(_: ()) -> Self { UartTask }
+                fn exec(&mut self) {}
+            }
+        }
+    };
+    let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
+    let app = App::parse(args, module).expect("valid app");
+    let task = &app.sub_apps[0].tasks[0];
+    assert!(!task.user_initializable);
+}
+
+#[test]
+fn task_marks_custom_init_args_as_user_initializable() {
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct Shared {
+                pub counter: u32,
+            }
+
+            #[init]
+            fn init() -> Shared {
+                Shared { counter: 0 }
+            }
+
+            #[task(binds = UART, priority = 2)]
+            struct UartTask;
+
+            impl RticTask for UartTask {
+                type InitArgs = u32;
+                fn init(_: u32) -> Self { UartTask }
+                fn exec(&mut self) {}
+            }
+        }
+    };
+    let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
+    let app = App::parse(args, module).expect("valid app");
+    let task = &app.sub_apps[0].tasks[0];
+    assert!(task.user_initializable);
+    assert!(task.task_init_call().is_none());
+}
