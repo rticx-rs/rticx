@@ -1,6 +1,6 @@
-mod analyze;
+pub mod analyze;
 mod codegen;
-pub(crate) mod parse;
+pub mod parse;
 
 use crate::parse::App;
 use crate::software_pass::codegen::CodeGen;
