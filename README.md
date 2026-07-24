@@ -58,7 +58,7 @@ cargo build --example ping_pong
 
 ## Documentation
 
-Full user and distributor guides are available in the [project wiki](WIKI_URL_PLACEHOLDER).
+Full user and distributor guides are available in the [project wiki](https://github.com/zakimadaoui/rtic-mc-experiments/wiki).
 
 ## Academic Publications
 
