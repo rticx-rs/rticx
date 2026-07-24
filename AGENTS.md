@@ -53,11 +53,6 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | `atalanta-rtic` | `distributions/atalanta-rtic/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
 | `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | not meant to be compiled |
 
-### Supporting and test directories
-
-| Directory | Path | Role |
-|-----------|------|------|
-| `compilation-tests` | `compilation-tests/` | Embedded example applications and comparison baselines for `rp2040-rtic`, RTIC v1, and RTIC v2. |
 
 ---
 
@@ -248,23 +243,6 @@ make qemu
 
 WIP: unsupported at the moment
 
-### Running the comparison test suite
-
-The `compilation-tests/` directory contains example apps used for size and timing comparisons:
-
-```bash
-cd compilation-tests
-
-# Build all compilation tests
-./check.sh
-
-# Print binary sizes
-./get_sizes.sh
-
-# Run repeated timing builds
-./run_timings.sh 5 --release
-```
-
 ### Documentation
 
 If a documentation generation script exists in the root, run it with:
@@ -311,13 +289,6 @@ If a documentation generation script exists in the root, run it with:
 7. Add an `export` module in the library crate that re-exports target-specific runtime helpers, `cortex-m` / `riscv` items, and any pass exports.
 8. Add example apps under `<your-distro>/examples/` or `<your-distro>/example-apps/`.
 
-### How to write a compilation test
-
-1. Create a new binary crate under `compilation-tests/` or add an example under a distribution.
-2. Write a small RTIC application exercising the feature you want to test.
-3. Add a `build` or `check` invocation to the relevant script (e.g., `compilation-tests/check.sh`).
-4. For regression tests, prefer a small, minimal example that fails clearly if the macro expansion is broken.
-
 ---
 
-*Last oriented: 2026-07-24*
+*Last oriented: 2026-07-25*

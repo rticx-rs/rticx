@@ -32,7 +32,6 @@ This repository maintains the core framework and a set of reference distribution
 | `distributions/rtic-hippo/` | `rtic-hippo` | Single-core RISC-V Hippomenes MCU distribution. |
 | `distributions/atalanta-rtic/` | `atalanta-rtic` | Single-core RISC-V Atalanta MCU distribution. |
 | `distributions/distribution-template/` | `distribution-template` | Conceptual starting point for new distributions. |
-| `compilation-tests/` | `compilation-tests` | Embedded example apps and comparison baselines. |
 
 ## Supported distributions
 
