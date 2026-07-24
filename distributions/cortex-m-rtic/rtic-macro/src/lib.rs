@@ -241,15 +241,21 @@ impl CorePassBackend for CortexMRtic {
 fn generate_source_mask_globals(app_args: &AppArgs, app_info: &SubApp) -> Option<TokenStream2> {
     let pac = &app_args.pacs[app_info.core as usize];
 
-    // All interrupt numbers in use (as u32), needed to size the Mask chunks
-    let irq_list_as_u32 = app_info.tasks.iter().filter_map(|t| {
+    // All NVIC interrupt numbers in use (as u32), needed to size the Mask chunks.
+    // Cortex-M core exceptions (SysTick, PendSV, SVCall, …) are *not* in the
+    // PAC `Interrupt` enum and have no ISER/ICER mask bits, so they must be
+    // excluded from the source-mask table.
+    let nvic_tasks: Vec<_> = app_info.tasks.iter().filter(|t| {
+        t.args.binds.as_ref().is_some_and(|n| !is_exception(n))
+    }).collect();
+    let irq_list_as_u32 = nvic_tasks.iter().filter_map(|t| {
         let irq_name = t.args.binds.as_ref()?;
         Some(quote! { #pac::Interrupt::#irq_name as u32, })
     });
 
-    // Group interrupts by priority level (1..=3) to build one mask per level
+    // Group NVIC interrupts by priority level (1..=3) to build one mask per level
     let mut irq_prio_map = [Vec::new(), Vec::new(), Vec::new()];
-    for task in app_info.tasks.iter() {
+    for task in &nvic_tasks {
         let prio = task.args.priority;
         if (1..=3).contains(&prio) {
             let Some(irq_name) = task.args.binds.as_ref() else {

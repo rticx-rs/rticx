@@ -2,8 +2,14 @@
 target = "thumbv6m-none-eabi"
 
 [target.thumbv6m-none-eabi]
+# Boot the example under QEMU's Stellaris LM3S6965EVB. Even though that board
+# is an ARMv7-M Cortex-M3, ARMv6-M Thumb code is a strict subset of ARMv7-M, so
+# thumbv6m-built binaries run unmodified here — exactly what upstream RTIC's
+# own QEMU examples do. `debug::exit` terminates QEMU with a process exit code
+# usable as a CI pass/fail gate.
+runner = "qemu-system-arm -machine lm3s6965evb -nographic -semihosting-config enable=on,target=native -kernel"
 rustflags = [
     "-C", "link-arg=-Tlink.x",
-    # No SIMD / loop vectorization on thumbv6-m.
+    # No SIMD / loop vectorization on thumbv6m.
     "-C", "no-vectorize-loops",
 ]

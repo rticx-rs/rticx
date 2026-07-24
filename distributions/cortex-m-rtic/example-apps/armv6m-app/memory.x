@@ -1,8 +1,9 @@
-/* Same app compiled for armv6-m (Cortex-M0/M0+). The locking strategy is
- * selected by the `armv6m` feature on the `rtic` crate, not by memory layout. */
-/* STM32F030 memory layout (Cortex-M0 / armv6-m) */
+/* Memory layout matching QEMU's `lm3s6965evb` (Stellaris LM3S6965, Cortex-M3).
+ * We use this same layout for both the armv7m-app (thumbv7m, BASEPRI) and the
+ * armv6m-app (thumbv6m, source-masking) examples; QEMU runs thumbv6m code on
+ * the same Cortex-M3 machine since ARMv6-M is a subset of ARMv7-M. */
 MEMORY
 {
-  FLASH : ORIGIN = 0x08000000, LENGTH = 64K
-  RAM   : ORIGIN = 0x20000000, LENGTH = 8K
+  FLASH : ORIGIN = 0x00000000, LENGTH = 256K
+  RAM   : ORIGIN = 0x20000000, LENGTH = 64K
 }

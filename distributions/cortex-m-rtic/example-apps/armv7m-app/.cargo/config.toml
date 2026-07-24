@@ -2,7 +2,12 @@
 target = "thumbv7m-none-eabi"
 
 [target.thumbv7m-none-eabi]
-# `link.x` is provided by cortex-m-rt; it `INCLUDE`s memory.x (found via build.rs).
+# Boot the example under QEMU's Stellaris LM3S6965EVB (Cortex-M3) with
+# semihosting enabled. `-kernel` loads the ELF directly; `debug::exit` from the
+# `cortex-m-semihosting` crate terminates QEMU with the process exit code
+# matching `EXIT_SUCCESS` / `EXIT_FAILURE`, which makes `cargo run`'s exit code
+# usable as a CI pass/fail gate.
+runner = "qemu-system-arm -machine lm3s6965evb -nographic -semihosting-config enable=on,target=native -kernel"
 rustflags = [
     "-C", "link-arg=-Tlink.x",
 ]

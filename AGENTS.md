@@ -229,6 +229,21 @@ cd distributions/cortex-m-rtic/example-apps/armv6m-app
 cargo build --example hello_rtic
 ```
 
+### Running cortex-m-rtic examples under QEMU
+
+The `cortex-m-rtic` examples are runnable under QEMU's `lm3s6965evb` (Cortex-M3)
+machine. Each example configures the SysTick core timer, spawns a software task
+on every tick, acquires a shared resource through RTIC's SRP `lock`, and once
+the counter reaches the target calls `debug::exit(EXIT_SUCCESS)` from
+`cortex-m-semihosting`, terminating QEMU with exit code 0 — usable as a CI
+pass/fail gate.
+
+From the repository root:
+
+```bash
+make qemu
+```
+
 ### Multi-binary builds for `stm32-renode-rtic`
 
 WIP: unsupported at the moment

@@ -7,6 +7,8 @@ The result is a small core framework (`rtic-core`) plus a growing ecosystem of *
 - **Compilation passes** are independent crates that transform RTIC syntax.
 - **Distributions** are target-specific crates that implement backend traits, register the passes they want, and expose the final `#[rtic::app]` macro.
 
+In addition, the user application syntax has been refactored to provide less magic and more idiomatic Rust experience while preserving the core concepts behind RTIC (Tasks and Resources model). 
+
 This repository maintains the core framework and a set of reference distributions. New hardware distributions are developed as out-of-tree crates and are not hosted here.
 
 ## Architecture
@@ -36,7 +38,7 @@ This repository maintains the core framework and a set of reference distribution
 
 | Distribution | Target | Features |
 |--------------|--------|----------|
-| `cortex-m-rtic` | Single-core Cortex-M (armv6-m and armv7-m and above) | `swtasks` (default), `armv6m` |
+| `cortex-m-rtic` | Single-core Cortex-M (armv6-m and armv7-m and above) | `swtasks` (default), `armv6m` — runnable under QEMU |
 | `rp2040-rtic` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | `autoassign`, `swtasks` |
 | `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like | N/A |
 | `rtic-hippo` | Single-core RISC-V Hippomenes MCU | `deadline-pass` |
@@ -44,18 +46,29 @@ This repository maintains the core framework and a set of reference distribution
 
 ## Quick start
 
-There is no root `Cargo.toml`; each crate is built independently. The fastest way to see the framework in action is to build one of the `cortex-m-rtic` examples:
+The fastest way to see the framework in action is the `cortex-m-rtic` QEMU playground, which exercises real Cortex-M core-peripheral
+init (SysTick), a hardware task bound to the `SysTick` exception, and a software task on an NVIC dispatcher that acquires a shared resource
+through RTIC's SRP `lock`.
 
 ```bash
-cd distributions/cortex-m-rtic/example-apps/armv7m-app
-cargo build --example hello_rtic
+# Prereqs: qemu-system-arm and the two Cortex-M Rust targets
+sudo apt-get install -y qemu-system-arm
+rustup target add thumbv7m-none-eabi thumbv6m-none-eabi
 
-cd distributions/cortex-m-rtic/example-apps/armv6m-app
-cargo build --example hello_rtic
+# Run both locking codepaths; fails (non-zero) if either misbehaves
+make qemu
+```
+
+The examples are located in `distributions/cortex-m-rtic/example-apps`. You modify them, rebuild and run on qemu:
+
+```bash
+cd distributions/cortex-m-rtic/example-apps/armv7m-app && cargo run --example hello_rtic
+cd distributions/cortex-m-rtic/example-apps/armv6m-app && cargo run --example hello_rtic
 ```
 
 ## Examples
 
+- [QEMU-runnable RTIC playground: SysTick hw task + spawned sw task + SRP lock + `debug::exit`](distributions/cortex-m-rtic/example-apps/armv7m-app/examples/hello_rtic.rs)
 - [Single-core RTIC application with software tasks](distributions/rp2040-rtic/examples/hello_rtic.rs)
 - [Multicore ping-pong with cross-core communication](distributions/rp2040-rtic/examples/ping_pong.rs)
 

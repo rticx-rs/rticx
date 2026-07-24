@@ -13,8 +13,11 @@ path = "examples/hello_rtic.rs"
 rtic = { path = "../..", features = ["armv6m"] }
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
+cortex-m-semihosting = "0.5.0"
 panic-halt = "0.2.0"
 # Bare PAC for STM32F030 (Cortex-M0 / armv6-m, 31 IRQs, 2 priority bits).
+# Same PAC as the armv7m-app; only the target triple and the `armv6m` RTIC
+# feature differ between the two examples.
 stm32f0 = { version = "0.15.1", features = ["stm32f0x0", "rt"] }
 
 [profile.dev]
