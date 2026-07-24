@@ -21,9 +21,9 @@ This repository maintains the core framework and a set of reference distribution
 |------|-------------------|------|
 | `rtic-core/` | `rtic-core` | Core parser, analysis, codegen, and `RticMacroBuilder`. |
 | `rtic-spsc/` | `rtic-spsc` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
-| `compilation_passes/rtic-sw-pass/` | `rtic-sw-pass` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
-| `compilation_passes/rtic-auto-assign/` | `rtic-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
-| `compilation_passes/rtic-deadline-pass/` | `rtic-deadline-pass` | Converts `deadline = D` attributes into RTIC priorities. |
+| `compilation-passes/rtic-sw-pass/` | `rtic-sw-pass` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
+| `compilation-passes/rtic-auto-assign/` | `rtic-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
+| `compilation-passes/rtic-deadline-pass/` | `rtic-deadline-pass` | Converts `deadline = D` attributes into RTIC priorities. |
 | `distributions/rp2040-rtic/` | `rp2040-rtic` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |
 | `distributions/stm32-renode-rtic/` | `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like distribution. |
 | `distributions/rtic-hippo/` | `rtic-hippo` | Single-core RISC-V Hippomenes MCU distribution. |

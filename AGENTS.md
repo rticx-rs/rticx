@@ -38,9 +38,9 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 
 | Crate | Path | Role |
 |-------|------|------|
-| `rtic-sw-pass` | `compilation_passes/rtic-sw-pass/` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
-| `rtic-auto-assign` | `compilation_passes/rtic-auto-assign/` | Automatic `core = N` assignment for tasks based on shared resource usage. |
-| `rtic-deadline-pass` | `compilation_passes/rtic-deadline-pass/` | Converts `deadline = D` attributes into RTIC priorities. |
+| `rtic-sw-pass` | `compilation-passes/rtic-sw-pass/` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
+| `rtic-auto-assign` | `compilation-passes/rtic-auto-assign/` | Automatic `core = N` assignment for tasks based on shared resource usage. |
+| `rtic-deadline-pass` | `compilation-passes/rtic-deadline-pass/` | Converts `deadline = D` attributes into RTIC priorities. |
 
 ### Distributions
 
@@ -136,7 +136,7 @@ Notable methods:
 
 ### `SwPassBackend`
 
-`SwPassBackend` (in `compilation_passes/rtic-sw-pass/src/software_pass/mod.rs`) is the backend extension for the software tasks pass.
+`SwPassBackend` (in `compilation-passes/rtic-sw-pass/src/software_pass/mod.rs`) is the backend extension for the software tasks pass.
 
 Required methods:
 
@@ -166,7 +166,7 @@ Core RTIC syntax attributes are parsed in `rtic-core/src/parser/ast.rs`:
 - `#[idle(core = N)]` — idle task.
 - `#[task(..., task_trait = CustomTrait)]` — allows a pass to plug in a custom task trait.
 
-Software-task specific attributes are parsed in `compilation_passes/rtic-sw-pass/src/software_pass/parse/ast.rs`:
+Software-task specific attributes are parsed in `compilation-passes/rtic-sw-pass/src/software_pass/parse/ast.rs`:
 
 - `#[sw_task(priority = N, shared = [...], core = N, spawn_by = M)]`
 - `spawn_by = M` controls which core may spawn this task.
@@ -219,7 +219,7 @@ cargo test --features multibin,multipac
 
 Build a pass crate
 ```bash
-cd compilation_passes/rtic-sw-pass && cargo build
+cd compilation-passes/rtic-sw-pass && cargo build
 ```
 
 ### Building distribution examples
@@ -284,7 +284,7 @@ If a documentation generation script exists in the root, run it with:
 
 ### How to add a new compilation pass
 
-1. Create a new crate under `compilation_passes/<your-pass>/`.
+1. Create a new crate under `compilation-passes/<your-pass>/`.
 2. Implement the `RticPass` trait from `rtic-core`:
    ```rust
    impl RticPass for YourPass {

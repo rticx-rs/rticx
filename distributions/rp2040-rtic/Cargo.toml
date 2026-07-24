@@ -11,12 +11,15 @@ bench = false
 [dependencies]
 cortex-m = "0.7.7"
 rtic-macro = { path = "rp2040-rtic-macro" }
-rtic-sw-pass = { path = "../../compilation_passes/rtic-sw-pass", default-features = false }
+rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass", default-features = false }
 log = "0.4.21"
 rp2040-hal = "0.9.1"
 
 [dev-dependencies]
-rtic-macro = { path = "rp2040-rtic-macro" , features = ["autoassign", "swtasks"]}
+rtic-macro = { path = "rp2040-rtic-macro", features = [
+    "autoassign",
+    "swtasks",
+] }
 
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"

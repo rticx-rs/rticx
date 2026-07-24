@@ -10,8 +10,8 @@ bench = false
 
 [dependencies]
 rtic-macro = { path = "rtic-macro" }
-rtic-sw-pass = { path = "../../compilation_passes/rtic-sw-pass", default-features = false }
-rtic-deadline-pass = { path = "../../compilation_passes/rtic-deadline-pass", default-features = false }
+rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass", default-features = false }
+rtic-deadline-pass = { path = "../../compilation-passes/rtic-deadline-pass", default-features = false }
 bsp = { package = "atalanta-bsp", git = "https://github.com/soc-hub-fi/atalanta.git", tag = "v0.2.1" }
 
 [features]
