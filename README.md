@@ -1,52 +1,67 @@
-# RTIC Evolution: Multicore support, Distributions and compilations passes
+# MMRTIC: Multicore, Distributions and Compilation Passes
 
-**Project Objective:**
+This repository contains a from scratch rewrite of the RTIC (Real-Time Interrupt-driven Concurrency) framework for Rust. The goal is to make RTIC more maintainable, extensible, and portable by separating the generic proc-macro logic from target-specific details and by allowing new language features to be added as external, reusable compilation passes.
 
-The objective of this project is to enhance the scalability of the RTIC (Real-Time Interrupt-driven Concurrency) framework, particularly to make it flexible enough to allow supporting different kinds of multi-core hardware configurations. The goal is to:
+The result is a small core framework (`rtic-core`) plus a growing ecosystem of **compilation passes** and **distributions**:
 
-- Find ways to reduce the RTIC codebase complexity
-- Decouple the generic RTIC proc-macro logic from the hardware-specific implementation details
-- Define good abstractions that facilitate targeting different kinds of hardware architectures.
-- Provide means for extending RTIC syntax using external rust crates
+- **Compilation passes** are independent crates that transform RTIC syntax.
+- **Distributions** are target-specific crates that implement backend traits, register the passes they want, and expose the final `#[rtic::app]` macro.
 
-By achieving this, we aim to create a more maintainable and extensible RTIC framework capable of accommodating various hardware configurations.
+This repository maintains the core framework and a set of reference distributions. New hardware distributions are developed as out-of-tree crates and are not hosted here.
 
-## How the project objectives have been achieved
+## Architecture
 
-The RTIC framework modularity problem can be solved like in any other software project by finding the right abstractions, and with simple software design patterns.
+- **`rtic-core`** provides the parser, resource-ceiling analysis (SRP), code generation for tasks/resources/init/idle, and the `RticMacroBuilder` API for chaining passes.
+- **Compilation passes** implement the `RticPass` trait and run before or after the core pass as pure syntax-to-syntax transformations.
+- **Distributions** provide the low-level hardware bindings via the `CorePassBackend` trait (and optional pass-specific backends), select which passes to use, and re-export the generated `#[rtic::app]` macro.
 
-- First, Decoupling the RTIC declarative model code parsing and generation from the hardware-specific details has been achieved by carefully reviewing the current RTIC codebase, identifying which parts were dependent on hardware-specific details and which parts were more generic. After doing this, It turned out that only a small portion of the code generation was hardware-specific. So, this part was taken out and replaced by dynamically linking an external type that implements some trait functions that include the hardware-specific logic.
+## Repository layout
 
-- The second part is about reducing the complexity of the RTIC project and making it more accessible to first-time contributors. This problem has been solved by devising an approach where the RTIC application is parsed and expanded several times. In essence, RTIC is all about having tasks that can share resources, with some of those tasks that can be bound to interrupt lines. So, a basic crate called `rtic-core` was developed to provide just that, and in addition, it provides a mechanism for stacking external logic from other crates that can turn more complex RTIC applications into something that lower level passes can understand.
+| Path | Crate / Directory | Role |
+|------|-------------------|------|
+| `rtic-core/` | `rtic-core` | Core parser, analysis, codegen, and `RticMacroBuilder`. |
+| `rtic-spsc/` | `rtic-spsc` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
+| `compilation_passes/rtic-sw-pass/` | `rtic-sw-pass` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
+| `compilation_passes/rtic-auto-assign/` | `rtic-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
+| `compilation_passes/rtic-deadline-pass/` | `rtic-deadline-pass` | Converts `deadline = D` attributes into RTIC priorities. |
+| `distributions/rp2040-rtic/` | `rp2040-rtic` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |
+| `distributions/stm32-renode-rtic/` | `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like distribution. |
+| `distributions/rtic-hippo/` | `rtic-hippo` | Single-core RISC-V Hippomenes MCU distribution. |
+| `distributions/atalanta-rtic/` | `atalanta-rtic` | Single-core RISC-V Atalanta MCU distribution. |
+| `distributions/distribution-template/` | `distribution-template` | Conceptual starting point for new distributions. |
+| `compilation-tests/` | `compilation-tests` | Embedded example apps and comparison baselines. |
+| `microamp_experimental/` | `microamp_experimental` | μAMP (asymmetric multiprocessing) shared-memory support. |
 
-Solving those two problems lead to what is known as **RTIC distributions and External Compilation passes**
+## Supported distributions
 
-- [Compilation passes](compilation_passes/compilation_passes.md)
-- [RTIC distributions](distributions/rtic_distributions.md)
+| Distribution | Target | Features |
+|--------------|--------|----------|
+| `rp2040-rtic` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | `autoassign`, `swtasks` |
+| `stm32-renode-rtic` | Renode-simulated multicore STM32F1C3-like | `multibin` |
+| `rtic-hippo` | Single-core RISC-V Hippomenes MCU | `deadline-pass` |
+| `atalanta-rtic` | Single-core RISC-V Atalanta MCU | `deadline-pass` |
 
-### Project structure
+## Quick start
 
-In this experiment project
+There is no root `Cargo.toml`; each crate is built independently. The fastest way to see the framework in action is to build one of the `rp2040-rtic` examples:
 
-- `rtic-core` is the library crate which:
-  - contains a built-in compilation pass that captures the **Tasks and Resources syntax mode**  which will be referred to as **the core compilation pass**.
-  - Exposes an Builder API for loading other external passes (from 3rd party crates) and for externally providing hardware specific implementations to build an RTIC framework
+```bash
+cd distributions/rp2040-rtic
+cargo build --example hello_rtic
+cargo build --example ping_pong
+```
 
-- `rtic-sw-pass` is the default crate that provides a software tasks pass. It does that by simply generating the necessary queues for message passing and then declaring the dispatchers as hardware tasks. Resource management and binding to interrupts and all other initialization steps will be taken care of by the hardware pass in`rtic-core`
+## Examples
 
-- `rtic-deadline-pass` is a compilation pass that makes a simple "deadlines-to-priorities" conversion for tasks.
+- [Single-core RTIC application with software tasks](distributions/rp2040-rtic/examples/hello_rtic.rs)
+- [Multicore ping-pong with cross-core communication](distributions/rp2040-rtic/examples/ping_pong.rs)
 
-- `rp2040-rtic`: is an example RTIC distribution (multicore) specific to the RP2040 which defines the rp2040 specific hardware details and provides them to  `rtic-core` , `rtic-sw-pass` and other compilation passes crates to create the desired distribution.  
+## Documentation
 
-- `stm32-renode-rtic`: Another multicore distribution targeting a renode simulation of a modified stm32f1c3 MCU architecture.
+Full user and distributor guides are available in the [project wiki](WIKI_URL_PLACEHOLDER).
 
-- `hippo-rtic`: an distribution targeting a single (soft-)core RISC-V MCU.
+## Academic Publications
 
-### More
-
-- [Rust code documentation](https://zakimadaoui.github.io/rtic-mc-experiments/)
-
-### Other useful links
-
-- [single core rtic application example](rp2040-rtic/examples/hello_rtic.rs)
-- [multi-core rtic application with cross-core communication (classic ping-pong)](rp2040-rtic/examples/ping_pong.rs)  
+- [Master thesis: Modular and Multicore RTIC](https://trepo.tuni.fi/bitstream/10024/162037/2/MadaouiZakaria.pdf)
+- [Paper: Towards modularity of the Rust RTIC real-time scheduling framework](https://ieeexplore.ieee.org/document/10752441)
+- [Paper: Modular RTIC: Lightweight Real Time for Customized Architectures](https://www.diva-portal.org/smash/get/diva2:1993122/FULLTEXT01.pdf)

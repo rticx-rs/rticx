@@ -50,7 +50,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | `stm32-renode-rtic` | `distributions/stm32-renode-rtic/` | Renode-simulated multicore STM32F1C3-like | Multi-binary (`multibin` / μAMP). |
 | `rtic-hippo` | `distributions/rtic-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
 | `atalanta-rtic` | `distributions/atalanta-rtic/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
-| `distribution-template` | `distributions/distribution-template/` | Reference/template for new distributions | **Stale**: references removed APIs and does not compile against the current `rtic-core`. |
+| `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | not meant to be compiled |
 
 ### Supporting and test directories
 
@@ -283,7 +283,7 @@ If a documentation generation script exists in the root, run it with:
 
 ### How to create a new RTIC distribution
 
-1. Copy the **concept** of an existing distribution (note: the `distribution-template` is currently stale and should not be used as-is).
+1. Copy the **concept** of an existing distribution (note: the `distribution-template` doesn't compile its meant to be copy pasted to provide a starting point for creating a new distribution).
 2. Create a new directory under `distributions/<your-distro>/` with two crates:
    - `<your-distro>/` — the library crate users depend on.
    - `<your-distro>-macro/` — the proc-macro crate defining `#[rtic::app]`.
