@@ -18,7 +18,7 @@ clippy:
 test: test-default test-multibin
 
 test-default:
-	cargo test
+	cargo test --features proc-macro
 
 test-multibin:
-	cargo test --features multibin
+	cargo test --features proc-macro,multibin

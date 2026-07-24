@@ -14,8 +14,12 @@ quote = "1.0.35"
 rtic-core = { path = "../../../rtic-core" }
 # rtic-core = { path = "../../rtic-core", features = ["debug_expand"] }
 syn = { version = "2.0.52", features = ["extra-traits", "full"] }
-rtic-sw-pass = { path = "../../../compilation-passes/rtic-sw-pass" }
-rtic-deadline-pass = { path = "../../../compilation-passes/rtic-deadline-pass" }
+rtic-sw-pass = { path = "../../../compilation-passes/rtic-sw-pass", features = [
+    "proc-macro",
+] }
+rtic-deadline-pass = { path = "../../../compilation-passes/rtic-deadline-pass", features = [
+    "proc-macro",
+] }
 
 [features]
 deadline-pass = []

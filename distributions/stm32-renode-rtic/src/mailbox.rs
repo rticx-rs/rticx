@@ -108,7 +108,7 @@ pub mod cross_core {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-#[export_name = "DMA2_CHANNEL4_5"] // DMA2 channel 4_5 interrupt is repurposed for mailbox usage
+#[unsafe(export_name = "DMA2_CHANNEL4_5")] // DMA2 channel 4_5 interrupt is repurposed for mailbox usage
 fn MAILBOX_INTERRUPT() {
     if let Some(signal) = cross_core::get_pended_irq() {
         NVIC::pend(signal);

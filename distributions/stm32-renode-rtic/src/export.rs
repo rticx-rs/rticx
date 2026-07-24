@@ -20,7 +20,6 @@ pub use cortex_m::{
 pub use mailbox::cross_core;
 pub use microamp;
 
-
 #[inline]
 #[must_use]
 pub const fn cortex_logical2hw(logical: u8, nvic_prio_bits: u8) -> u8 {
@@ -87,11 +86,11 @@ pub unsafe fn lock<T, R>(
     f: impl FnOnce(&mut T) -> R,
 ) -> R {
     if ceiling == (1 << nvic_prio_bits) {
-        cortex_m::interrupt::free(|_| f(&mut *ptr))
+        unsafe { cortex_m::interrupt::free(|_| f(&mut *ptr)) }
     } else {
         let current = basepri::read();
         basepri_max::write(cortex_logical2hw(ceiling, nvic_prio_bits));
-        let r = f(&mut *ptr);
+        let r = unsafe { f(&mut *ptr) };
         basepri::write(current);
         r
     }

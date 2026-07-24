@@ -12,7 +12,7 @@ bench = false
 [dependencies]
 
 rtic-macro = { path = "rtic-macro" }
-rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass", default-features = false }
+rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" } # exports
 
 cortex-m-semihosting = "0.3.2"
 cortex-m = "0.7.7"

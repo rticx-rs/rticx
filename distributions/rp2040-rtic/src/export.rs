@@ -120,25 +120,26 @@ pub const fn have_basepri() -> bool {
 /// These possible solutions are set goals for future work
 #[cfg(not(have_basepri))]
 #[inline(always)]
-pub unsafe fn lock<T, const M: usize>(
+pub unsafe fn lock<T, R, const M: usize>(
     ptr: *mut T,
     priority: u16,
     ceiling: u16,
     // _nvic_prio_bits: u8,
     masks: &[Mask<M>; 3],
-    f: impl FnOnce(&mut T),
-) {
+    f: impl FnOnce(&mut T) -> R,
+) -> R {
     let current = priority;
     if current < ceiling {
         if ceiling >= 4 {
             // execute closure under protection of raised system ceiling
-            interrupt::free(|_| f(unsafe { &mut *ptr }));
+            interrupt::free(|_| f(unsafe { &mut *ptr }))
         } else {
             let mask = compute_mask(current as u8, ceiling as u8, masks);
             unsafe { clear_enable_mask(mask) };
             // execute closure under protection of raised system ceiling
-            f(unsafe { &mut *ptr });
+            let r = f(unsafe { &mut *ptr });
             unsafe { set_enable_mask(mask) };
+            r
         }
     } else {
         // execute closure without raising system ceiling
