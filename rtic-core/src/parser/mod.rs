@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use proc_macro2::Span;
 use quote::format_ident;
-use syn::{spanned::Spanned, Ident, Item, ItemFn, ItemImpl, ItemStruct, ItemUse, Type};
+use syn::{Ident, Item, ItemFn, ItemImpl, ItemStruct, ItemUse, Type, spanned::Spanned};
 
 use ast::*;
 
@@ -139,11 +139,9 @@ impl App {
             let is_idle = path.segments[0].ident.to_string().ends_with(IDLE_TRAIT_TY);
             let is_task = is_hw_task || is_sw_task || is_idle;
 
-            if is_task {
-                if let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
-                    let implementor_name = struct_type.path.segments[0].ident.to_string();
-                    return Some(implementor_name);
-                }
+            if is_task && let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
+                let implementor_name = struct_type.path.segments[0].ident.to_string();
+                return Some(implementor_name);
             }
         }
         None

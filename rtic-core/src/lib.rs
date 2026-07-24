@@ -1,13 +1,3 @@
-//! This is a re-usable crate that captures the **hardware agnostic** proc-macro logic for RTIC's tasks and resources syntax model (both single and multicore syntax). I.e the user code parsing, analysis and generation for hardware tasks, local resources, shared resources and their locking mechanism, system init and idle tasks.
-//!
-//! In addition, this crate provides utilities for building the actual RTIC crate (known as an **RTIC distribution**) that exports the RTIC framework attribute procedural macro for a specific target hardware architecture. Further more, the same utilizes allow extending the **core syntax** provided by this crate through the concept of **Compilation passes**. As a result, this crate is not meant to be used directly by users who want to write RTIC applications, instead it is used by **RTIC distribution** implementors.
-//!
-#![doc = include_str!("../../compilation_passes/compilation_passes.md")]
-#![doc = include_str!("../../distributions/rtic_distributions.md")]
-//!
-//! ### Guidelines for implementing new distributions, links, and link to template distribution
-//! TODO...
-
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
@@ -27,14 +17,15 @@ use codegen::CodeGen;
 pub use parser::ast::AppArgs;
 pub use parser::{App, SubApp};
 
-mod analysis;
+pub mod analysis;
 mod backend;
-mod codegen;
+pub mod codegen;
 mod common_internal;
 pub mod errors;
+pub mod mock_backend;
 pub mod parse_utils;
 
-mod parser;
+pub mod parser;
 
 static DEFAULT_TASK_PRIORITY: AtomicU16 = AtomicU16::new(0);
 
@@ -92,15 +83,26 @@ impl RticMacroBuilder {
     /// Once the **CorePass** low level hardware bindings are provided, and a selection of
     /// **Compilation Passes** are bound too, use this method to run the **app** proc macro logic.
     ///
-    /// Returns a TokenStream of the expanded user application.
+    /// Returns a `proc_macro::TokenStream` of the expanded user application. This is the entry
+    /// point used by distribution proc-macros.
     pub fn build_rtic_macro(self, args: TokenStream, input: TokenStream) -> TokenStream {
+        let args = TokenStream2::from(args);
+        let app_mod = parse_macro_input!(input as ItemMod);
+        self.build_rtic_macro2(args, app_mod).into()
+    }
+
+    /// Same as [build_rtic_macro] but operates on `proc_macro2` types.
+    ///
+    /// This method is exposed so that tests and downstream tooling can drive the core pipeline
+    /// without needing a proc-macro context.
+    pub fn build_rtic_macro2(self, args: TokenStream2, app_mod: ItemMod) -> TokenStream2 {
         // init statics
         DEFAULT_TASK_PRIORITY.store(self.core.default_task_priority(), Ordering::Relaxed);
 
-        let mut args = TokenStream2::from(args);
-        let mut app_mod = parse_macro_input!(input as ItemMod);
+        let mut args = args;
+        let mut app_mod = app_mod;
 
-        // First, run extra passes (in the order of their insertion)
+        // First, run pre-core passes (in the order of their insertion)
         for pass in self.pre_std_passes {
             let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
                 Ok(out) => out,
@@ -109,7 +111,23 @@ impl RticMacroBuilder {
                         "An error occurred during the `{}` compilation pass",
                         pass.pass_name()
                     );
-                    return e.to_compile_error().into();
+                    return e.to_compile_error();
+                }
+            };
+            app_mod = out_mod;
+            args = out_args;
+        }
+
+        // Run post-core passes (in the order of their insertion) before the core pass takes over.
+        for pass in self.post_std_passes {
+            let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
+                Ok(out) => out,
+                Err(e) => {
+                    eprintln!(
+                        "An error occurred during the `{}` compilation pass",
+                        pass.pass_name()
+                    );
+                    return e.to_compile_error();
                 }
             };
             app_mod = out_mod;
@@ -121,7 +139,7 @@ impl RticMacroBuilder {
             Ok(parsed) => parsed,
             Err(e) => {
                 eprintln!("An error occurred during the `core` compilation pass during the user code `parsing` phase.");
-                return e.to_compile_error().into();
+                return e.to_compile_error();
             }
         };
 
@@ -130,13 +148,13 @@ impl RticMacroBuilder {
             Ok(a) => a,
             Err(e) => {
                 eprintln!("An error occurred during the `core` compilation pass  during the user code `analysis` phase.");
-                return e.to_compile_error().into();
+                return e.to_compile_error();
             }
         };
 
         // Before starting code generation, ask distribution for further checks
         if let Err(e) = self.core.pre_codegen_validation(&parsed_app, &analysis) {
-            return e.to_compile_error().into();
+            return e.to_compile_error();
         }
 
         let code = CodeGen::new(self.core.as_ref(), &parsed_app, &analysis).run();
@@ -152,6 +170,6 @@ impl RticMacroBuilder {
             }
         }
 
-        code.into()
+        code
     }
 }

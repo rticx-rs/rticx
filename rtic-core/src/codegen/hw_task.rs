@@ -189,13 +189,13 @@ impl HardwareTask {
 
         // find the init function and correct its signature
         task_impl.items.iter_mut().for_each(|item| {
-            if let ImplItem::Fn(f) = item {
-                if f.sig.ident == "init" {
-                    let default_init: ImplItemFn = parse_quote!(
-                        fn init(_: ()) -> Self {}
-                    );
-                    f.sig = default_init.sig; // correct the signature
-                }
+            if let ImplItem::Fn(f) = item
+                && f.sig.ident == "init"
+            {
+                let default_init: ImplItemFn = parse_quote!(
+                    fn init(_: ()) -> Self {}
+                );
+                f.sig = default_init.sig; // correct the signature
             }
         });
 

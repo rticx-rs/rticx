@@ -8,6 +8,7 @@ use crate::parser::ast::{HardwareTask, SharedResources};
 use crate::parser::SubApp;
 use crate::App;
 use heck::ToSnakeCase;
+#[derive(Debug)]
 pub struct Analysis {
     pub sub_analysis: Vec<SubAnalysis>,
     pub task_traits: HashSet<syn::Ident>,

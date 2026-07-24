@@ -4,12 +4,13 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 
-autotests = false
 publish = false
 
 [lib]
-test = false
-bench = false
+# The crate is a proc-macro support library; disable doctests because the
+# existing documentation examples assume target-specific crates and types
+# that are not available during `cargo test`.
+doctest = false
 
 [dependencies]
 derive_builder = "0.20.0"

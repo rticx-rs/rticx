@@ -195,14 +195,30 @@ Auto-assign and deadline passes read:
 
 ### Building and testing individual crates
 
+Test the SPSC queue crate
 ```bash
-# Test the SPSC queue crate (the only crate with unit tests)
 cd rtic-spsc && cargo test
+```
 
-# Build rtic-core (no tests are currently defined)
-cd rtic-core && cargo build
+Test rtic-core integration tests using the mock backend
+```bash
+cd rtic-core
 
-# Build a pass crate
+# Single-core tests only
+cargo test
+
+# Multi-PAC tests
+cargo test --features multipac
+
+# Multi-binary tests
+cargo test --features multibin
+
+# Multi-binary + Multipac tests (covers new branches)
+cargo test --features multibin,multipac
+```
+
+Build a pass crate
+```bash
 cd compilation_passes/rtic-sw-pass && cargo build
 ```
 

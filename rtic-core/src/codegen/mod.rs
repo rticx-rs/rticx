@@ -14,9 +14,9 @@ use crate::rtic_traits::get_rtic_traits_mod;
 
 pub mod hw_task;
 pub use utils::multibin;
-mod shared_resources;
-mod task_init;
-mod utils;
+pub mod shared_resources;
+pub mod task_init;
+pub mod utils;
 
 pub struct CodeGen<'a> {
     app: &'a App,
@@ -298,22 +298,15 @@ fn generate_core_type(core: u32) -> TokenStream2 {
 /// ```
 fn generate_use_pac_statement(app: &App) -> TokenStream2 {
     if cfg!(feature = "multipac") && app.args.pacs.len() != 1 {
-        if cfg!(feature = "multibin") {
-            let iter = app.args.pacs.iter().enumerate().map(|(core, pac)| {
-                let cfg_core = multibin_cfg_core(core as u32);
-                quote! {
-                 #cfg_core
-                 use #pac as _;
-                }
-            });
+        let iter = app.args.pacs.iter().enumerate().map(|(core, pac)| {
+            let cfg_core = multibin_cfg_core(core as u32);
             quote! {
-                #(#iter)*
+             #cfg_core
+             use #pac as _;
             }
-        } else {
-            let pacs = &app.args.pacs;
-            quote! {
-                use #(#pacs)* as _;
-            }
+        });
+        quote! {
+            #(#iter)*
         }
     } else {
         let path_to_pac = &app.args.pacs[0];

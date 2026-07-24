@@ -10,6 +10,7 @@ pub struct Queue<T: Clone, const DEPTH: usize> {
 
 impl<T: Clone, const DEPTH: usize> Queue<T, DEPTH> {
     #[inline(always)]
+    #[allow(clippy::new_without_default)]
     pub const fn new() -> Self {
         let buffer = unsafe { MaybeUninit::zeroed().assume_init() };
         Queue {
