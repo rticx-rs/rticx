@@ -16,6 +16,11 @@ syn = { version = "2.0.53", features = [
 rtic-core = { path = "../../rtic-core", optional = true }
 # rtic-spsc = { path = "../../rtic-spsc" }
 
+[dev-dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["extra-traits", "full"] }
+
 [features]
 # Enable the proc-macro compiler logic. When disabled, the crate is no_std and only exposes runtime exports. 
 # This should be enabled only in the inner proc-macro crate within a distribution

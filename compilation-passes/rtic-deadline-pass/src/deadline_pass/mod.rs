@@ -1,9 +1,8 @@
-mod codegen;
-// mod error;
-mod parse;
+pub mod codegen;
+pub mod parse;
+pub use parse::App;
 
 use codegen::CodeGen;
-use parse::App;
 use proc_macro2::TokenStream;
 use rtic_core::RticPass;
 use rtic_core::parse_utils::RticAttr;
@@ -48,7 +47,7 @@ impl RticPass for DeadlineToPriorityPass {
 }
 
 impl DeadlineToPriorityPass {
-    fn analyze(&self, app: &mut App) {
+    pub fn analyze(&self, app: &mut App) {
         let mut deadlines: Vec<_> = app
             .tasks
             .iter()
@@ -60,8 +59,9 @@ impl DeadlineToPriorityPass {
         eprintln!("sorted {:?}", deadlines);
         deadlines.dedup();
         eprintln!("sorted dedup {:?}", deadlines);
-        deadlines.reverse();
-        eprintln!("sorted dedup reversed {:?}", deadlines);
+        // NOTE: Do NOT reverse - shorter deadlines should get higher priority (lower number)
+        // deadlines.reverse();
+        // eprintln!("sorted dedup reversed {:?}", deadlines);
 
         if deadlines.len() as u16 > self.max_priority {
             panic!(
