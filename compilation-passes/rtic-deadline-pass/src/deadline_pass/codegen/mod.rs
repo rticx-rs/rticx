@@ -1,7 +1,7 @@
 use super::parse::App;
 
 use quote::quote;
-use syn::{parse_quote, ItemMod};
+use syn::{ItemMod, parse_quote};
 
 pub struct CodeGen {
     app: App,

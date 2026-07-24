@@ -6,8 +6,8 @@ mod parse;
 use crate::codegen::CodeGen;
 use crate::parse::App;
 use proc_macro2::TokenStream;
-use rtic_core::parse_utils::RticAttr;
 use rtic_core::RticPass;
+use rtic_core::parse_utils::RticAttr;
 use syn::ItemMod;
 
 pub struct AutoAssignPass;

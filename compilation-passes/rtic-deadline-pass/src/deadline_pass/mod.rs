@@ -5,9 +5,9 @@ mod parse;
 use codegen::CodeGen;
 use parse::App;
 use proc_macro2::TokenStream;
-use rtic_core::parse_utils::RticAttr;
 use rtic_core::RticPass;
-use syn::{parse_quote, ItemMod};
+use rtic_core::parse_utils::RticAttr;
+use syn::{ItemMod, parse_quote};
 
 pub struct DeadlineToPriorityPass {
     max_priority: u16,
@@ -52,10 +52,7 @@ impl DeadlineToPriorityPass {
         let mut deadlines: Vec<_> = app
             .tasks
             .iter()
-            .map(|task| match task.deadline {
-                Some(v) => v,
-                None => u32::MAX,
-            })
+            .map(|task| task.deadline.unwrap_or(u32::MAX))
             .collect();
         eprintln!("task deadlines {:?}", deadlines);
 
@@ -67,7 +64,10 @@ impl DeadlineToPriorityPass {
         eprintln!("sorted dedup reversed {:?}", deadlines);
 
         if deadlines.len() as u16 > self.max_priority {
-            panic!("Exceeded number of priorities for this platform ({}), please coerce deadlines manually.", self.max_priority);
+            panic!(
+                "Exceeded number of priorities for this platform ({}), please coerce deadlines manually.",
+                self.max_priority
+            );
         }
 
         for t in app.tasks.iter_mut() {

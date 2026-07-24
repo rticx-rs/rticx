@@ -1,8 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use quote::{format_ident, ToTokens};
+use quote::{ToTokens, format_ident};
 use rtic_core::parse_utils::RticAttr;
-use syn::{parse_quote, Expr, ItemStruct, Lit};
+use syn::{Expr, ItemStruct, Lit, parse_quote};
 
 use crate::error::Error;
 

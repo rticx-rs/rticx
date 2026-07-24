@@ -1,9 +1,10 @@
-.PHONY: all ci \
-        fmt-check fmt-check-core fmt-check-spsc \
-        clippy clippy-core clippy-spsc \
-        test test-core test-core-multipac test-core-multibin test-core-multipac-multibin test-spsc
+.PHONY: all ci fmt fmt-check clippy test
 
-export RUSTFLAGS := -Dwarnings
+CRATES := rtic-core \
+          rtic-spsc \
+          compilation-passes/rtic-sw-pass \
+          compilation-passes/rtic-auto-assign \
+          compilation-passes/rtic-deadline-pass
 
 # Default target: run everything CI would run.
 all: fmt-check test clippy
@@ -12,49 +13,33 @@ all: fmt-check test clippy
 ci: all
 
 # -----------------------------------------------------------------------------
-# Formatting checks
+# Formatting
 # -----------------------------------------------------------------------------
 
-fmt: 
-	cd rtic-core && cargo fmt --check
-	cd rtic-spsc && cargo fmt --check
-fmt-check: fmt-check-core fmt-check-spsc
+fmt:
+	@for crate in $(CRATES); do \
+		$(MAKE) -C $$crate fmt || exit 1; \
+	done
 
-fmt-check-core:
-	cd rtic-core && cargo fmt --check
-
-fmt-check-spsc:
-	cd rtic-spsc && cargo fmt --check
+fmt-check:
+	@for crate in $(CRATES); do \
+		$(MAKE) -C $$crate fmt-check || exit 1; \
+	done
 
 # -----------------------------------------------------------------------------
-# Clippy (warnings treated as errors via RUSTFLAGS)
+# Clippy (warnings treated as errors via RUSTFLAGS in each crate Makefile)
 # -----------------------------------------------------------------------------
 
-clippy: clippy-core clippy-spsc
-
-clippy-core:
-	cd rtic-core && cargo clippy --all-targets --all-features
-
-clippy-spsc:
-	cd rtic-spsc && cargo clippy --all-targets
+clippy:
+	@for crate in $(CRATES); do \
+		$(MAKE) -C $$crate clippy || exit 1; \
+	done
 
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
 
-test: test-core test-core-multipac test-core-multibin test-core-multipac-multibin test-spsc
-
-test-core:
-	cd rtic-core && cargo test
-
-test-core-multipac:
-	cd rtic-core && cargo test --features multipac
-
-test-core-multibin:
-	cd rtic-core && cargo test --features multibin
-
-test-core-multipac-multibin:
-	cd rtic-core && cargo test --features multipac,multibin
-
-test-spsc:
-	cd rtic-spsc && cargo test
+test:
+	@for crate in $(CRATES); do \
+		$(MAKE) -C $$crate test || exit 1; \
+	done

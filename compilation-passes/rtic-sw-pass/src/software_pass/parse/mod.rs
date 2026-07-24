@@ -125,11 +125,11 @@ impl App {
                 return None;
             }
 
-            if path.segments[0].ident.to_string().ends_with(SWT_TRAIT_TY) {
-                if let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
-                    let implementor_name = &struct_type.path.segments[0].ident;
-                    return Some(implementor_name);
-                }
+            if path.segments[0].ident.to_string().ends_with(SWT_TRAIT_TY)
+                && let Type::Path(struct_type) = impl_item.self_ty.as_ref()
+            {
+                let implementor_name = &struct_type.path.segments[0].ident;
+                return Some(implementor_name);
             }
         }
         None

@@ -6,9 +6,13 @@ pub enum Error {
     // NoCores,
     #[error("`core=M` has to be explicitly assinged in the struct {0} with #[shared] attribute.")]
     NoCoreArgShared(String),
-    #[error("A core needs to be explicitly assigned to {0} task since it uses no shared resources that allow automatic core assingment.")]
+    #[error(
+        "A core needs to be explicitly assigned to {0} task since it uses no shared resources that allow automatic core assingment."
+    )]
     ExplicitCoreNeeded(String),
-    #[error("The resource name `{0}` was found on multiple structs with #[shared] attribute, but resource names must be unique.")]
+    #[error(
+        "The resource name `{0}` was found on multiple structs with #[shared] attribute, but resource names must be unique."
+    )]
     DuplicatResourceName(String),
     #[error("The resource `{0}` was not found in any of the structs with #[shared] attribute.")]
     ResourceNotFound(String),

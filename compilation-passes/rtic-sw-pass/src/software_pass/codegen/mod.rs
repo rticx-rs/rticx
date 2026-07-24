@@ -1,14 +1,14 @@
 mod utils;
 
+use crate::SwPassBackend;
 use crate::software_pass::analyze::{Analysis, SubAnalysis};
 use crate::software_pass::parse::ast::SoftwareTask;
 use crate::software_pass::parse::{App, SWT_TRAIT_TY};
-use crate::SwPassBackend;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use rtic_core::multibin;
 use rtic_core::parse_utils::RticAttr;
-use syn::{parse_quote, ItemFn, ItemMod, LitInt, Path};
+use syn::{ItemFn, ItemMod, LitInt, Path, parse_quote};
 
 pub struct CodeGen<'a> {
     app: App,

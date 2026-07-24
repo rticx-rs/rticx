@@ -28,7 +28,9 @@ impl RticTask {
             ..
         })) = params.elements.get("priority")
         {
-            panic!("'priority' found, please use 'deadlines' only or compile with --no-default-features.")
+            panic!(
+                "'priority' found, please use 'deadlines' only or compile with --no-default-features."
+            )
         }
 
         Ok(Self {

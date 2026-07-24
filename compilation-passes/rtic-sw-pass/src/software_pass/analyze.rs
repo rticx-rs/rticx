@@ -61,7 +61,10 @@ impl SubAnalysis {
         if !disjoint {
             return Err(syn::Error::new(
                 Span::call_site(),
-                format!("The priority of some tasks with `spawn_by` argument in core {} have overlapping priority with other core-local software tasks, which is forbidden.", sub_app.core),
+                format!(
+                    "The priority of some tasks with `spawn_by` argument in core {} have overlapping priority with other core-local software tasks, which is forbidden.",
+                    sub_app.core
+                ),
             ));
         }
 
@@ -73,7 +76,9 @@ impl SubAnalysis {
                     if spawn_by1 != spawn_byx {
                         return Err(syn::Error::new(
                             Span::call_site(),
-                            format!("{task_1} and {task_x} have the same priority but they are spawned by different cores which is forbidden."),
+                            format!(
+                                "{task_1} and {task_x} have the same priority but they are spawned by different cores which is forbidden."
+                            ),
                         ));
                     }
                 }

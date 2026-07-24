@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::atomic::Ordering};
 
 use crate::{
     error::Error,
-    parse::{App, APP_CORES},
+    parse::{APP_CORES, App},
 };
 
 pub fn run(parsed_app: &mut App) -> syn::Result<()> {
