@@ -115,11 +115,9 @@ fn codegen_late_init_struct_empty() {
 #[test]
 fn codegen_late_init_calls() {
     use rtic_core::codegen::task_init::generate_late_tasks_init_calls;
-    let tasks = vec![
-        LateResourceTask {
-            task_name: quote::format_ident!("UartTask"),
-        },
-    ];
+    let tasks = vec![LateResourceTask {
+        task_name: quote::format_ident!("UartTask"),
+    }];
     let initializer = quote::format_ident!("task_inits");
     let tokens = generate_late_tasks_init_calls(&tasks, &initializer);
     let s = tokens.to_string();

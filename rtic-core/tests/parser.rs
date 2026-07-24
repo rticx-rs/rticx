@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use rtic_core::parser::{App, ast::AppArgs};
 
 mod common;
@@ -19,7 +19,12 @@ fn parse_app_args_with_cores() {
     let parsed = AppArgs::parse(args).expect("valid app args");
     assert_eq!(parsed.cores, 2);
     assert_eq!(parsed.pacs.len(), 2);
-    assert!(parsed.pacs.iter().all(|p| p.to_token_stream().to_string() == "mypac"));
+    assert!(
+        parsed
+            .pacs
+            .iter()
+            .all(|p| p.to_token_stream().to_string() == "mypac")
+    );
 }
 
 #[test]
@@ -121,7 +126,10 @@ fn parse_task_args_default_values() {
     use rtic_core::parser::ast::TaskArgs;
     let meta: syn::Meta = syn::parse_quote!(task(binds = UART, priority = 2, shared = [counter]));
     let args = TaskArgs::parse(meta).expect("valid task args");
-    assert_eq!(args.binds.as_ref().map(|i| i.to_string()), Some("UART".to_string()));
+    assert_eq!(
+        args.binds.as_ref().map(|i| i.to_string()),
+        Some("UART".to_string())
+    );
     assert_eq!(args.priority, 2);
     assert_eq!(args.shared.len(), 1);
     assert_eq!(args.shared[0].to_string(), "counter");
@@ -132,7 +140,12 @@ fn parse_task_args_default_values() {
 #[test]
 fn parse_task_args_with_core_and_trait() {
     use rtic_core::parser::ast::TaskArgs;
-    let meta: syn::Meta = syn::parse_quote!(task(binds = UART, priority = 3, core = 1, task_trait = CustomTrait));
+    let meta: syn::Meta = syn::parse_quote!(task(
+        binds = UART,
+        priority = 3,
+        core = 1,
+        task_trait = CustomTrait
+    ));
     let args = TaskArgs::parse(meta).expect("valid task args");
     assert_eq!(args.core, 1);
     assert_eq!(args.task_trait.to_string(), "CustomTrait");

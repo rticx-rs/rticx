@@ -1,9 +1,9 @@
 //! Provides a utility to streamline parsing and manipulating and reconstructing the tokenstream representation of the #[app(arg1="val1", ...)] attribute
 
 use proc_macro2::{Punct, Spacing, TokenStream as TokenStream2};
-use quote::{format_ident, quote, ToTokens, TokenStreamExt};
+use quote::{ToTokens, TokenStreamExt, format_ident, quote};
 use std::collections::HashMap;
-use syn::{parse::Parser, parse_quote, Attribute, Meta};
+use syn::{Attribute, Meta, parse::Parser, parse_quote};
 
 #[derive(Debug, Clone)]
 pub struct RticAttr {

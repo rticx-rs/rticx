@@ -5,15 +5,15 @@ use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 
 use proc_macro2::{Ident, TokenStream as TokenStream2};
-use syn::{parse_macro_input, ItemMod};
+use syn::{ItemMod, parse_macro_input};
 
 pub use common_internal::rtic_functions;
 pub use common_internal::rtic_traits;
 
 pub use analysis::{Analysis, SubAnalysis};
 pub use backend::CorePassBackend;
-pub use codegen::multibin;
 use codegen::CodeGen;
+pub use codegen::multibin;
 pub use parser::ast::AppArgs;
 pub use parser::{App, SubApp};
 
@@ -138,7 +138,9 @@ impl RticMacroBuilder {
         let mut parsed_app = match App::parse(args, app_mod) {
             Ok(parsed) => parsed,
             Err(e) => {
-                eprintln!("An error occurred during the `core` compilation pass during the user code `parsing` phase.");
+                eprintln!(
+                    "An error occurred during the `core` compilation pass during the user code `parsing` phase."
+                );
                 return e.to_compile_error();
             }
         };
@@ -147,7 +149,9 @@ impl RticMacroBuilder {
         let analysis = match Analysis::run(&mut parsed_app) {
             Ok(a) => a,
             Err(e) => {
-                eprintln!("An error occurred during the `core` compilation pass  during the user code `analysis` phase.");
+                eprintln!(
+                    "An error occurred during the `core` compilation pass  during the user code `analysis` phase."
+                );
                 return e.to_compile_error();
             }
         };
@@ -160,14 +164,14 @@ impl RticMacroBuilder {
         let code = CodeGen::new(self.core.as_ref(), &parsed_app, &analysis).run();
 
         #[cfg(feature = "debug_expand")]
-        if let Ok(binary_name) = std::env::var("CARGO_BIN_NAME") {
-            if let Ok(out) = project_root::get_project_root() {
-                let _ = std::fs::create_dir_all(out.join("examples"));
-                let _ = std::fs::write(
-                    out.join(format!("examples/{binary_name}_expanded.rs")),
-                    code.to_string().as_bytes(),
-                );
-            }
+        if let Ok(binary_name) = std::env::var("CARGO_BIN_NAME")
+            && let Ok(out) = project_root::get_project_root()
+        {
+            let _ = std::fs::create_dir_all(out.join("examples"));
+            let _ = std::fs::write(
+                out.join(format!("examples/{binary_name}_expanded.rs")),
+                code.to_string().as_bytes(),
+            );
         }
 
         code

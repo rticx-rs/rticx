@@ -1,12 +1,11 @@
 use heck::ToSnakeCase;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_quote, ImplItemFn, ItemFn};
+use syn::{ImplItemFn, ItemFn, parse_quote};
 
 use crate::{
-    multibin,
+    Analysis, AppArgs, CorePassBackend, SubApp, multibin,
     parser::ast::{RticTask, SharedElement},
-    Analysis, AppArgs, CorePassBackend, SubApp,
 };
 
 pub const INTERRUPT_FREE_FN: &str = "__rtic_interrupt_free";

@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
 use proc_macro2::Span;
-use syn::spanned::Spanned;
 use syn::Ident;
+use syn::spanned::Spanned;
 
-use crate::parser::ast::{HardwareTask, SharedResources};
-use crate::parser::SubApp;
 use crate::App;
+use crate::parser::SubApp;
+use crate::parser::ast::{HardwareTask, SharedResources};
 use heck::ToSnakeCase;
 #[derive(Debug)]
 pub struct Analysis {

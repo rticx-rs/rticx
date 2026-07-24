@@ -16,7 +16,7 @@ pub fn core_type_mod(core: u32) -> Ident {
 #[allow(unused)]
 pub mod multibin {
     use proc_macro2::TokenStream;
-    use syn::{parse_quote, Attribute};
+    use syn::{Attribute, parse_quote};
 
     /// If `multibin` feature is enabled, this returns a tokenstream for the attribute `#[cfg(core = "x")]` to partition an application
     /// to multiple binaries. Otherwise `None` is returned

@@ -6,11 +6,11 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{parse_quote, Ident};
+use syn::{Ident, parse_quote};
 
 use crate::analysis::SubAnalysis;
-use crate::parser::ast::AppArgs;
 use crate::parser::SubApp;
+use crate::parser::ast::AppArgs;
 use crate::{Analysis, App, CorePassBackend};
 
 /// A no-op backend used for testing the parser, analysis, and codegen pieces of `rtic-core`.

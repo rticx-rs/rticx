@@ -1,10 +1,10 @@
 #![cfg(feature = "multipac")]
 
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
-use rtic_core::mock_backend::MockCoreBackend;
-use rtic_core::parser::{App, ast::AppArgs};
+use quote::{ToTokens, quote};
 use rtic_core::RticMacroBuilder;
+use rtic_core::mock_backend::MockCoreBackend;
+use rtic_core::parser::ast::AppArgs;
 
 mod common;
 
@@ -60,7 +60,7 @@ fn multipac_full_pipeline_generates_pac_uses() {
 }
 
 #[test]
-#[cfg(feature="multibin")]
+#[cfg(feature = "multibin")]
 fn multipac_analysis_isolated_per_core() {
     let args: TokenStream = quote!(device = [mypac0, mypac1], cores = 2);
     let module: syn::ItemMod = syn::parse_quote! {

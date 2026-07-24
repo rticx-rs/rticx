@@ -2,14 +2,14 @@ use std::sync::atomic::Ordering;
 
 use heck::ToSnakeCase;
 use proc_macro2::Span;
-use quote::{format_ident, ToTokens};
+use quote::{ToTokens, format_ident};
 use syn::{
-    parse::Parser, parse_quote, spanned::Spanned, Expr, ExprArray, ExprLit, Ident, ItemFn,
-    ItemImpl, ItemStruct, Lit, LitInt, Meta,
+    Expr, ExprArray, ExprLit, Ident, ItemFn, ItemImpl, ItemStruct, Lit, LitInt, Meta,
+    parse::Parser, parse_quote, spanned::Spanned,
 };
 
 use crate::{
-    errors::ParseError, parse_utils::RticAttr, rtic_traits::HWT_TRAIT_TY, DEFAULT_TASK_PRIORITY,
+    DEFAULT_TASK_PRIORITY, errors::ParseError, parse_utils::RticAttr, rtic_traits::HWT_TRAIT_TY,
 };
 
 #[derive(Debug)]

@@ -4,7 +4,7 @@ use quote::{format_ident, quote};
 use crate::parser::ast::{RticTask, SharedResources};
 use crate::rtic_functions::get_resource_proxy_lock_fn;
 use crate::rtic_traits::MUTEX_TY;
-use crate::{multibin, AppArgs, CorePassBackend, SubApp};
+use crate::{AppArgs, CorePassBackend, SubApp, multibin};
 
 impl SharedResources {
     pub fn generate_shared_resources_def(&self) -> TokenStream2 {

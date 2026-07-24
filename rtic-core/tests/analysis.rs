@@ -12,7 +12,9 @@ fn analysis_updates_resource_priority() {
 
     let sub = &app.sub_apps[0];
     let shared = sub.shared.as_ref().expect("shared resources exist");
-    let counter = shared.get_field(&quote::format_ident!("counter")).expect("counter resource");
+    let counter = shared
+        .get_field(&quote::format_ident!("counter"))
+        .expect("counter resource");
     assert_eq!(counter.priority, 2);
 
     let sub_analysis = &analysis.sub_analysis[0];

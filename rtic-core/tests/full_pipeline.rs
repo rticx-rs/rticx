@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use rtic_core::mock_backend::MockCoreBackend;
 use rtic_core::RticMacroBuilder;
+use rtic_core::mock_backend::MockCoreBackend;
 
 mod common;
 
