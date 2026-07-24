@@ -1,7 +1,7 @@
-mod auto_assign;
-mod codegen;
-mod error;
-mod parse;
+pub mod auto_assign;
+pub mod codegen;
+pub mod error;
+pub mod parse;
 
 use crate::codegen::CodeGen;
 use crate::parse::App;

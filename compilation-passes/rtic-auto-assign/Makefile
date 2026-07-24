@@ -16,4 +16,7 @@ clippy:
 	cargo clippy --all-targets --all-features
 
 test:
-	cargo test
+	# Tests are run single-threaded because `APP_CORES` is a process-global
+	# `AtomicU32` that is read across the parse->run boundary, so multi-core
+	# and single-core tests race when run in parallel.
+	cargo test -- --test-threads=1
