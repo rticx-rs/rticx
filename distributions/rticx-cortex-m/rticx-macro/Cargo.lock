@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "cortex-m-rtic-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rtic-core",
- "rtic-sw-pass",
- "syn",
-]
-
-[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -128,7 +117,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtic-core"
+name = "rticx-core"
 version = "0.1.0"
 dependencies = [
  "derive_builder",
@@ -141,18 +130,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtic-spsc"
+name = "rticx-cortex-m-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "rticx-sw-pass",
+ "syn",
+]
+
+[[package]]
+name = "rticx-spsc"
 version = "0.1.0"
 
 [[package]]
-name = "rtic-sw-pass"
+name = "rticx-sw-pass"
 version = "0.1.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "rtic-core",
- "rtic-spsc",
+ "rticx-core",
+ "rticx-spsc",
  "syn",
 ]
 

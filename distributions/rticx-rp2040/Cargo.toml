@@ -1,22 +1,29 @@
 [package]
 name = "rticx-rp2040"
-version = "0.1.0-rp2040"
+version = "0.1.0"
 edition = "2024"
+authors = ["Zakaria Madaoui"]
+description = "RTICX distribution for the Raspberry Pi Pico / RP2040 dual-core Cortex-M0+"
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+keywords = ["rtic", "rticx", "rp2040", "raspberry-pi-pico", "embedded"]
+categories = ["no-std", "embedded"]
+readme = "README.md"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 test = false
 bench = false
 
 [dependencies]
 cortex-m = "0.7.7"
-rticx-rp2040-macro = { path = "rticx-rp2040-macro" }
-rticx-sw-pass = { path = "../../compilation-passes/rticx-sw-pass" } # exports
+rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro" }
+rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
 log = "0.4.21"
 rp2040-hal = "0.9.1"
 
 [dev-dependencies]
-rticx-rp2040-macro = { path = "rticx-rp2040-macro", features = [
+rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro", features = [
     "autoassign",
     "swtasks",
 ] }
@@ -24,7 +31,6 @@ rticx-rp2040-macro = { path = "rticx-rp2040-macro", features = [
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 embedded-hal = "0.2.7"
-# futures = "0.3.29"
 panic-halt = "0.2.0"
 rp-pico = { version = "0.8.0", features = ["boot2"] }
 rp2040-boot2 = "0.3.0"

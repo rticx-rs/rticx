@@ -3,8 +3,13 @@ name = "rticx-core"
 version = "0.1.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
-
-publish = false
+description = "Core procedural macro logic for the RTICX real-time concurrency framework"
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+keywords = ["rtic", "rticx", "real-time", "embedded", "concurrency"]
+categories = ["no-std", "embedded"]
+readme = "README.md"
 
 [lib]
 # The crate is a proc-macro support library; disable doctests because the

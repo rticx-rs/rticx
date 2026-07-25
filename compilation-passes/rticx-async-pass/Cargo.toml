@@ -1,13 +1,13 @@
 [package]
-name = "rticx-sw-pass"
+name = "rticx-async-pass"
 version = "0.1.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
-description = "Software tasks compilation pass for the RTICX framework: dispatchers, message queues, spawn, spawn_from"
+description = "Async tasks compilation pass for the RTICX real-time concurrency framework"
 license = "MIT"
 repository = "https://github.com/rticx-rs/rticx"
 homepage = "https://github.com/rticx-rs/rticx/wiki"
-keywords = ["rtic", "rticx", "software-tasks", "embedded", "concurrency"]
+keywords = ["rtic", "rticx", "async", "embedded", "concurrency"]
 categories = ["no-std", "embedded"]
 readme = "README.md"
 
@@ -20,7 +20,6 @@ syn = { version = "2.0.53", features = [
     "full",
 ], optional = true }
 rticx-core = { version = "0.1.0", path = "../../rticx-core", optional = true }
-rticx-spsc = { version = "0.1.0", path = "../../rticx-spsc" }
 
 [dev-dependencies]
 proc-macro2 = "1.0"
@@ -28,7 +27,7 @@ quote = "1.0"
 syn = { version = "2.0", features = ["extra-traits", "full"] }
 
 [features]
-# Enable the proc-macro compiler logic. When disabled, the crate is no_std and only exposes runtime exports. 
+# Enable the proc-macro compiler logic. When disabled, the crate is no_std and only exposes runtime exports.
 # This should be enabled only in the inner proc-macro crate within a distribution
 proc-macro = [
     "dep:heck",
