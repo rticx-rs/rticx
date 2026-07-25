@@ -51,7 +51,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | `rtic-hippo` | `distributions/rtic-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
 | `cortex-m-rtic` | `distributions/cortex-m-rtic/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default. |
 | `atalanta-rtic` | `distributions/atalanta-rtic/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
-| `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | not meant to be compiled |
+| `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | N/A |
 
 
 ---
@@ -272,22 +272,21 @@ If a documentation generation script exists in the root, run it with:
 
 ### How to create a new RTIC distribution
 
-1. Copy the **concept** of an existing distribution (note: the `distribution-template` doesn't compile its meant to be copy pasted to provide a starting point for creating a new distribution).
-2. Create a new directory under `distributions/<your-distro>/` with two crates:
-   - `<your-distro>/` — the library crate users depend on.
+1. Copy the **template** distribution `distributions/distribution-template and rename to <your-distro>
+   - `<your-distro>/` — the library crate user applications depend on.
    - `<your-distro>-macro/` — the proc-macro crate defining `#[rtic::app]`.
-3. Implement `CorePassBackend` in the macro crate for your target.
-4. If you use software tasks, implement `SwPassBackend`.
-5. In the macro crate, instantiate `RticMacroBuilder` and register the passes you want:
+2. Implement `CorePassBackend` in the macro crate for your target.
+3. If you use software tasks and other compilation passes, implement their backend if necessary (e.g `SwPassBackend`).
+4. In the macro crate, instantiate `RticMacroBuilder` and register the passes you want:
    ```rust
    let mut builder = RticMacroBuilder::new(MyBackend);
    builder.bind_pre_core_pass(SoftwarePass::new(MySwBackend));
-   builder.bind_pre_core_pass(AutoAssignPass);
+   builder.bind_pre_core_pass(AutoAssignPass); // for multicore only
    let tokens = builder.build_rtic_macro(args, input);
    ```
-6. Re-export the macro from the library crate as `pub use <your-distro>_macro::app;`.
-7. Add an `export` module in the library crate that re-exports target-specific runtime helpers, `cortex-m` / `riscv` items, and any pass exports.
-8. Add example apps under `<your-distro>/examples/` or `<your-distro>/example-apps/`.
+5. Re-export the macro from the library crate as `pub use <your-distro>_macro::app;`.
+6. Add an `export` module in the library crate that re-exports target-specific runtime helpers, `cortex-m` / `riscv` items, and any pass exports.
+7. Add example apps under `<your-distro>/examples/` or `<your-distro>/example-apps/`.
 
 ---
 

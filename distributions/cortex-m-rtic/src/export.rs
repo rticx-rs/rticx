@@ -9,11 +9,11 @@ pub use rtic_sw_pass::export::*;
 /// Exports required by the core pass and by generated code
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 pub use cortex_m::{
-    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
+    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
+    Peripherals,
 };
 
 #[inline]
@@ -162,16 +162,6 @@ mod source_mask {
             }
         }
         (max + 32) / 32
-    }
-
-    /// On armv6-m there is no BASEPRI to save/restore at handler entry; locking is
-    /// handled purely by the `lock` primitive below, so this is a no-op.
-    #[inline(always)]
-    pub fn run<F>(_priority: u8, f: F)
-    where
-        F: FnOnce(),
-    {
-        f();
     }
 
     /// Lock implementation using interrupt masking.

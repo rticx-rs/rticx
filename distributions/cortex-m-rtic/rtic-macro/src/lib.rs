@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use rtic_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
 use rtic_sw_pass::{SoftwarePass, SwPassBackend};
-use syn::{ItemFn, parse_quote};
+use syn::{parse_quote, ItemFn};
 
 extern crate proc_macro;
 
@@ -34,8 +34,11 @@ fn is_exception(name: &Ident) -> bool {
     CONFIGURABLE_EXCEPTIONS.iter().any(|e| s == *e)
 }
 
-/// Lowest logical priority in Cortex-M (numerically larger == lower urgency).
-const MIN_TASK_PRIORITY: u16 = 1;
+/// Lowest logical priority
+#[cfg(not(feature = "armv6m"))]
+const MIN_TASK_PRIORITY: u16 = 0xff;
+#[cfg(feature = "armv6m")]
+const MIN_TASK_PRIORITY: u16 = 0b11;
 
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -206,9 +209,14 @@ impl CorePassBackend for CortexMRtic {
         task_prio: u16,
         dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
-        Some(quote! {
-            rtic::export::run(#task_prio as u8, || { #dispatch_task_call });
-        })
+        if cfg!(feature = "armv6m") {
+            // No exec wrapping needed in armv6m implementation
+            None
+        } else {
+            Some(quote! {
+                rtic::export::run(#task_prio as u8, || { #dispatch_task_call });
+            })
+        }
     }
 
     fn pre_codegen_validation(
@@ -245,9 +253,11 @@ fn generate_source_mask_globals(app_args: &AppArgs, app_info: &SubApp) -> Option
     // Cortex-M core exceptions (SysTick, PendSV, SVCall, …) are *not* in the
     // PAC `Interrupt` enum and have no ISER/ICER mask bits, so they must be
     // excluded from the source-mask table.
-    let nvic_tasks: Vec<_> = app_info.tasks.iter().filter(|t| {
-        t.args.binds.as_ref().is_some_and(|n| !is_exception(n))
-    }).collect();
+    let nvic_tasks: Vec<_> = app_info
+        .tasks
+        .iter()
+        .filter(|t| t.args.binds.as_ref().is_some_and(|n| !is_exception(n)))
+        .collect();
     let irq_list_as_u32 = nvic_tasks.iter().filter_map(|t| {
         let irq_name = t.args.binds.as_ref()?;
         Some(quote! { #pac::Interrupt::#irq_name as u32, })
