@@ -1,10 +1,10 @@
 .PHONY: all ci fmt fmt-check clippy test qemu qemu-armv7m qemu-armv6m
 
-CRATES := rtic-core \
-          rtic-spsc \
-          compilation-passes/rtic-sw-pass \
-          compilation-passes/rtic-auto-assign \
-          compilation-passes/rtic-deadline-pass
+CRATES := rticx-core \
+          rticx-spsc \
+          compilation-passes/rticx-sw-pass \
+          compilation-passes/rticx-auto-assign \
+          compilation-passes/rticx-deadline-pass
 
 # Default target: run everything CI would run.
 all: fmt-check test clippy
@@ -45,9 +45,9 @@ test:
 	done
 
 # -----------------------------------------------------------------------------
-# QEMU playground (cortex-m-rtic)
+# QEMU playground (rticx-cortex-m)
 # -----------------------------------------------------------------------------
-# Boots the cortex-m-rtic examples under QEMU's `lm3s6965evb` (Cortex-M3)
+# Boots the rticx-cortex-m examples under QEMU's `lm3s6965evb` (Cortex-M3)
 # machine. Each example terminates itself via `debug::exit` from
 # `cortex-m-semihosting`, so these targets fail (non-zero) unless the example
 # reaches its expected shared-counter value under RTIC's SRP locking.
@@ -59,7 +59,7 @@ test:
 qemu: qemu-armv7m qemu-armv6m
 
 qemu-armv7m:
-	@$(MAKE) -C distributions/cortex-m-rtic qemu-armv7m
+	@$(MAKE) -C distributions/rticx-cortex-m qemu-armv7m
 
 qemu-armv6m:
-	@$(MAKE) -C distributions/cortex-m-rtic qemu-armv6m
+	@$(MAKE) -C distributions/rticx-cortex-m qemu-armv6m

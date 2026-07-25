@@ -1,0 +1,34 @@
+[package]
+name = "rticx-sw-pass"
+version = "0.1.0"
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+heck = { version = "0.5.0", optional = true }
+proc-macro2 = { version = "1.0.79", optional = true }
+quote = { version = "1.0.35", optional = true }
+syn = { version = "2.0.53", features = [
+    "extra-traits",
+    "full",
+], optional = true }
+rticx-core = { path = "../../rticx-core", optional = true }
+rticx-spsc = { path = "../../rticx-spsc" }
+
+[dev-dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["extra-traits", "full"] }
+
+[features]
+# Enable the proc-macro compiler logic. When disabled, the crate is no_std and only exposes runtime exports. 
+# This should be enabled only in the inner proc-macro crate within a distribution
+proc-macro = [
+    "dep:heck",
+    "dep:proc-macro2",
+    "dep:quote",
+    "dep:syn",
+    "dep:rticx-core",
+]

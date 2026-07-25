@@ -1,0 +1,28 @@
+[package]
+name = "rticx_cortex_m_example_armv7m"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[example]]
+name = "hello_rtic"
+path = "examples/hello_rtic.rs"
+
+[dependencies]
+# default features: swtasks on, BASEPRI locking (armv7-m)
+rticx-cortex-m = { path = "../.." }
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.3"
+cortex-m-semihosting = "0.5.0"
+panic-halt = "0.2.0"
+# Bare PAC for STM32F030 (31 NVIC IRQs, fits QEMU's lm3s6965evb/Cortex-M3 vector table).
+# We use the same PAC for both the armv7m and armv6m example apps so that the
+# only differences between the two are the build target and the `armv6m` RTIC feature
+stm32f0 = { version = "0.15.1", features = ["stm32f0x0", "rt"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"

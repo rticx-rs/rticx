@@ -1,0 +1,26 @@
+[package]
+name = "rticx-rp2040-macro"
+version = "0.1.0"
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.79"
+quote = "1.0.35"
+rticx-core = { path = "../../../rticx-core", features = [
+    # "debug_expand"
+] }
+rticx-auto-assign = { path = "../../../compilation-passes/rticx-auto-assign" }
+syn = { version = "2.0.52", features = ["extra-traits", "full"] }
+rticx-sw-pass = { path = "../../../compilation-passes/rticx-sw-pass", features = [
+    "proc-macro",
+] }
+
+[features]
+autoassign = []
+swtasks = []

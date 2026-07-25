@@ -1,0 +1,21 @@
+[package]
+name = "rticx-atalanta"
+version = "0.1.0"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+test = false
+bench = false
+
+[dependencies]
+rticx-atalanta-macro = { path = "rticx-macro" }
+rticx-sw-pass = { path = "../../compilation-passes/rticx-sw-pass" }                                    # exports
+rticx-deadline-pass = { path = "../../compilation-passes/rticx-deadline-pass" }                        # exports
+bsp = { package = "atalanta-bsp", git = "https://github.com/soc-hub-fi/atalanta.git", tag = "v0.2.1" }
+
+[features]
+deadline-pass = ["rticx-atalanta-macro/deadline-pass"]
+pcs-pass = ["rticx-atalanta-macro/pcs-pass"]
+fpga = ["bsp/fpga"]
+rtl-tb = ["bsp/rtl-tb"]

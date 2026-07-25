@@ -2,7 +2,7 @@
 
 // Distribution library crate.
 //
-// Every RTIC distribution follows this minimal structure:
+// Every RTICX distribution follows this minimal structure:
 //   * `export` -- runtime helpers re-exported as `<your-crate>::export::*`.
 //   * `app`    -- the proc-macro attribute re-exported from the inner
 //                 proc-macro crate.

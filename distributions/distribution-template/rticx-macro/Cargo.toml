@@ -1,0 +1,28 @@
+[package]
+name = "distribution-template-macro"
+version = "0.1.0"
+edition = "2024"
+authors = ["Your Name <you@example.com>"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.79"
+quote = "1.0.35"
+rticx-core = { path = "../../../rticx-core" }
+syn = { version = "2.0.52", features = ["extra-traits", "full"] }
+rticx-sw-pass = { path = "../../../compilation-passes/rticx-sw-pass", features = [
+    "proc-macro",
+] }
+
+# Auto-assign pass — only pulled in when the `autoassign` feature is active.
+# remove this if your distribution is targeting a single core MCU
+rticx-auto-assign = { path = "../../../compilation-passes/rticx-auto-assign", optional = true }
+
+[features]
+# Register the software-tasks pass in the macro pipeline.
+swtasks = []
+# Register the automatic core-assignment pass in the macro pipeline.
+# remove this if your distribution is targeting a single core MCU
+autoassign = ["dep:rticx-auto-assign"]

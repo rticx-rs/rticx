@@ -19,8 +19,8 @@ bench = false
 #   * Any runtime support the target requires (e.g. cortex-m-rt, riscv-rt).
 #
 [dependencies]
-distribution-template-macro = { path = "rtic-macro" }
-rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" }
+distribution-template-macro = { path = "rticx-macro" }
+rticx-sw-pass = { path = "../../compilation-passes/rticx-sw-pass" }
 
 # ===========================================================================
 # Features

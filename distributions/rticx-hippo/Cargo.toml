@@ -1,0 +1,22 @@
+[package]
+name = "rticx-hippo"
+version = "0.1.0-hippo"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+test = false
+bench = false
+
+[dependencies]
+heapless = { version = "0.8.0" }
+rticx-hippo-macro = { path = "rticx-macro" }
+riscv = "0.11"
+rticx-sw-pass = { path = "../../compilation-passes/rticx-sw-pass" }             # exports
+rticx-deadline-pass = { path = "../../compilation-passes/rticx-deadline-pass" } # exports
+
+#nb = "0.1.1"
+hippomenes-core = { git = "https://github.com/onsdagens/hippomenes-core" }
+
+[features]
+deadline-pass = ["rticx-hippo-macro/deadline-pass"]

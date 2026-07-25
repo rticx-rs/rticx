@@ -6,16 +6,16 @@ This document is the primary orientation guide for AI coding agents and human co
 
 ## 1. Project Vision & Architecture Overview
 
-This repository is a complete, modular rewrite of the RTIC (Real-Time Interrupt-driven Concurrency) framework for Rust. The rewrite separates the RTIC macro into reusable, target-agnostic pieces and keeps target-specific logic in pluggable **distributions**.
+This repository is a complete, modular rewrite of the RTIC (Real-Time Interrupt-driven Concurrency) framework. The rewrite separates the original RTIC proc-macro into reusable, target-agnostic pieces and keeps target-specific logic in pluggable **distributions**.
 
 The central design is:
 
-- **`rtic-core`** provides the core procedural macro logic: parsing the RTIC syntax, resource ceiling analysis (SRP model), and code generation for tasks, resources, `init`, and `idle`. It also exposes a **Builder API** that lets external compilation passes be chained before or after the core pass.
-- **Compilation passes** are independent crates that transform the RTIC syntax. They are pure syntax-to-syntax transformations.
+- **`rticx-core`** provides the core procedural macro logic: parsing the RTICX syntax, resource ceiling analysis (SRP model), and code generation for tasks, resources, `init`, and `idle`. It also exposes a **Builder API** that lets external compilation passes be chained before or after the core pass.
+- **Compilation passes** are independent crates that transform the RTICX syntax. They are pure syntax-to-syntax transformations.
 - **Distributions** are target-specific crates that:
-  - implement the backend traits defined by `rtic-core` (and optionally by passes);
+  - implement the backend traits defined by `rticx-core` (and optionally by passes);
   - register the passes they want to use;
-  - expose the final `#[<distro>::app]` attribute macro (e.g. `#[rp2040_rtic::app]`).
+  - expose the final `#[<distro>::app]` attribute macro (e.g. `#[rticx_rp2040::app]`).
 
 This architecture makes it easy to add new hardware targets, new scheduling passes, or new syntax extensions without touching the core framework.
 
@@ -31,26 +31,26 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 
 | Crate | Path | Role |
 |-------|------|------|
-| `rtic-core` | `rtic-core/` | Core compilation pass, parser, analysis, codegen, and the `RticMacroBuilder` API. |
-| `rtic-spsc` | `rtic-spsc/` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
+| `rticx-core` | `rticx-core/` | Core compilation pass, parser, analysis, codegen, and the `RticMacroBuilder` API. |
+| `rticx-spsc` | `rticx-spsc/` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
 
 ### Compilation passes
 
 | Crate | Path | Role |
 |-------|------|------|
-| `rtic-sw-pass` | `compilation-passes/rtic-sw-pass/` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
-| `rtic-auto-assign` | `compilation-passes/rtic-auto-assign/` | Automatic `core = N` assignment for tasks based on shared resource usage. |
-| `rtic-deadline-pass` | `compilation-passes/rtic-deadline-pass/` | Converts `deadline = D` attributes into RTIC priorities. |
+| `rticx-sw-pass` | `compilation-passes/rticx-sw-pass/` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
+| `rticx-auto-assign` | `compilation-passes/rticx-auto-assign/` | Automatic `core = N` assignment for tasks based on shared resource usage. |
+| `rticx-deadline-pass` | `compilation-passes/rticx-deadline-pass/` | Converts `deadline = D` attributes into RTICX priorities. |
 
 ### Distributions
 
 | Distribution | Path | Target | Notes |
 |--------------|------|--------|-------|
-| `rp2040-rtic` | `distributions/rp2040-rtic/` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ | Single binary; starts core 1 from `post_init`. |
-| `stm32-renode-rtic` | `distributions/stm32-renode-rtic/` | Renode-simulated multicore STM32F1C3-like | Multi-binary. |
-| `rtic-hippo` | `distributions/rtic-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
-| `cortex-m-rtic` | `distributions/cortex-m-rtic/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default. |
-| `atalanta-rtic` | `distributions/atalanta-rtic/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
+| `rticx-rp2040` | `distributions/rticx-rp2040/` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ | Single binary; starts core 1 from `post_init`. |
+| `rticx-stm32-renode` | `distributions/rticx-stm32-renode/` | Renode-simulated multicore STM32F1C3-like | Multi-binary. |
+| `rticx-hippo` | `distributions/rticx-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
+| `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default. |
+| `rticx-atalanta` | `distributions/rticx-atalanta/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
 | `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | N/A |
 
 
@@ -60,14 +60,14 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 
 ### `#[<distro>::app]` entry point
 
-The attribute macro is **not** defined in `rtic-core`. Each distribution defines it in its own `*-macro` crate and re-exports it under the distribution name (e.g. `#[rp2040_rtic::app]`). For example:
+The attribute macro is **not** defined in `rticx-core`. Each distribution defines it in its own `*-macro` crate and re-exports it under the distribution name (e.g. `#[rticx_rp2040::app]`). For example:
 
-- `distributions/rp2040-rtic/rp2040-rtic-macro/src/lib.rs` defines the proc macro.
-- `distributions/rp2040-rtic/src/lib.rs` re-exports it as `pub use rp2040_rtic_macro::app;`.
+- `distributions/rticx-rp2040/rticx-rp2040-macro/src/lib.rs` defines the proc macro.
+- `distributions/rticx-rp2040/src/lib.rs` re-exports it as `pub use rticx_rp2040_macro::app;`.
 
 ### The `RticMacroBuilder` pipeline
 
-`rtic-core` exposes `RticMacroBuilder` in `rtic-core/src/lib.rs`. A distribution constructs an instance, registers passes, and calls `build_rtic_macro` from its proc macro.
+`rticx-core` exposes `RticMacroBuilder` in `rticx-core/src/lib.rs`. A distribution constructs an instance, registers passes, and calls `build_rtic_macro` from its proc macro.
 
 ```rust
 pub struct RticMacroBuilder {
@@ -98,7 +98,7 @@ Pipeline order inside `build_rtic_macro`:
 
 ### The `RticPass` trait
 
-Every compilation pass implements `RticPass` (in `rtic-core/src/lib.rs`):
+Every compilation pass implements `RticPass` (in `rticx-core/src/lib.rs`):
 
 ```rust
 pub trait RticPass {
@@ -110,7 +110,7 @@ Passes receive the macro arguments and the annotated module, and return transfor
 
 ### `CorePassBackend`
 
-`CorePassBackend` (in `rtic-core/src/backend.rs`) is the target-specific interface used by the core code generation phase.
+`CorePassBackend` (in `rticx-core/src/backend.rs`) is the target-specific interface used by the core code generation phase.
 
 Notable methods:
 
@@ -130,7 +130,7 @@ Notable methods:
 
 ### `SwPassBackend`
 
-`SwPassBackend` (in `compilation-passes/rtic-sw-pass/src/software_pass/mod.rs`) is the backend extension for the software tasks pass.
+`SwPassBackend` (in `compilation-passes/rticx-sw-pass/src/software_pass/mod.rs`) is the backend extension for the software tasks pass.
 
 Required methods:
 
@@ -148,19 +148,19 @@ Default method:
 
 ### Syntax attributes
 
-Core RTIC syntax attributes are parsed in `rtic-core/src/parser/ast.rs`:
+Core RTICX syntax attributes are parsed in `rticx-core/src/parser/ast.rs`:
 
 - `#[app(device = path, cores = N, dispatchers = [...])]` — single PAC.
 - `#[app(cores = N)]` — number of cores (default 1).
 - `#[app(dispatchers = [irq0, irq1, ...])]` — single-core dispatchers.
-- `#[app(dispatchers = [[irq0], [irq1], ...])]` — per-core dispatchers (used by `rtic-sw-pass`).
+- `#[app(dispatchers = [[irq0], [irq1], ...])]` — per-core dispatchers (used by `rticx-sw-pass`).
 - `#[task(binds = IRQ, priority = N, shared = [...], core = N)]` — hardware or software task.
 - `#[shared(core = N)]` — shared resource struct.
 - `#[init(core = N)]` — initialization task.
 - `#[idle(core = N)]` — idle task.
 - `#[task(..., task_trait = CustomTrait)]` — allows a pass to plug in a custom task trait.
 
-Software-task specific attributes are parsed in `compilation-passes/rtic-sw-pass/src/software_pass/parse/ast.rs`:
+Software-task specific attributes are parsed in `compilation-passes/rticx-sw-pass/src/software_pass/parse/ast.rs`:
 
 - `#[sw_task(priority = N, shared = [...], core = N, spawn_by = M)]`
 - `spawn_by = M` controls which core may spawn this task.
@@ -174,14 +174,14 @@ Auto-assign and deadline passes read:
 
 | Crate | Feature | Effect |
 |-------|---------|--------|
-| `rtic-core` | `debug_expand` | Writes expanded code to `examples/{binary_name}_expanded.rs`. |
-| `rp2040-rtic` | `autoassign` | Enables `rtic-auto-assign`. |
-| `rp2040-rtic` | `swtasks` | Enables `rtic-sw-pass`. |
-| `cortex-m-rtic` | `swtasks` | Enables `rtic-sw-pass` (on by default). |
-| `cortex-m-rtic` | `armv6m` | Selects interrupt source-masking locking (Cortex-M0/M0+/M23). When disabled (default), BASEPRI-based locking is used (armv7-m and above). |
-| `rtic-hippo` | `deadline-pass` | Enables `rtic-deadline-pass`. |
-| `atalanta-rtic` | `deadline-pass` | Enables `rtic-deadline-pass`. |
-| `atalanta-rtic` | `pcs-pass` | Enables the PCS pass. |
+| `rticx-core` | `debug_expand` | Writes expanded code to `examples/{binary_name}_expanded.rs`. |
+| `rticx-rp2040` | `autoassign` | Enables `rticx-auto-assign`. |
+| `rticx-rp2040` | `swtasks` | Enables `rticx-sw-pass`. |
+| `rticx-cortex-m` | `swtasks` | Enables `rticx-sw-pass` (on by default). |
+| `rticx-cortex-m` | `armv6m` | Selects interrupt source-masking locking (Cortex-M0/M0+/M23). When disabled (default), BASEPRI-based locking is used (armv7-m and above). |
+| `rticx-hippo` | `deadline-pass` | Enables `rticx-deadline-pass`. |
+| `rticx-atalanta` | `deadline-pass` | Enables `rticx-deadline-pass`. |
+| `rticx-atalanta` | `pcs-pass` | Enables the PCS pass. |
 
 ---
 
@@ -191,43 +191,43 @@ Auto-assign and deadline passes read:
 
 Test the SPSC queue crate
 ```bash
-cd rtic-spsc && cargo test
+cd rticx-spsc && cargo test
 ```
 
-Test rtic-core integration tests using the mock backend
+Test rticx-core integration tests using the mock backend
 ```bash
-cd rtic-core
+cd rticx-core
 
 cargo test
 ```
 
 Build a pass crate
 ```bash
-cd compilation-passes/rtic-sw-pass && cargo build
+cd compilation-passes/rticx-sw-pass && cargo build
 ```
 
 ### Building distribution examples
 
 ```bash
 # RP2040 single-core example
-cd distributions/rp2040-rtic
+cd distributions/rticx-rp2040
 cargo build --example hello_rtic
 
 # RP2040 multicore ping-pong example
 cargo build --example ping_pong
 
 # Cortex-M (armv7-m / BASEPRI) example
-cd distributions/cortex-m-rtic/example-apps/armv7m-app
+cd distributions/rticx-cortex-m/example-apps/armv7m-app
 cargo build --example hello_rtic
 
 # Cortex-M (armv6-m / source masking) example
-cd distributions/cortex-m-rtic/example-apps/armv6m-app
+cd distributions/rticx-cortex-m/example-apps/armv6m-app
 cargo build --example hello_rtic
 ```
 
-### Running cortex-m-rtic examples under QEMU
+### Running rticx-cortex-m examples under QEMU
 
-The `cortex-m-rtic` examples are runnable under QEMU's `lm3s6965evb` (Cortex-M3)
+The `rticx-cortex-m` examples are runnable under QEMU's `lm3s6965evb` (Cortex-M3)
 machine. Each example configures the SysTick core timer, spawns a software task
 on every tick, acquires a shared resource through RTIC's SRP `lock`, and once
 the counter reaches the target calls `debug::exit(EXIT_SUCCESS)` from
@@ -240,7 +240,7 @@ From the repository root:
 make qemu
 ```
 
-### Multi-binary builds for `stm32-renode-rtic`
+### Multi-binary builds for `rticx-stm32-renode`
 
 WIP: unsupported at the moment
 
@@ -259,7 +259,7 @@ If a documentation generation script exists in the root, run it with:
 ### How to add a new compilation pass
 
 1. Create a new crate under `compilation-passes/<your-pass>/`.
-2. Implement the `RticPass` trait from `rtic-core`:
+2. Implement the `RticPass` trait from `rticx-core`:
    ```rust
    impl RticPass for YourPass {
        fn run(&self, args: TokenStream, app_mod: ItemMod) -> (TokenStream, ItemMod) {
@@ -271,7 +271,7 @@ If a documentation generation script exists in the root, run it with:
 4. If the pass needs target-specific hooks, define a new backend trait and implement it in the distributions that use the pass.
 5. Add a feature flag in the distribution crate and gate the pass registration.
 
-### How to create a new RTIC distribution
+### How to create a new RTICX distribution
 
 1. Copy the **template** distribution `distributions/distribution-template` and rename to `<your-distro>`:
    - `<your-distro>/` — the library crate user applications depend on.

@@ -1,4 +1,4 @@
-// RTIC Distribution Template -- Runtime exports
+// RTICX Distribution Template -- Runtime exports
 //
 // This module is re-exported as `<your-crate>::export::*` in the user's crate.
 // The macro-generated code (from your proc-macro crate) references items from
@@ -16,10 +16,10 @@
 //
 // Every compilation pass your distribution enables MUST have its
 // runtime items re-exported here.  The software-tasks pass provides
-// `rtic_spsc::Queue` which is used by the generated dispatcher code.
+// `rticx_spsc::Queue` which is used by the generated dispatcher code.
 //
 // If you add more passes (e.g. a deadline pass), add their exports too.
-pub use rtic_sw_pass::export::*;
+pub use rticx_sw_pass::export::*;
 
 // ===========================================================================
 // Items expected by the macro-generated code
