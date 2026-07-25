@@ -3,7 +3,12 @@ name = "rticx-spsc"
 version = "0.1.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "no_std single-producer single-consumer queue for the RTICX software tasks pass"
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+keywords = ["rtic", "rticx", "spsc", "queue", "no-std"]
+categories = ["no-std", "embedded", "data-structures"]
+readme = "README.md"
 
 [dependencies]

@@ -1,13 +1,13 @@
 [package]
-name = "rticx-rp2040-macro"
+name = "rticx-riscv-macro"
 version = "0.1.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
-description = "Proc-macro crate for the RTICX RP2040 distribution"
+description = "Proc-macro crate for the RTICX RISC-V distribution"
 license = "MIT"
 repository = "https://github.com/rticx-rs/rticx"
 homepage = "https://github.com/rticx-rs/rticx/wiki"
-keywords = ["rtic", "rticx", "rp2040", "proc-macro", "embedded"]
+keywords = ["rtic", "rticx", "risc-v", "proc-macro", "embedded"]
 categories = ["no-std", "embedded"]
 readme = "README.md"
 
@@ -17,15 +17,11 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
-rticx-core = { version = "0.1.0", path = "../../../rticx-core", features = [
-    # "debug_expand"
-] }
-rticx-auto-assign = { version = "0.1.0", path = "../../../compilation-passes/rticx-auto-assign" }
+rticx-core = { version = "0.1.0", path = "../../../rticx-core" }
 syn = { version = "2.0.52", features = ["extra-traits", "full"] }
 rticx-sw-pass = { version = "0.1.0", path = "../../../compilation-passes/rticx-sw-pass", features = [
     "proc-macro",
 ] }
 
 [features]
-autoassign = []
 swtasks = []

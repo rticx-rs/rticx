@@ -117,31 +117,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "rp2040-rtic-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rtic-auto-assign",
- "rtic-core",
- "rtic-sw-pass",
- "syn",
-]
-
-[[package]]
-name = "rtic-auto-assign"
+name = "rticx-auto-assign"
 version = "0.1.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "rtic-core",
+ "rticx-core",
  "syn",
  "thiserror",
 ]
 
 [[package]]
-name = "rtic-core"
+name = "rticx-core"
 version = "0.1.0"
 dependencies = [
  "derive_builder",
@@ -154,18 +142,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtic-spsc"
+name = "rticx-rp2040-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rticx-auto-assign",
+ "rticx-core",
+ "rticx-sw-pass",
+ "syn",
+]
+
+[[package]]
+name = "rticx-spsc"
 version = "0.1.0"
 
 [[package]]
-name = "rtic-sw-pass"
+name = "rticx-sw-pass"
 version = "0.1.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "rtic-core",
- "rtic-spsc",
+ "rticx-core",
+ "rticx-spsc",
  "syn",
 ]
 

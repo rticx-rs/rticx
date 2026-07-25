@@ -1,0 +1,24 @@
+[package]
+name = "rticx-riscv"
+version = "0.1.0"
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+description = "RTICX distribution for generic RISC-V targets"
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+keywords = ["rtic", "rticx", "risc-v", "riscv", "embedded"]
+categories = ["no-std", "embedded"]
+readme = "README.md"
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+rticx-riscv-macro = { version = "0.1.0", path = "rticx-macro" }
+rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
+
+[features]
+default = ["swtasks"]
+swtasks = ["rticx-riscv-macro/swtasks"]

@@ -1,18 +1,24 @@
 [package]
 name = "rticx-cortex-m"
-version = "0.1.0-cortex-m"
+version = "0.1.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
+description = "RTICX distribution for single-core Cortex-M targets (armv6-m and armv7-m and above)"
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+keywords = ["rtic", "rticx", "cortex-m", "arm", "embedded"]
+categories = ["no-std", "embedded"]
+readme = "README.md"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 test = false
 bench = false
 
 [dependencies]
 cortex-m = "0.7.7"
-rticx-cortex-m-macro = { path = "rticx-macro" }
-rticx-sw-pass = { path = "../../compilation-passes/rticx-sw-pass" } # exports
+rticx-cortex-m-macro = { version = "0.1.0", path = "rticx-macro" }
+rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
 
 [features]
 default = ["swtasks"]
