@@ -3,7 +3,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use rtic_auto_assign::AutoAssignPass;
 use rtic_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
-use syn::{parse_quote, ItemFn};
+use syn::{ItemFn, Path, parse_quote};
 
 extern crate proc_macro;
 
@@ -109,7 +109,7 @@ impl CorePassBackend for RenodeRtic {
     ) -> syn::ImplItemFn {
         let lock_impl: syn::Block = parse_quote! {
             {
-                unsafe { rtic::export::lock(resource_ptr, CEILING as u8, NVIC_PRIO_BITS, f) }
+                unsafe { stm32_renode_rtic::export::lock(resource_ptr, CEILING as u8, NVIC_PRIO_BITS, f) }
             }
         };
 
@@ -132,7 +132,7 @@ impl CorePassBackend for RenodeRtic {
         dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
         Some(quote! {
-            rtic::export::run(#task_prio as u8, || {#dispatch_task_call});
+            stm32_renode_rtic::export::run(#task_prio as u8, || {#dispatch_task_call});
         })
     }
 
@@ -147,20 +147,25 @@ impl CorePassBackend for RenodeRtic {
 
 struct SwPassBackendImpl;
 impl SwPassBackend for SwPassBackendImpl {
+    /// Path to the SPSC queue type re-exported by this distribution.
+    fn queue_path(&self) -> Path {
+        parse_quote!(stm32_renode_rtic::export::Queue)
+    }
+
     /// Provide the implementation/body of the core local interrupt pending function.
-    fn generate_local_pend_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         let body = parse_quote!({
-            rtic::export::NVIC::pend(irq_nbr);
+            stm32_renode_rtic::export::NVIC::pend(irq_nbr);
         });
         empty_body_fn.block = Box::new(body);
         empty_body_fn
     }
 
     /// Provide the implementation/body of the cross-core interrupt pending function.
-    fn generate_cross_pend_fn(&self, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
+    fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
         let body = parse_quote!({
-            use rtic::export::InterruptNumber;
-            rtic::export::cross_core::pend_irq(irq_nbr.number());
+            use stm32_renode_rtic::export::InterruptNumber;
+            stm32_renode_rtic::export::cross_core::pend_irq(irq_nbr.number());
         });
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)
@@ -170,16 +175,16 @@ impl SwPassBackend for SwPassBackendImpl {
 fn configure_fifo(peripheral_crate: &syn::Path, _core: u32) -> TokenStream2 {
     quote! {
         unsafe {
-            let fifo = &mut rtic::mailbox::Mailbox;
+            let fifo = &mut stm32_renode_rtic::mailbox::Mailbox;
             // drain fifo
             fifo.drain();
             // unpend the FIFO interrupt
-            #peripheral_crate::NVIC::unpend(rtic::mailbox::InterruptExt::MAILBOX_INTERRUPT);
+            #peripheral_crate::NVIC::unpend(stm32_renode_rtic::mailbox::InterruptExt::MAILBOX_INTERRUPT);
             // Set FIFO0 interrupts priority to MAX priority
             #peripheral_crate::CorePeripherals::steal()
-                .NVIC.set_priority( rtic::mailbox::InterruptExt::MAILBOX_INTERRUPT, #MAX_TASK_PRIORITY as u8);
+                .NVIC.set_priority( stm32_renode_rtic::mailbox::InterruptExt::MAILBOX_INTERRUPT, #MAX_TASK_PRIORITY as u8);
             // unmask FIFO irq
-            #peripheral_crate::NVIC::unmask( rtic::mailbox::InterruptExt::MAILBOX_INTERRUPT);
+            #peripheral_crate::NVIC::unmask( stm32_renode_rtic::mailbox::InterruptExt::MAILBOX_INTERRUPT);
         }
     }
 }

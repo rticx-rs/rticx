@@ -5,7 +5,7 @@
 
 use panic_halt as _;
 
-#[rtic::app(device = stm32f0::stm32f0x0, dispatchers = [TIM6])]
+#[cortex_m_rtic::app(device = stm32f0::stm32f0x0, dispatchers = [TIM6])]
 pub mod my_app {
     use cortex_m::peripheral::{Peripherals, syst::SystClkSource};
     use cortex_m_semihosting::{debug, hprintln};

@@ -6,7 +6,7 @@
 use panic_halt as _;
 
 
-#[rtic::app(device = rp_pico::hal::pac, peripherals = false, dispatchers = [SW0_IRQ])]
+#[rp2040_rtic::app(device = rp_pico::hal::pac, peripherals = false, dispatchers = [SW0_IRQ])]
 mod app {
 
     use base64::prelude::BASE64_STANDARD;

@@ -15,7 +15,7 @@ The central design is:
 - **Distributions** are target-specific crates that:
   - implement the backend traits defined by `rtic-core` (and optionally by passes);
   - register the passes they want to use;
-  - expose the final `#[rtic::app]` attribute macro.
+  - expose the final `#[<distro>::app]` attribute macro (e.g. `#[rp2040_rtic::app]`).
 
 This architecture makes it easy to add new hardware targets, new scheduling passes, or new syntax extensions without touching the core framework.
 
@@ -58,12 +58,12 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 
 ## 3. Core Abstractions & Key Traits
 
-### `#[rtic::app]` entry point
+### `#[<distro>::app]` entry point
 
-The `#[rtic::app]` macro is **not** defined in `rtic-core`. Each distribution defines it in its own `*-macro` crate and re-exports it as `rtic::app`. For example:
+The attribute macro is **not** defined in `rtic-core`. Each distribution defines it in its own `*-macro` crate and re-exports it under the distribution name (e.g. `#[rp2040_rtic::app]`). For example:
 
 - `distributions/rp2040-rtic/rp2040-rtic-macro/src/lib.rs` defines the proc macro.
-- `distributions/rp2040-rtic/src/lib.rs` re-exports it as `pub use rtic_macro::app;`.
+- `distributions/rp2040-rtic/src/lib.rs` re-exports it as `pub use rp2040_rtic_macro::app;`.
 
 ### The `RticMacroBuilder` pipeline
 
@@ -136,14 +136,15 @@ Required methods:
 
 | Method | Purpose |
 |--------|---------|
-| `generate_local_pend_fn(&self, empty_body_fn: ItemFn) -> ItemFn` | Fill the core-local interrupt-pending function used by `spawn`. |
-| `generate_cross_pend_fn(&self, empty_body_fn: ItemFn) -> Option<ItemFn>` | Fill the cross-core interrupt-pending function used by `spawn_from`. Returns `None` on single-core targets. |
+| `queue_path(&self) -> syn::Path` | Path to the SPSC queue type used by the software-tasks pass (typically `<distro>::export::Queue`). |
+| `generate_local_pend_fn(&self, core: u32, empty_body_fn: ItemFn) -> ItemFn` | Fill the per-core core-local interrupt-pending function used by `spawn`. |
+| `generate_cross_pend_fn(&self, core: u32, empty_body_fn: ItemFn) -> Option<ItemFn>` | Fill the per-target-core cross-core interrupt-pending function used by `spawn_from`. Returns `None` on single-core targets. |
 
 Default method:
 
 | Method | Purpose |
 |--------|---------|
-| `custom_interrupt_path(&self, core: u32) -> Option<syn::Path>` | Override the default `pac[core]::Interrupt` path. |
+| `custom_interrupt_path(&self, core: u32) -> Option<syn::Path>` | Path to the concrete dispatcher interrupt type. Defaults to `pac[core]::Interrupt`; return a custom path if the PAC's enum is not at the default location or if the target exposes interrupts differently (e.g. an enum re-export or module). |
 
 ### Syntax attributes
 
@@ -272,11 +273,11 @@ If a documentation generation script exists in the root, run it with:
 
 ### How to create a new RTIC distribution
 
-1. Copy the **template** distribution `distributions/distribution-template and rename to <your-distro>
+1. Copy the **template** distribution `distributions/distribution-template` and rename to `<your-distro>`:
    - `<your-distro>/` — the library crate user applications depend on.
-   - `<your-distro>-macro/` — the proc-macro crate defining `#[rtic::app]`.
+   - `<your-distro>-macro/` — the proc-macro crate defining `#[<your-distro>::app]`.
 2. Implement `CorePassBackend` in the macro crate for your target.
-3. If you use software tasks and other compilation passes, implement their backend if necessary (e.g `SwPassBackend`).
+3. If you use software tasks, implement `SwPassBackend` (including the mandatory `queue_path()` method) and any other compilation-pass backends you enable.
 4. In the macro crate, instantiate `RticMacroBuilder` and register the passes you want:
    ```rust
    let mut builder = RticMacroBuilder::new(MyBackend);
@@ -285,7 +286,7 @@ If a documentation generation script exists in the root, run it with:
    let tokens = builder.build_rtic_macro(args, input);
    ```
 5. Re-export the macro from the library crate as `pub use <your-distro>_macro::app;`.
-6. Add an `export` module in the library crate that re-exports target-specific runtime helpers, `cortex-m` / `riscv` items, and any pass exports.
+6. Add an `export` module in the library crate that re-exports target-specific runtime helpers, `cortex-m` / `riscv` items, and any pass exports. Make sure to expose a queue type at `<your-distro>::export::Queue` unless the backend's `queue_path()` points elsewhere.
 7. Add example apps under `<your-distro>/examples/` or `<your-distro>/example-apps/`.
 
 ---

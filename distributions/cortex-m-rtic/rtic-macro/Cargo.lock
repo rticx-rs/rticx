@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "cortex-m-rtic-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rtic-core",
+ "rtic-sw-pass",
+ "syn",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -127,17 +138,6 @@ dependencies = [
  "quote",
  "syn",
  "thiserror",
-]
-
-[[package]]
-name = "rtic-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rtic-core",
- "rtic-sw-pass",
- "syn",
 ]
 
 [[package]]

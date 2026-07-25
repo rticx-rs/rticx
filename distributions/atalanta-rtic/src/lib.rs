@@ -2,4 +2,4 @@
 
 pub mod export;
 
-pub use rtic_macro::app;
+pub use atalanta_rtic_macro::app;

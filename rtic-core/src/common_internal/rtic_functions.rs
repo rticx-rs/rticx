@@ -43,7 +43,7 @@ pub(crate) fn get_resource_proxy_lock_fn(
                 &mut #static_mut_shared_resources.assume_init_mut().#resource_ident
             } as *mut _;
             // IMPLEMENTOR RESPONSIBILITY: continue lock implementation here
-            // call for example rtic::export::lock(resource_ptr, task_priority, ...., f)
+            // call for example <distro>::export::lock(resource_ptr, task_priority, ...., f)
         }
     };
     implementor.generate_resource_proxy_lock_impl(app_params, app_info, lock_fn)

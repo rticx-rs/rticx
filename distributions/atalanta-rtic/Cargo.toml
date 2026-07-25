@@ -1,5 +1,5 @@
 [package]
-name = "rtic"
+name = "atalanta-rtic"
 version = "0.1.0"
 edition = "2024"
 
@@ -9,13 +9,13 @@ test = false
 bench = false
 
 [dependencies]
-rtic-macro = { path = "rtic-macro" }
+atalanta-rtic-macro = { path = "rtic-macro" }
 rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" } # exports
 rtic-deadline-pass = { path = "../../compilation-passes/rtic-deadline-pass" } # exports
 bsp = { package = "atalanta-bsp", git = "https://github.com/soc-hub-fi/atalanta.git", tag = "v0.2.1" }
 
 [features]
-deadline-pass = ["rtic-macro/deadline-pass"]
-pcs-pass = ["rtic-macro/pcs-pass"]
+deadline-pass = ["atalanta-rtic-macro/deadline-pass"]
+pcs-pass = ["atalanta-rtic-macro/pcs-pass"]
 fpga = ["bsp/fpga"]
 rtl-tb = ["bsp/rtl-tb"]

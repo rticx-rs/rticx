@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[rtic::app(device = bsp, dispatchers = [Dma2, Dma3])]
+#[atalanta_rtic::app(device = bsp, dispatchers = [Dma2, Dma3])]
 mod app {
     use bsp::{
         fugit::ExtU32,

@@ -7,7 +7,7 @@
 //! core1= `RUSTFLAGS='--cfg core="1"' cargo clippy --example hello_rtic_multi`
 // #![allow(unused)]
 
-#[rtic::app(device=stm32f1xx_hal::pac, peripherals=false, cores=2)]
+#[stm32_renode_rtic::app(device=stm32f1xx_hal::pac, peripherals=false, cores=2)]
 pub mod my_app {
 
     use cortex_m::asm;

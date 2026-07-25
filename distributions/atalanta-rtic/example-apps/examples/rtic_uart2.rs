@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[rtic::app(device = bsp)]
+#[atalanta_rtic::app(device = bsp)]
 mod app {
     use bsp::{
         fugit::ExtU32, mmap::apb_timer::TIMER0_ADDR, sprintln, timer_group::Timer, uart::ApbUart,
@@ -42,7 +42,7 @@ mod app {
         fn exec(&mut self) {
             sprintln!("A");
 
-            rtic::export::pend(Interrupt::Dma1);
+            atalanta_rtic::export::pend(Interrupt::Dma1);
 
             sprintln!("B");
         }

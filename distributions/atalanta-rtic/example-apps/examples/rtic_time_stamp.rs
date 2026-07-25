@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[rtic::app(device = bsp)]
+#[atalanta_rtic::app(device = bsp)]
 mod app {
     use bsp::embedded_io::Write;
     use bsp::fugit::ExtU32;
@@ -48,7 +48,7 @@ mod app {
                 // uart.write_byte(r);
                 // uart.write_byte(41);
 
-                // rtic::export::pend(hippomenes_core::Interrupt1);
+                // atalanta_rtic::export::pend(hippomenes_core::Interrupt1);
 
                 // uart.write_byte(102);
                 // uart.write_byte(103);
@@ -67,7 +67,7 @@ mod app {
         fn exec(&mut self) {
             self.shared().uart.lock(|uart| {
                 uart.write_all(&[10, 0]).unwrap();
-                rtic::export::pend(Interrupt::Dma2);
+                atalanta_rtic::export::pend(Interrupt::Dma2);
                 uart.write_all(&[11]).unwrap();
             });
         }

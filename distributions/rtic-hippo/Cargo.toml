@@ -1,5 +1,5 @@
 [package]
-name = "rtic"
+name = "rtic-hippo"
 version = "0.1.0-hippo"
 edition = "2024"
 
@@ -10,7 +10,7 @@ bench = false
 
 [dependencies]
 heapless = { version = "0.8.0" }
-rtic-macro = { path = "rtic-macro" }
+rtic-hippo-macro = { path = "rtic-macro" }
 riscv = "0.11"
 rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" } # exports
 rtic-deadline-pass = { path = "../../compilation-passes/rtic-deadline-pass" } # exports
@@ -19,4 +19,4 @@ rtic-deadline-pass = { path = "../../compilation-passes/rtic-deadline-pass" } # 
 hippomenes-core = { git = "https://github.com/onsdagens/hippomenes-core" }
 
 [features]
-deadline-pass = ["rtic-macro/deadline-pass"]
+deadline-pass = ["rtic-hippo-macro/deadline-pass"]

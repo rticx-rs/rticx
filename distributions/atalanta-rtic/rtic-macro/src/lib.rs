@@ -3,7 +3,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 
 use rtic_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
-use syn::{parse_quote, ItemFn};
+use syn::{Path, parse_quote, ItemFn};
 
 extern crate proc_macro;
 
@@ -80,8 +80,8 @@ impl CorePassBackend for AtalantaRtic {
                 };
                 quote! {
                     // Set interrupt priority
-                    rtic::export::enable(
-                        rtic::export::interrupts::#irq_name,
+                    atalanta_rtic::export::enable(
+                        atalanta_rtic::export::interrupts::#irq_name,
                         #priority as u8,
                         #pcs
                     );
@@ -106,9 +106,9 @@ impl CorePassBackend for AtalantaRtic {
         // eprintln!("{}", empty_body_fn.to_token_stream().to_string()); // enable comment to see the function signature
         let fn_body = parse_quote! {
             {
-                rtic::export::interrupt_disable();
+                atalanta_rtic::export::interrupt_disable();
                 let r = f();
-                unsafe { rtic::export::interrupt_enable(); } // critical section end
+                unsafe { atalanta_rtic::export::interrupt_enable(); } // critical section end
                 r
             }
         };
@@ -133,7 +133,7 @@ impl CorePassBackend for AtalantaRtic {
     ) -> syn::ImplItemFn {
         let lock_impl: syn::Block = parse_quote! {
             {
-                unsafe { rtic::export::lock(resource_ptr, task_priority as u8, CEILING as u8, f) }
+                unsafe { atalanta_rtic::export::lock(resource_ptr, task_priority as u8, CEILING as u8, f) }
             }
         };
 
@@ -179,22 +179,27 @@ impl CorePassBackend for AtalantaRtic {
 
 struct SwPassBackend;
 impl rtic_sw_pass::SwPassBackend for SwPassBackend {
+    /// Path to the SPSC queue type re-exported by this distribution.
+    fn queue_path(&self) -> Path {
+        parse_quote!(atalanta_rtic::export::Queue)
+    }
+
     /// Provide the implementation/body of the core local interrupt pending function.
-    fn generate_local_pend_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         let body = parse_quote!({
-            rtic::export::pend(irq_nbr);
+            atalanta_rtic::export::pend(irq_nbr);
         });
         empty_body_fn.block = Box::new(body);
         empty_body_fn
     }
 
     /// Provide the implementation/body of the cross-core interrupt pending function.
-    fn generate_cross_pend_fn(&self, _empty_body_fn: ItemFn) -> Option<ItemFn> {
+    fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
         None
     }
 
-    /// Provide a custom path for interrupts list
+    /// Provide a custom path for the dispatcher interrupt type.
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
-        Some(parse_quote!(rtic::export::interrupts))
+        Some(parse_quote!(atalanta_rtic::export::Interrupt))
     }
 }

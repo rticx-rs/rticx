@@ -11,11 +11,11 @@ pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an inter
 use crate::mailbox;
 use cortex_m::register::{basepri, basepri_max};
 pub use cortex_m::{
+    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
-    Peripherals,
+    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
 };
 pub use mailbox::cross_core;
 

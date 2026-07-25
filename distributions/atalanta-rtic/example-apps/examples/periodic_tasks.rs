@@ -3,7 +3,7 @@
 #![allow(static_mut_refs)]
 #![allow(non_snake_case)]
 
-#[rtic::app(device = bsp)]
+#[atalanta_rtic::app(device = bsp)]
 mod app {
 
     use core::arch::asm;

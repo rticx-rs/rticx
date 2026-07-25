@@ -10,7 +10,7 @@ path = "examples/hello_rtic.rs"
 
 [dependencies]
 # default features: swtasks on, BASEPRI locking (armv7-m)
-rtic = { path = "../.." }
+cortex-m-rtic = { path = "../.." }
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 cortex-m-semihosting = "0.5.0"

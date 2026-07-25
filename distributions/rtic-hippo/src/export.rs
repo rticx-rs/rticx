@@ -16,10 +16,9 @@ pub mod interrupts {
     pub use hippomenes_core::Interrupt1;
     pub use hippomenes_core::Interrupt2;
     pub use hippomenes_core::Interrupt3;
-
 }
 pub use hippomenes_core::Interrupt;
-pub use hippomenes_core::{Peripherals, OutputPin};
+pub use hippomenes_core::{OutputPin, Peripherals};
 pub use riscv::interrupt::machine::disable as interrupt_disable;
 pub use riscv::interrupt::machine::enable as interrupt_enable;
 
@@ -80,7 +79,6 @@ pub unsafe fn lock<T, R>(ptr: *mut T, priority: u8, ceiling: u8, f: impl FnOnce(
     }
 }
 
-
 /// Sets the given software interrupt as pending
 pub fn pend<T: Interrupt>(_int: T) {
     unsafe { <T as Interrupt>::pend_int() };
@@ -96,4 +94,20 @@ pub fn enable<T: Interrupt>(_int: T, prio: u8) {
         <T as Interrupt>::set_priority(prio);
         <T as Interrupt>::enable_int();
     }
+}
+
+/// Dispatcher interrupt enum used by the software-tasks pass.
+///
+/// Hippomenes-core exposes interrupts as unit structs implementing the
+/// [`Interrupt`] trait. The software pass needs a single concrete enum type
+/// for its pend function signature, so this enum mirrors those unit structs.
+/// The backend's pend body maps a variant back to the corresponding unit
+/// struct and calls [`pend`].
+#[derive(Clone, Copy)]
+#[doc(hidden)]
+pub enum DispatcherIrq {
+    Interrupt0,
+    Interrupt1,
+    Interrupt2,
+    Interrupt3,
 }

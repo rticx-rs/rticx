@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[rtic::app(device = bsp)]
+#[atalanta_rtic::app(device = bsp)]
 mod app {
     use bsp::{
         embedded_io::Write, fugit::ExtU32, mmap::apb_timer::TIMER0_ADDR, sprintln,
@@ -37,7 +37,7 @@ mod app {
             self.shared().uart.lock(|uart| {
                 uart.write_all(&[40, 41]).unwrap();
 
-                rtic::export::pend(Interrupt::Dma1);
+                atalanta_rtic::export::pend(Interrupt::Dma1);
 
                 uart.write_all(&[102, 103]).unwrap();
             });
@@ -55,7 +55,7 @@ mod app {
         fn exec(&mut self) {
             self.shared().uart.lock(|uart| {
                 uart.write_all(&[10, 0]).unwrap();
-                rtic::export::pend(Interrupt::Dma2);
+                atalanta_rtic::export::pend(Interrupt::Dma2);
                 uart.write_all(&[11]).unwrap();
             });
         }

@@ -4,11 +4,11 @@ use core::panic::PanicInfo;
 
 use hippomenes_rt as _;
 
-#[rtic::app(device = hippomenes_core, dispatchers = [Interrupt1])]
+#[rtic_hippo::app(device = hippomenes_core, dispatchers = [Interrupt1])]
 mod app {
     use core::fmt::Write;
     use hippomenes_core::UART;
-    use rtic::export::OutputPin;
+    use rtic_hippo::export::OutputPin;
     #[shared]
     struct Shared {
         uart: UART,
@@ -21,7 +21,7 @@ mod app {
         let uart = peripherals.uart;
 
         timer.write(0x400F); //timer interrupt every
-                             // 500*2^15 ~ 16M cycles ~0.75s @ 20MHz
+        // 500*2^15 ~ 16M cycles ~0.75s @ 20MHz
         Shared { uart }
     }
 
@@ -74,7 +74,7 @@ mod app {
             self.shared().uart.lock(|uart| {
                 write!(uart, "Swe {}", p).ok();
             });
-            unsafe { rtic::export::Peripherals::steal() }
+            unsafe { rtic_hippo::export::Peripherals::steal() }
                 .gpo
                 .split()
                 .pout2

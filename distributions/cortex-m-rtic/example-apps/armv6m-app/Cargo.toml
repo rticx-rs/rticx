@@ -10,7 +10,7 @@ path = "examples/hello_rtic.rs"
 
 [dependencies]
 # `armv6m` selects interrupt source-masking locking (Cortex-M0/M0+/M23).
-rtic = { path = "../..", features = ["armv6m"] }
+cortex-m-rtic = { path = "../..", features = ["armv6m"] }
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 cortex-m-semihosting = "0.5.0"

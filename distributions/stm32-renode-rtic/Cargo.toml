@@ -1,5 +1,5 @@
 [package]
-name = "rtic"
+name = "stm32-renode-rtic"
 version = "0.1.0-renode-mc"
 edition = "2024"
 
@@ -10,7 +10,7 @@ bench = false
 
 [dependencies]
 
-rtic-macro = { path = "stm32-renode-rtic-macro" }
+stm32-renode-rtic-macro = { path = "stm32-renode-rtic-macro" }
 rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" } # exports
 
 # stm32 stuff

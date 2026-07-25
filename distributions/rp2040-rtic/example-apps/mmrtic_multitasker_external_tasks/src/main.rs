@@ -19,7 +19,7 @@ pub enum Command {
     Unknown,
 }
 
-#[rtic::app(device = rp_pico::hal::pac, peripherals = false, dispatchers = [SW0_IRQ])]
+#[rp2040_rtic::app(device = rp_pico::hal::pac, peripherals = false, dispatchers = [SW0_IRQ])]
 pub mod app {
 
     use core::sync::atomic::AtomicU32;

@@ -1,6 +1,6 @@
 // RTIC Distribution Porting Template -- Proc-macro backend
 //
-// This crate defines the `#[rtic::app]` attribute macro for your
+// This crate defines the `#[<your-crate>::app]` attribute macro for your
 // distribution.  It wires together:
 //
 //   1. **CorePassBackend** (`struct Backend`) -- the target-specific
@@ -27,7 +27,7 @@ use quote::{format_ident, quote};
 use rtic_core::{Analysis, AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
 use rtic_sw_pass::{SoftwarePass, SwPassBackend};
-use syn::{parse_quote, ItemFn};
+use syn::{ItemFn, parse_quote};
 
 extern crate proc_macro;
 
@@ -217,7 +217,7 @@ impl CorePassBackend for Backend {
     /// ## Reference
     ///
     /// * **Cortex-M (BASEPRI)**: delegates to
-    ///   `rtic::export::lock(resource_ref, CEILING as u8,
+    ///   `<your-crate>::export::lock(resource_ref, CEILING as u8,
     ///   PAC::NVIC_PRIO_BITS, f)`.
     /// * **Cortex-M (armv6m source-mask)**: same call, but the `Mask`
     ///   type and `NVIC_PRIO_BITS` come from the source-masking
@@ -285,7 +285,7 @@ impl CorePassBackend for Backend {
     /// * **Single-core**: always return `"main"`.
     /// * **Multicore**: return `"main"` for core 0, and a unique identifier (e.g. `core1_entry`) for others.
     ///
-    /// References: 
+    /// References:
     /// - `cortex-m-rtic` always returns `"main"`.
     /// - `rp2040-rtic` returns `"main"` for core 0 and `"core{N}_entry"` for core N > 0.
     fn entry_name(&self, _core: u32) -> Ident {
@@ -300,7 +300,7 @@ impl CorePassBackend for Backend {
     /// You can return `Some(quote! { wfi(); })` to have the CPU sleep between
     /// interrupts (saves power).  Return `None` for an empty busy loop.
     ///
-    /// Reference: `cortex-m-rtic` emits `rtic::export::wfi()`.
+    /// Reference: `cortex-m-rtic` emits `<your-crate>::export::wfi()`.
     fn populate_idle_loop(&self) -> Option<TokenStream2> {
         None
     }
@@ -326,12 +326,12 @@ impl CorePassBackend for Backend {
     /// Reference: `cortex-m-rtic` uses `core::arch::asm!("cpsid i")` /
     /// `core::arch::asm!("cpsie i")`.
     fn generate_interrupt_free_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
-        let fn_body = parse_quote!({ 
-            // TODO(port): disable interrupts here 
+        let fn_body = parse_quote!({
+            // TODO(port): disable interrupts here
             let r = f();
-            // TODO(port): re-enable interrupts here 
+            // TODO(port): re-enable interrupts here
             r
-         });
+        });
         empty_body_fn.block = Box::new(fn_body);
         empty_body_fn
     }
@@ -369,14 +369,28 @@ struct SwBackend;
 
 #[cfg(feature = "swtasks")]
 impl SwPassBackend for SwBackend {
+    /// Path to the SPSC queue type used by the software-tasks pass.
+    ///
+    /// The pass emits `#queue_path<T, N>` and `#queue_path::new()`.
+    /// Typical implementation for a distribution:
+    /// ```ignore
+    /// fn queue_path(&self) -> syn::Path {
+    ///     parse_quote!(your_crate::export::Queue)
+    /// }
+    /// ```
+    fn queue_path(&self) -> syn::Path {
+        parse_quote!(distribution_template::export::Queue)
+    }
+
     /// Body of the core-local interrupt-pending function.
     ///
     /// This function is called by `spawn()` to trigger the dispatcher
     /// interrupt that will run the software task on the local core.
     ///
     /// # Contract
-    /// * The function takes a single argument `irq_nbr` (the interrupt
-    ///   number of the dispatcher).
+    /// * `core` is the core index for which this function is generated.
+    /// * The generated function takes a single argument `irq_nbr` whose
+    ///   concrete type is the dispatcher interrupt type for that core.
     /// * Write to the pending bit of the corresponding NVIC (or equivalent)
     ///   register to trigger the interrupt.
     ///
@@ -386,11 +400,11 @@ impl SwPassBackend for SwBackend {
     /// * **RISC-V CLIC**: set the pending bit via `Clic::ip(irq).pend()`.
     /// * **RISC-V mintthresh**: use a software interrupt or ECLIC API.
     ///
-    /// Reference: `cortex-m-rtic` uses `rtic::export::NVIC::pend(irq_nbr)`.
-    fn generate_local_pend_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
+    /// Reference: `cortex-m-rtic` uses `<your-crate>::export::NVIC::pend(irq_nbr)`.
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         let body = parse_quote!({
             // TODO(port): pend the dispatcher interrupt on this core.
-            // Example for Cortex-M: rtic::export::NVIC::pend(irq_nbr);
+            // Example for Cortex-M: <your-crate>::export::NVIC::pend(irq_nbr);
         });
         empty_body_fn.block = Box::new(body);
         empty_body_fn
@@ -402,8 +416,9 @@ impl SwPassBackend for SwBackend {
     /// to run a software task that was spawned remotely.
     ///
     /// # Contract
-    /// * The function takes `irq_nbr` (dispatcher interrupt number) and
-    ///   `core` (target core index).
+    /// * `core` is the target core index (the core that owns the task).
+    /// * The generated function takes a single argument `irq_nbr` whose
+    ///   concrete type is the dispatcher interrupt type for the target core.
     /// * Return `None` if your target is single-core (no cross-core
     ///   communication is needed).
     ///
@@ -415,8 +430,8 @@ impl SwPassBackend for SwBackend {
     ///   mechanism (e.g. mailbox, shared-memory + doorbell).
     ///
     /// Reference: `rp2040-rtic` writes `irq_nbr` to the SIO FIFO via
-    /// `rtic::export::cross_core::pend_irq(irq_nbr.number())`.
-    fn generate_cross_pend_fn(&self, _empty_body_fn: ItemFn) -> Option<ItemFn> {
+    /// `<your-crate>::export::cross_core::pend_irq(irq_nbr.number())`.
+    fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
         None
     }
 }

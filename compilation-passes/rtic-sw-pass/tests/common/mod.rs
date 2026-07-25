@@ -150,7 +150,11 @@ pub struct MockSwBackend {
 }
 
 impl SwPassBackend for MockSwBackend {
-    fn generate_local_pend_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
+    fn queue_path(&self) -> syn::Path {
+        parse_quote!(rtic::export::Queue)
+    }
+
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         let body = parse_quote!({
             mock_local_pend(irq_nbr);
         });
@@ -158,12 +162,12 @@ impl SwPassBackend for MockSwBackend {
         empty_body_fn
     }
 
-    fn generate_cross_pend_fn(&self, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
+    fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
         if !self.cross {
             return None;
         }
         let body = parse_quote!({
-            mock_cross_pend(irq_nbr, core);
+            mock_cross_pend(irq_nbr);
         });
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)

@@ -2,4 +2,4 @@
 
 pub mod export;
 
-pub use rtic_macro::app;
+pub use cortex_m_rtic_macro::app;

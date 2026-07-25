@@ -40,18 +40,18 @@ pub mod app {
     where
         F: FnOnce() -> R,
     {
-        rtic::export::interrupt_disable();
+        rtic_hippo::export::interrupt_disable();
         let r = f();
         unsafe {
-            rtic::export::interrupt_enable();
+            rtic_hippo::export::interrupt_enable();
         }
         r
     }
     /// ==================================== User code ======================================
-    static mut __rtic_internal__Sw1__INPUTS: rtic::export::Queue<
+    static mut __rtic_internal__Sw1__INPUTS: rtic_hippo::export::Queue<
         <Sw1 as RticSwTask>::SpawnInput,
         2,
-    > = rtic::export::Queue::new();
+    > = rtic_hippo::export::Queue::new();
     impl Sw1 {
         pub fn spawn(
             input: <Sw1 as RticSwTask>::SpawnInput,
@@ -83,8 +83,10 @@ pub mod app {
     impl ::core::marker::Copy for Core0Prio1Tasks {}
     #[doc(hidden)]
     #[allow(non_upper_case_globals)]
-    static mut __rtic_internal__Core0Prio1Tasks__RQ: rtic::export::Queue<Core0Prio1Tasks, 2usize> =
-        rtic::export::Queue::new();
+    static mut __rtic_internal__Core0Prio1Tasks__RQ: rtic_hippo::export::Queue<
+        Core0Prio1Tasks,
+        2usize,
+    > = rtic_hippo::export::Queue::new();
     /// RTIC Software task trait
     /// Trait for an idle task
     pub trait RticSwTask {
@@ -97,8 +99,8 @@ pub mod app {
     /// Core local interrupt pending
     #[doc(hidden)]
     #[inline]
-    pub fn __rtic_sc_pend<T: rtic::export::Interrupt>(irq_nbr: T) {
-        rtic::export::pend(irq_nbr);
+    pub fn __rtic_sc_pend<T: rtic_hippo::export::Interrupt>(irq_nbr: T) {
+        rtic_hippo::export::pend(irq_nbr);
     }
     /// ====================================
     /// CORE 0
@@ -262,7 +264,7 @@ pub mod app {
             let task_priority = self.task_priority;
             let resource_ptr = unsafe { &mut SHARED.assume_init_mut().uart } as *mut _;
             unsafe {
-                rtic::export::lock(resource_ptr, task_priority as u8, CEILING as u8, f);
+                rtic_hippo::export::lock(resource_ptr, task_priority as u8, CEILING as u8, f);
             }
         }
     }
@@ -292,8 +294,8 @@ pub mod app {
                 SHARED.write(shared_resources);
             }
             unsafe {
-                rtic::export::enable(hippomenes_core::Interrupt0, 2u16 as u8);
-                rtic::export::enable(hippomenes_core::Interrupt2, 1u16 as u8);
+                rtic_hippo::export::enable(hippomenes_core::Interrupt0, 2u16 as u8);
+                rtic_hippo::export::enable(hippomenes_core::Interrupt2, 1u16 as u8);
             }
         });
         loop {}

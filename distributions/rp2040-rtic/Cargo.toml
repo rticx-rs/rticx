@@ -1,5 +1,5 @@
 [package]
-name = "rtic"
+name = "rp2040-rtic"
 version = "0.1.0-rp2040"
 edition = "2024"
 
@@ -10,13 +10,13 @@ bench = false
 
 [dependencies]
 cortex-m = "0.7.7"
-rtic-macro = { path = "rp2040-rtic-macro" }
+rp2040-rtic-macro = { path = "rp2040-rtic-macro" }
 rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" } # exports
 log = "0.4.21"
 rp2040-hal = "0.9.1"
 
 [dev-dependencies]
-rtic-macro = { path = "rp2040-rtic-macro", features = [
+rp2040-rtic-macro = { path = "rp2040-rtic-macro", features = [
     "autoassign",
     "swtasks",
 ] }
@@ -38,5 +38,5 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(have_basepri)'] }
 
 [features]
-autoassign = ["rtic-macro/autoassign"]
-swtasks = ["rtic-macro/swtasks"]
+autoassign = ["rp2040-rtic-macro/autoassign"]
+swtasks = ["rp2040-rtic-macro/swtasks"]

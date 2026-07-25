@@ -1,5 +1,5 @@
 [package]
-name = "rtic"
+name = "distribution-template"
 version = "0.1.0-template"
 edition = "2024"
 authors = ["Your Name <you@example.com>"]
@@ -14,12 +14,12 @@ bench = false
 # This distribution template only declares the mandatory RTIC framework
 # crates.  When porting to a real target you must add:
 #   * `<target_pac>`  — your Peripheral Access Crate (the `device` arg
-#                       to `#[rtic::app(device = <target_pac>)]`)
+#                       to `#[your_distro::app(device = <target_pac>)]`)
 #   * `<target_hal>`  — HAL crate (optional but typical)
 #   * Any runtime support the target requires (e.g. cortex-m-rt, riscv-rt).
 #
 [dependencies]
-rtic-macro = { path = "rtic-macro" }
+distribution-template-macro = { path = "rtic-macro" }
 rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" }
 
 # ===========================================================================
@@ -28,9 +28,9 @@ rtic-sw-pass = { path = "../../compilation-passes/rtic-sw-pass" }
 [features]
 # Enable the software-tasks compilation pass (dispatchers, spawn, spawn_from).
 # When disabled the distribution supports only hardware-bound tasks.
-swtasks = ["rtic-macro/swtasks"]
+swtasks = ["distribution-template-macro/swtasks"]
 
 # Enable the automatic `core = N` assignment pass.
 # Assigns tasks to cores based on which shared resources they use.
 # remove this if your distribution is targeting a single core MCU
-autoassign = ["rtic-macro/autoassign"]
+autoassign = ["distribution-template-macro/autoassign"]

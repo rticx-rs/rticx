@@ -5,7 +5,7 @@
 // be linked)
 use panic_halt as _;
 
-#[rtic::app(device = rp_pico::hal::pac, peripherals = false)]
+#[rp2040_rtic::app(device = rp_pico::hal::pac, peripherals = false)]
 mod app {
 
     use core::sync::atomic::{AtomicU32, Ordering};

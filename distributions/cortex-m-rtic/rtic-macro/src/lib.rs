@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use rtic_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
 use rtic_sw_pass::{SoftwarePass, SwPassBackend};
-use syn::{parse_quote, ItemFn};
+use syn::{ItemFn, Path, parse_quote};
 
 extern crate proc_macro;
 
@@ -88,8 +88,8 @@ impl CorePassBackend for CortexMRtic {
                 // Exceptions use the SCB and are never unmasked
                 stmts.push(quote!(
                     core.SCB.set_priority(
-                        rtic::export::SystemHandler::#irq_name,
-                        rtic::export::cortex_logical2hw(#priority as u8, #nvic_prio_bits),
+                        cortex_m_rtic::export::SystemHandler::#irq_name,
+                        cortex_m_rtic::export::cortex_logical2hw(#priority as u8, #nvic_prio_bits),
                     );
                 ));
             } else {
@@ -99,9 +99,9 @@ impl CorePassBackend for CortexMRtic {
                 stmts.push(quote!(
                     core.NVIC.set_priority(
                         #pac::Interrupt::#irq_name,
-                        rtic::export::cortex_logical2hw(#priority as u8, #nvic_prio_bits),
+                        cortex_m_rtic::export::cortex_logical2hw(#priority as u8, #nvic_prio_bits),
                     );
-                    rtic::export::NVIC::unmask(#pac::Interrupt::#irq_name);
+                    cortex_m_rtic::export::NVIC::unmask(#pac::Interrupt::#irq_name);
                 ));
             }
         }
@@ -109,7 +109,7 @@ impl CorePassBackend for CortexMRtic {
         // `core::peripheral::Peripherals` handle for SCB/NVIC access at runtime.
         // `post_init` already runs inside a critical section, so stealing is safe.
         Some(quote! {
-            let mut core = unsafe { rtic::export::Peripherals::steal() };
+            let mut core = unsafe { cortex_m_rtic::export::Peripherals::steal() };
             unsafe {
                 #(#stmts)*
             }
@@ -118,7 +118,7 @@ impl CorePassBackend for CortexMRtic {
 
     fn populate_idle_loop(&self) -> Option<TokenStream2> {
         Some(quote! {
-            rtic::export::wfi();
+            cortex_m_rtic::export::wfi();
         })
     }
 
@@ -164,7 +164,7 @@ impl CorePassBackend for CortexMRtic {
             let lock_impl: syn::Block = parse_quote! {
                 {
                     unsafe {
-                        rtic::export::lock(
+                        cortex_m_rtic::export::lock(
                             resource_ptr,
                             task_priority,
                             CEILING,
@@ -184,7 +184,7 @@ impl CorePassBackend for CortexMRtic {
             let lock_impl: syn::Block = parse_quote! {
                 {
                     unsafe {
-                        rtic::export::lock(resource_ptr, CEILING as u8, #pac::NVIC_PRIO_BITS, f)
+                        cortex_m_rtic::export::lock(resource_ptr, CEILING as u8, #pac::NVIC_PRIO_BITS, f)
                     }
                 }
             };
@@ -214,7 +214,7 @@ impl CorePassBackend for CortexMRtic {
             None
         } else {
             Some(quote! {
-                rtic::export::run(#task_prio as u8, || { #dispatch_task_call });
+                cortex_m_rtic::export::run(#task_prio as u8, || { #dispatch_task_call });
             })
         }
     }
@@ -281,7 +281,7 @@ fn generate_source_mask_globals(app_args: &AppArgs, app_info: &SubApp) -> Option
     for priority_level in 1..=3 {
         let irq_as_u32 = &irq_prio_map[priority_level - 1];
         masks.push(quote! {
-            rtic::export::create_mask([
+            cortex_m_rtic::export::create_mask([
                 #(#irq_as_u32)*
             ]),
         });
@@ -293,13 +293,13 @@ fn generate_source_mask_globals(app_args: &AppArgs, app_info: &SubApp) -> Option
     Some(quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
-        const #chunks_ident: usize = rtic::export::compute_mask_chunks([
+        const #chunks_ident: usize = cortex_m_rtic::export::compute_mask_chunks([
             #(#irq_list_as_u32)*
         ]);
 
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
-        const #masks_ident: [rtic::export::Mask<#chunks_ident>; 3] = [
+        const #masks_ident: [cortex_m_rtic::export::Mask<#chunks_ident>; 3] = [
             #(#masks)*
         ];
     })
@@ -311,11 +311,16 @@ struct SwPassBackendImpl;
 
 #[cfg(feature = "swtasks")]
 impl SwPassBackend for SwPassBackendImpl {
+    /// Path to the SPSC queue type re-exported by this distribution.
+    fn queue_path(&self) -> Path {
+        parse_quote!(cortex_m_rtic::export::Queue)
+    }
+
     /// Core-local interrupt pending: used by `spawn` for software tasks running
     /// on this core.
-    fn generate_local_pend_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         let body = parse_quote!({
-            rtic::export::NVIC::pend(irq_nbr);
+            cortex_m_rtic::export::NVIC::pend(irq_nbr);
         });
         empty_body_fn.block = Box::new(body);
         empty_body_fn
@@ -323,7 +328,7 @@ impl SwPassBackend for SwPassBackendImpl {
 
     /// No secondary core: cross-core pending is unavailable on this single-core
     /// distribution.
-    fn generate_cross_pend_fn(&self, _empty_body_fn: ItemFn) -> Option<ItemFn> {
+    fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
         None
     }
 }

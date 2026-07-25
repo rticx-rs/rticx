@@ -3,7 +3,7 @@
 use core::panic::PanicInfo;
 use hippomenes_rt as _;
 
-#[rtic::app(device = hippomenes_core)]
+#[rtic_hippo::app(device = hippomenes_core)]
 mod app {
     use core::fmt::Write;
     use hippomenes_core::UART;
@@ -29,7 +29,7 @@ mod app {
             let mut uart = peripherals.uart;
             write!(uart, "init").ok();
             timer.write(0x300F); //timer interrupt every
-                                 // 500*2^15 ~ 16M cycles ~0.75s @ 20MHz
+            // 500*2^15 ~ 16M cycles ~0.75s @ 20MHz
             Self { uart }
         }
 

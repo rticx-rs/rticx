@@ -1,5 +1,5 @@
 use crate::PCS_ATTR_IDENT;
-use quote::{format_ident, ToTokens};
+use quote::{ToTokens, format_ident};
 use rtic_core::parse_utils::RticAttr;
 use syn::{Ident, ItemStruct};
 

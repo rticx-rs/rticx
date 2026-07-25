@@ -7,11 +7,10 @@
 //! core0= `RUSTFLAGS='--cfg core="0"' cargo clippy --example ping_pong`
 //! core1= `RUSTFLAGS='--cfg core="1"' cargo clippy --example ping_pong`
 #![allow(unused)]
-
 #![no_std]
 #![no_main]
 
-#[rtic::app(device= [stm32f1xx_hal::pac, stm32f1xx_hal::pac], peripherals=false, dispatchers = [[TIM3],[TIM4]], cores=2)]
+#[stm32_renode_rtic::app(device= [stm32f1xx_hal::pac, stm32f1xx_hal::pac], peripherals=false, dispatchers = [[TIM3],[TIM4]], cores=2)]
 pub mod my_app {
 
     use cortex_m::asm;
@@ -105,7 +104,7 @@ pub mod my_app {
     /// a Core0 task to be spawned by a task on Core1
     /// in `multibin` systems, the task trait implementation but be implemented inside the `app` module
     /// one workaround to move the tasks's functionality outside is as follows
-    /// define a `external_exec` function on an external module 
+    /// define a `external_exec` function on an external module
     /// any  impl `Core0Task` must be guarded by #[cfg(core = "0")]
     #[sw_task(priority = 1, spawn_by = 1, core = 0, shared = [tx])]
     pub struct Core0Task;
@@ -170,9 +169,9 @@ pub mod my_app {
         type SpawnInput = u32;
         fn init() -> Self {
             asm::delay(120000000); // some delay to make sure core 0 has started and is waiting for a message...
-                                   // spawn task on core0 to begin ping pong
-                                   // this is the correct place to initiate the ping-pong process since at this point we
-                                   // know core 1 is awake and can start receiving interrupts
+            // spawn task on core0 to begin ping pong
+            // this is the correct place to initiate the ping-pong process since at this point we
+            // know core 1 is awake and can start receiving interrupts
             Core0Task::spawn_from(Self::current_core(), 1).expect("Couldn't start task on core 0"); // this will be called during initalization
             Self
         }

@@ -4,7 +4,9 @@ use quote::{format_ident, quote};
 #[cfg(feature = "autoassign")]
 use rtic_auto_assign::AutoAssignPass;
 use rtic_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
-use syn::{parse_quote, ItemFn};
+#[cfg(feature = "swtasks")]
+use syn::Path;
+use syn::{ItemFn, parse_quote};
 
 extern crate proc_macro;
 
@@ -132,7 +134,7 @@ impl CorePassBackend for Rp2040Rtic {
         for priority_level in 1..=3 {
             let irq_as_u32 = &irq_prio_map[priority_level - 1];
             masks.push(quote! {
-                rtic::export::create_mask([
+                rp2040_rtic::export::create_mask([
                     #(#irq_as_u32)*
                 ]),
             })
@@ -144,13 +146,13 @@ impl CorePassBackend for Rp2040Rtic {
         Some(quote! {
             #[doc(hidden)]
             #[allow(non_upper_case_globals)]
-            const #chunks_ident: usize = rtic::export::compute_mask_chunks([
+            const #chunks_ident: usize = rp2040_rtic::export::compute_mask_chunks([
                 #(#irq_list_as_u32)*
             ]);
 
             #[doc(hidden)]
             #[allow(non_upper_case_globals)]
-            const #masks_ident: [rtic::export::Mask<#chunks_ident>; 3] = [
+            const #masks_ident: [rp2040_rtic::export::Mask<#chunks_ident>; 3] = [
                 #(#masks)*
             ];
         })
@@ -166,7 +168,7 @@ impl CorePassBackend for Rp2040Rtic {
         let masks_ident = format_ident!("__rtic_internal_MASKS_core{core}"); // already computed by `compute_lock_static_args(...)`
 
         let lock_impl: syn::Block = parse_quote! {
-            { unsafe { rtic::export::lock(resource_ptr, task_priority, CEILING, &#masks_ident, f) } }
+            { unsafe { rp2040_rtic::export::lock(resource_ptr, task_priority, CEILING, &#masks_ident, f) } }
         };
 
         let mut completed_lock_fn = incomplete_lock_fn;
@@ -202,13 +204,18 @@ impl CorePassBackend for Rp2040Rtic {
 struct SwPassBackendImpl;
 #[cfg(feature = "swtasks")]
 impl SwPassBackend for SwPassBackendImpl {
+    /// Path to the SPSC queue type re-exported by this distribution.
+    fn queue_path(&self) -> Path {
+        parse_quote!(rp2040_rtic::export::Queue)
+    }
+
     /// Provide the implementation/body of the core local interrupt pending function.
-    fn generate_local_pend_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         // #[doc(hidden)]
         // #[inline]
-        // pub fn __rtic_local_irq_pend<I: rtic::export::InterruptNumber>(irq_nbr : I) {
+        // pub fn __rtic_local_irq_pend_coreN(irq_nbr : rp2040::Interrupt) {
         let body = parse_quote!({
-            rtic::export::NVIC::pend(irq_nbr);
+            rp2040_rtic::export::NVIC::pend(irq_nbr);
         });
         // }
         empty_body_fn.block = Box::new(body);
@@ -216,13 +223,13 @@ impl SwPassBackend for SwPassBackendImpl {
     }
 
     /// Provide the implementation/body of the cross-core interrupt pending function.
-    fn generate_cross_pend_fn(&self, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
+    fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
         // #[doc(hidden)]
         // #[inline]
-        // pub fn __rtic_cross_irq_pend<I: rtic::export::InterruptNumber>(irq_nbr : I, core: u32) {
+        // pub fn __rtic_cross_irq_coreN(irq_nbr : rp2040::Interrupt) {
         let body = parse_quote!({
-            use rtic::export::InterruptNumber;
-            let _ = rtic::export::cross_core::pend_irq(irq_nbr.number());
+            use rp2040_rtic::export::InterruptNumber;
+            let _ = rp2040_rtic::export::cross_core::pend_irq(irq_nbr.number());
         });
         // }
         empty_body_fn.block = Box::new(body);
@@ -241,14 +248,14 @@ fn init_core1(pac: &syn::Path) -> TokenStream2 {
         /// So instead, core1.spawn takes a [usize] which gets used for the stack.
         /// NOTE: We use the `Stack` struct here to ensure that it has 32-byte alignment, which allows
         /// the stack guard to take up the least amount of usable RAM.
-        static mut CORE1_STACK: rtic::export::Stack<4096> = rtic::export::Stack::new();
+        static mut CORE1_STACK: rp2040_rtic::export::Stack<4096> = rp2040_rtic::export::Stack::new();
 
         let mut pac = unsafe { #pac::Peripherals::steal() };
 
         // The single-cycle I/O block controls our GPIO pins
-        let mut sio = rtic::export::Sio::new(pac.SIO);
+        let mut sio = rp2040_rtic::export::Sio::new(pac.SIO);
 
-        let mut mc = rtic::export::Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
+        let mut mc = rp2040_rtic::export::Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
         let cores = mc.cores();
         let core1 = &mut cores[1];
         let _ = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || core1_entry());

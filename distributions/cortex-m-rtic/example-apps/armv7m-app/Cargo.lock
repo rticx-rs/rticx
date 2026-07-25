@@ -56,6 +56,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-m-rtic"
+version = "0.1.0-cortex-m"
+dependencies = [
+ "cortex-m",
+ "cortex-m-rtic-macro",
+ "rtic-sw-pass",
+]
+
+[[package]]
+name = "cortex-m-rtic-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rtic-core",
+ "rtic-sw-pass",
+ "syn",
+]
+
+[[package]]
 name = "cortex-m-semihosting"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -70,9 +90,9 @@ version = "0.1.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
+ "cortex-m-rtic",
  "cortex-m-semihosting",
  "panic-halt",
- "rtic",
  "stm32f0",
 ]
 
@@ -222,15 +242,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtic"
-version = "0.1.0-cortex-m"
-dependencies = [
- "cortex-m",
- "rtic-macro",
- "rtic-sw-pass",
-]
-
-[[package]]
 name = "rtic-core"
 version = "0.1.0"
 dependencies = [
@@ -241,17 +252,6 @@ dependencies = [
  "quote",
  "syn",
  "thiserror",
-]
-
-[[package]]
-name = "rtic-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rtic-core",
- "rtic-sw-pass",
- "syn",
 ]
 
 [[package]]

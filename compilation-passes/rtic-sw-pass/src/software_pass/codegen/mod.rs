@@ -4,10 +4,24 @@ use crate::SwPassBackend;
 use crate::software_pass::analyze::{Analysis, SubAnalysis};
 use crate::software_pass::parse::ast::SoftwareTask;
 use crate::software_pass::parse::{App, SWT_TRAIT_TY};
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use rtic_core::parse_utils::RticAttr;
-use syn::{ItemFn, ItemMod, LitInt, Path, parse_quote};
+use syn::{ItemMod, LitInt, Path, parse_quote};
+
+/// Compute the name of the core-local pend function for `core`.
+fn local_pend_fn_ident(core: u32, num_cores: usize) -> Ident {
+    if num_cores == 1 {
+        format_ident!("{SC_PEND_FN_NAME}")
+    } else {
+        format_ident!("{SC_PEND_FN_NAME}_core{core}")
+    }
+}
+
+/// Compute the name of the cross-core pend function for `core`.
+fn cross_pend_fn_ident(core: u32) -> Ident {
+    format_ident!("{MC_PEND_FN_NAME}_core{core}")
+}
 
 pub struct CodeGen<'a> {
     app: App,
@@ -27,8 +41,8 @@ impl<'a> CodeGen<'a> {
     pub fn run(&mut self) -> ItemMod {
         // For every sub-application, generate the software tasks and their dispatchers and associated queues and types.
         let sub_apps = self.generate_subapps();
-        let pend_fn_def = self.get_pend_fn();
-        let cross_pend_fn_def = self.get_cross_pend_fn();
+        let local_pend_fns = self.get_local_pend_fns();
+        let cross_pend_fns = self.get_cross_pend_fns();
         let rest_of_code = &self.app.rest_of_code;
         let software_task_trait = format_ident!("{SWT_TRAIT_TY}");
         let sw_task_trait_def = quote! {
@@ -52,41 +66,88 @@ impl<'a> CodeGen<'a> {
                 /// RTIC Software task trait
                 #sw_task_trait_def
                 /// Core local interrupt pending
-                #pend_fn_def
+                #local_pend_fns
                 // (optional) Cross Core interrupt pending
-                #cross_pend_fn_def
+                #cross_pend_fns
             }
         }
     }
 
-    fn get_pend_fn(&self) -> ItemFn {
-        let pend_fn_ident = format_ident!("{SC_PEND_FN_NAME}");
-        let pend_fn_empty = parse_quote! {
-            #[doc(hidden)]
-            #[inline]
-            pub fn #pend_fn_ident<I: rtic::export::InterruptNumber>(irq_nbr : I) {
-                // To be implemented by distributor
-                // example:
-                // NVIC::pend( irq );
-            }
-        };
-        self.backend.generate_local_pend_fn(pend_fn_empty)
+    /// Compute the interrupt type path for the dispatcher on a given core.
+    ///
+    /// Uses the backend's `custom_interrupt_path` if provided, otherwise falls
+    /// back to `pac[core]::Interrupt`.
+    fn get_interrupt_path(&self, core: u32) -> Path {
+        let pac = &self.app.app_params.pacs[core as usize];
+        self.backend
+            .custom_interrupt_path(core)
+            .unwrap_or_else(|| parse_quote!(#pac::Interrupt))
     }
 
-    fn get_cross_pend_fn(&self) -> Option<ItemFn> {
-        let pend_fn_ident = format_ident!("{MC_PEND_FN_NAME}");
-        let pend_fn_empty = parse_quote! {
-            #[doc(hidden)]
-            #[inline]
-            pub fn #pend_fn_ident<I: rtic::export::InterruptNumber>(irq_nbr : I, core: u32) { // TODO: this function should return a result, as pending can fail in multicore !
-                // To be implemented by distributor
-                // How do you pend an interrupt on the other core ?
-            }
-        };
-        self.backend.generate_cross_pend_fn(pend_fn_empty)
+    /// Generate the core-local interrupt-pending functions.
+    ///
+    /// One function is generated per core.  In single-core apps the function
+    /// keeps the historical name `__rtic_local_irq_pend`; for multi-core apps
+    /// the core index is appended (`__rtic_local_irq_pend_core{N}`).
+    fn get_local_pend_fns(&self) -> TokenStream {
+        let num_cores = self.app.sub_apps.len();
+        let fns: Vec<TokenStream> = self
+            .app
+            .sub_apps
+            .iter()
+            .map(|sub_app| {
+                let core = sub_app.core;
+                let interrupt_ty = self.get_interrupt_path(core);
+                let fn_ident = local_pend_fn_ident(core, num_cores);
+                let empty_body_fn = parse_quote! {
+                    #[doc(hidden)]
+                    #[inline]
+                    pub fn #fn_ident(irq_nbr: #interrupt_ty) {
+                        // To be implemented by distributor
+                        // example:
+                        // NVIC::pend( irq );
+                    }
+                };
+                let fn_def = self.backend.generate_local_pend_fn(core, empty_body_fn);
+                quote!(#fn_def)
+            })
+            .collect();
+        quote!(#(#fns)*)
+    }
+
+    /// Generate the cross-core interrupt-pending functions.
+    ///
+    /// One function is generated per *target* core that actually has cross-core
+    /// tasks.  The function name includes the target core index.
+    fn get_cross_pend_fns(&self) -> TokenStream {
+        let fns: Vec<TokenStream> = self
+            .app
+            .sub_apps
+            .iter()
+            .filter(|sub_app| !sub_app.mc_sw_tasks.is_empty())
+            .filter_map(|sub_app| {
+                let core = sub_app.core;
+                let interrupt_ty = self.get_interrupt_path(core);
+                let fn_ident = cross_pend_fn_ident(core);
+                let empty_body_fn = parse_quote! {
+                    #[doc(hidden)]
+                    #[inline]
+                    pub fn #fn_ident(irq_nbr: #interrupt_ty) { // TODO: this function should return a result, as pending can fail in multicore !
+                        // To be implemented by distributor
+                        // How do you pend an interrupt on the other core ?
+                    }
+                };
+                self.backend
+                    .generate_cross_pend_fn(core, empty_body_fn)
+                    .map(|fn_def| quote!(#fn_def))
+            })
+            .collect();
+        quote!(#(#fns)*)
     }
 
     fn generate_subapps(&mut self) -> TokenStream {
+        let num_cores = self.app.sub_apps.len();
+        let queue_path = self.backend.queue_path();
         let apps = self.app.sub_apps.iter_mut();
         let analysis = self.analysis.sub_analysis.iter();
 
@@ -127,7 +188,8 @@ impl<'a> CodeGen<'a> {
                     .dispatcher_priority_map
                     .get(&task.params.priority)
                     .unwrap(); // safe to unwrap
-                let spawn_impl = task.generate_spawn_api(dispatcher, pac, self.backend);
+                let spawn_impl =
+                    task.generate_spawn_api(dispatcher, pac, self.backend, num_cores, &queue_path);
 
                 quote! {
                     #reconstructed_task_attr
@@ -138,7 +200,7 @@ impl<'a> CodeGen<'a> {
             });
 
             // generate dispatchers as hardware tasks
-            let dispatcher_tasks = generate_dispatcher_tasks(sub_analysis);
+            let dispatcher_tasks = generate_dispatcher_tasks(sub_analysis, &queue_path);
             let core_doc = format!(" Core {}", sub_app.core);
             quote! {
                 #[doc = " Software tasks of"]
@@ -161,7 +223,7 @@ impl<'a> CodeGen<'a> {
 /// - an enum type for each group of tasks of the same priority
 /// - a ready queue for each group of tasks of the same priority
 /// - A dispatcher hw task for each priority level
-fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis) -> TokenStream {
+fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis, queue_path: &Path) -> TokenStream {
     let core = sub_analysis.core;
     let dispatchers = &sub_analysis.dispatcher_priority_map;
     let dispatcher_tasks = sub_analysis.tasks_priority_map.iter().map(|(prio, tasks)| {
@@ -198,7 +260,7 @@ fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis) -> TokenStream {
 
             #[doc(hidden)]
             #[allow(non_upper_case_globals)]
-            static mut #ready_queue_name: rtic::export::Queue<#prio_ty, #ready_queue_size> = rtic::export::Queue::new();
+            static mut #ready_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
 
             #[doc(hidden)]
             #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr )]
@@ -239,6 +301,8 @@ impl SoftwareTask {
         dispatcher_irq_name: &Path,
         peripheral_crate: &Path,
         backend: &dyn SwPassBackend,
+        num_cores: usize,
+        queue_path: &Path,
     ) -> TokenStream {
         let task_name = self.name();
         let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
@@ -255,9 +319,9 @@ impl SoftwareTask {
 
         // spawn for core-local tasks
         if self.params.core == self.params.spawn_by {
-            let pend_fn = format_ident!("{SC_PEND_FN_NAME}");
+            let pend_fn = local_pend_fn_ident(self.params.core, num_cores);
             quote! {
-                static mut #task_inputs_queue: rtic::export::Queue<#inputs_ty, 2> = rtic::export::Queue::new();
+                static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
 
                 impl #task_name {
                     pub fn spawn(input : #inputs_ty) -> Result<(), #inputs_ty> {
@@ -280,10 +344,9 @@ impl SoftwareTask {
         // spawn for cross-core tasks
         else {
             let spawner_ty = utils::core_type(self.params.spawn_by);
-            let pend_fn = format_ident!("{MC_PEND_FN_NAME}");
-            let core = self.params.core;
+            let pend_fn = cross_pend_fn_ident(self.params.core);
             quote! {
-                static mut #task_inputs_queue: rtic::export::Queue<#inputs_ty, 2> = rtic::export::Queue::new();
+                static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
 
                 impl #task_name {
                     pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), #inputs_ty> {
@@ -296,7 +359,7 @@ impl SoftwareTask {
                             // enqueue task to ready queue
                             unsafe {ready_producer.enqueue_unchecked(#prio_ty::#task_name)};
                             // pend dispatcher
-                            #pend_fn(#interrupt_ty::#dispatcher_irq_name, #core);
+                            #pend_fn(#interrupt_ty::#dispatcher_irq_name);
                             Ok(())
                         })
                     }

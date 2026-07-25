@@ -62,7 +62,7 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rtic_local_irq_pend < I : rtic :: export :: InterruptNumber > (irq_nbr : I) {
+            pub fn __rtic_local_irq_pend (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
         },
@@ -186,7 +186,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rtic_local_irq_pend < I : rtic :: export :: InterruptNumber > (irq_nbr : I) {
+            pub fn __rtic_local_irq_pend_core0 (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
         },
@@ -195,8 +195,8 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rtic_cross_irq_pend < I : rtic :: export :: InterruptNumber > (irq_nbr : I , core : u32) {
-                mock_cross_pend (irq_nbr , core) ;
+            pub fn __rtic_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
+                mock_cross_pend (irq_nbr) ;
             }
         },
         "cross pend fn",
@@ -230,7 +230,7 @@ fn codegen_expands_multi_core_sw_app() {
                     __rtic_interrupt_free (| | -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Task0) } ;
-                        __rtic_local_irq_pend (mypac :: Interrupt :: IRQ0) ;
+                        __rtic_local_irq_pend_core0 (mypac :: Interrupt :: IRQ0) ;
                         Ok (())
                     })
                 }
@@ -303,7 +303,7 @@ fn codegen_expands_multi_core_sw_app() {
                     __rtic_interrupt_free (| | -> Result < () , < Cross as RticSwTask > :: SpawnInput > {
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core1Prio3Tasks :: Cross) } ;
-                        __rtic_cross_irq_pend (mypac :: Interrupt :: IRQ1 , 1u32) ;
+                        __rtic_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1) ;
                         Ok (())
                     })
                 }

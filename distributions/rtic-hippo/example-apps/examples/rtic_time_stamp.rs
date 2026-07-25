@@ -3,12 +3,11 @@
 use core::panic::PanicInfo;
 use hippomenes_rt as _;
 
-
-#[rtic::app(device = hippomenes_core)]
+#[rtic_hippo::app(device = hippomenes_core)]
 mod app {
+    use core::arch::asm;
     use core::fmt::Write;
     use hippomenes_core::UART;
-    use core::arch::asm;
 
     #[shared]
     struct Shared {
@@ -22,7 +21,7 @@ mod app {
         let mut uart = peripherals.uart;
         write!(uart, "init").ok();
         timer.write(0x400F); //timer interrupt every
-                             // 500*2^15 ~ 16M cycles ~0.75s @ 20MHz
+        // 500*2^15 ~ 16M cycles ~0.75s @ 20MHz
         Shared { uart }
     }
 
@@ -36,14 +35,16 @@ mod app {
 
         fn exec(&mut self) {
             let mut r: u32;
-            unsafe{ asm!("csrrs {0}, 0xB40, x0", out(reg) r); }
+            unsafe {
+                asm!("csrrs {0}, 0xB40, x0", out(reg) r);
+            }
             // csrr    t3, 0xB40               # read captured timestamp
             self.shared().uart.lock(|uart| {
                 write!(uart, "time {}", r);
                 // uart.write_byte(r);
                 // uart.write_byte(41);
 
-                // rtic::export::pend(hippomenes_core::Interrupt1);
+                // rtic_hippo::export::pend(hippomenes_core::Interrupt1);
 
                 // uart.write_byte(102);
                 // uart.write_byte(103);
@@ -63,7 +64,7 @@ mod app {
             self.shared().uart.lock(|uart| {
                 uart.write_byte(10);
                 uart.write_byte(0);
-                rtic::export::pend(hippomenes_core::Interrupt2);
+                rtic_hippo::export::pend(hippomenes_core::Interrupt2);
                 uart.write_byte(11);
             });
         }

@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use codegen::Codegen;
 use parse::App;
 use proc_macro2::TokenStream;
-use rtic_core::parse_utils::RticAttr;
 use rtic_core::RticPass;
+use rtic_core::parse_utils::RticAttr;
 use syn::ItemMod;
 
 pub const PCS_ATTR_IDENT: &str = "fast";
@@ -53,14 +53,14 @@ impl PcsPass {
             panic!(
                 "Exceeded number of interrupts leveraging PCS for this platform ({}), please reduce the number of accelerated tasks\nFast IRQs: {:?}\nOther IRQs: {:?}",
                 self.max_num_pcs,
-            pcs_irqs
-                .iter()
-                .map(|task| format!("{} ({})", task.name, task.binds))
-                .collect::<Vec<_>>(),
-            rest_irqs
-                .iter()
-                .map(|task| task.name.clone())
-                .collect::<Vec<_>>()
+                pcs_irqs
+                    .iter()
+                    .map(|task| format!("{} ({})", task.name, task.binds))
+                    .collect::<Vec<_>>(),
+                rest_irqs
+                    .iter()
+                    .map(|task| task.name.clone())
+                    .collect::<Vec<_>>()
             );
         }
 

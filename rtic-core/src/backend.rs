@@ -105,7 +105,7 @@ pub trait CorePassBackend {
     /// ## Reference
     ///
     /// * **Cortex-M (BASEPRI)**: delegates to
-    ///   `rtic::export::lock(resource_ref, CEILING as u8,
+    ///   `<distro>::export::lock(resource_ref, CEILING as u8,
     ///   PAC::NVIC_PRIO_BITS, f)`.
     /// * **Cortex-M (armv6m source-mask)**: same call, but the `Mask`
     ///   type and `NVIC_PRIO_BITS` come from the source-masking
@@ -180,7 +180,7 @@ pub trait CorePassBackend {
     /// You can return `Some(quote! { wfi(); })` to have the CPU sleep between
     /// interrupts (saves power).  Return `None` for an empty busy loop.
     ///
-    /// Reference: `cortex-m-rtic` emits `rtic::export::wfi()`.
+    /// Reference: `cortex-m-rtic` emits `cortex_m_rtic::export::wfi()`.
     fn populate_idle_loop(&self) -> Option<TokenStream2>;
 
     /// Body of the global critical-section function.

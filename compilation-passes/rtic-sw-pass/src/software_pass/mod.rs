@@ -41,16 +41,35 @@ impl RticPass for SoftwarePass {
 /// it to [`SoftwarePass::new`] to enable `spawn` and `spawn_from` for
 /// software tasks.
 pub trait SwPassBackend {
+    /// Path to the SPSC queue type used for ready queues and task inputs.
+    ///
+    /// The generated code uses this path as `#queue_path<T, N>` (type
+    /// position) and `#queue_path::new()` (expression position).  The
+    /// concrete type must support the same API as `rtic_spsc::Queue`:
+    /// a const `new()` constructor, `split()` into producer/consumer halves,
+    /// `enqueue` / `dequeue`, and `_unchecked` variants.
+    ///
+    /// Typical implementation for a distribution:
+    /// ```ignore
+    /// fn queue_path(&self) -> syn::Path {
+    ///     parse_quote!(rp2040_rtic::export::Queue)
+    /// }
+    /// ```
+    fn queue_path(&self) -> syn::Path;
+
     /// Body of the core-local interrupt-pending function.
     ///
-    /// The software pass generates an empty function and passes it to
-    /// this method.  The implementation must fill the body with code
-    /// that triggers (pends) the dispatcher interrupt on the local core.
-    /// The resulting function is called by `spawn()` at runtime.
+    /// The software pass generates an empty function for each core and
+    /// passes it to this method.  The implementation must fill the body
+    /// with code that triggers (pends) the dispatcher interrupt on the
+    /// local core.  The resulting function is called by `spawn()` at
+    /// runtime.
     ///
     /// # Contract
-    /// * The function takes a single argument `irq_nbr` (the interrupt
-    ///   number of the dispatcher).
+    /// * The function is generated per core; `core` is the core index.
+    /// * The generated function takes a single argument `irq_nbr` whose
+    ///   concrete type is the interrupt type for that core (see
+    ///   [`custom_interrupt_path`](SwPassBackend::custom_interrupt_path)).
     /// * Write to the pending bit of the corresponding NVIC (or equivalent)
     ///   register to trigger the interrupt.
     /// * Do NOT change the function signature.
@@ -60,23 +79,20 @@ pub trait SwPassBackend {
     /// * **Cortex-M**: write to NVIC ISPR register.
     /// * **RISC-V CLIC**: set the pending bit via `Clic::ip(irq).pend()`.
     /// * **RISC-V mintthresh**: use a software interrupt or ECLIC API.
-    ///
-    /// Reference: `cortex-m-rtic` uses `rtic::export::NVIC::pend(irq_nbr)`.
-    /// `rp2040-rtic` uses the same. `atalanta-rtic` uses
-    /// `rtic::export::pend(irq_nbr)`.
-    fn generate_local_pend_fn(&self, empty_body_fn: syn::ItemFn) -> syn::ItemFn;
+    fn generate_local_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn;
 
     /// Body of the cross-core interrupt-pending function.
     ///
-    /// The software pass generates an empty function and passes it to
-    /// this method.  The implementation must fill the body with code
-    /// that signals another core to run a software task that was spawned
-    /// remotely.  The resulting function is called by `spawn_from()` at
-    /// runtime.
+    /// The software pass generates an empty function for each target core
+    /// that has cross-core spawners and passes it to this method.  The
+    /// implementation must fill the body with code that signals the target
+    /// core to run a software task that was spawned remotely.  The resulting
+    /// function is called by `spawn_from()` at runtime.
     ///
     /// # Contract
-    /// * The function takes `irq_nbr` (dispatcher interrupt number) and
-    ///   `core` (target core index).
+    /// * `core` is the *target* core index (the core that owns the task).
+    /// * The generated function takes a single argument `irq_nbr` whose
+    ///   concrete type is the interrupt type for the target core.
     /// * Return `None` if your target is single-core (no cross-core
     ///   communication is needed).  `spawn_from` will not be available
     ///   to user code.
@@ -88,17 +104,17 @@ pub trait SwPassBackend {
     /// * **RP2040**: send the IRQ number through the SIO FIFO.
     /// * **Generic multicore**: use an IPI (inter-processor interrupt)
     ///   mechanism (e.g. mailbox, shared-memory + doorbell).
-    ///
-    /// Reference: `rp2040-rtic` writes `irq_nbr` to the SIO FIFO via
-    /// `rtic::export::cross_core::pend_irq(irq_nbr.number())`.
-    fn generate_cross_pend_fn(&self, empty_body_fn: syn::ItemFn) -> Option<syn::ItemFn>;
+    fn generate_cross_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> Option<syn::ItemFn>;
 
-    /// Custom path to the `Interrupt` enum type used for dispatchers.
+    /// Custom path to the interrupt type used for dispatchers on `core`.
     ///
-    /// Override this if your PAC's interrupt enum is not at the default
-    /// path `pac[core]::interrupt::Interrupt`.
+    /// The returned path must name a **type** whose enum variants or
+    /// associated constants match the dispatcher names listed in
+    /// `dispatchers = [...]`.  Generated code uses it both for the pend
+    /// function signature (`fn(irq_nbr: #ty)`) and at spawn call sites
+    /// (`#ty::IRQ0`).
     ///
-    /// Return `None` to use the default path.
+    /// Return `None` to use the default path `pac[core]::Interrupt`.
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         None
     }
