@@ -73,8 +73,8 @@ The attribute macro is **not** defined in `rticx-core`. Each distribution define
 ```rust
 pub struct RticMacroBuilder {
     core: Box<dyn CorePassBackend>,
-    pre_core_passes: Vec<Box<dyn RticPass>>,
-    post_core_passes: Vec<Box<dyn RticPass>>,
+    pre_std_passes: Vec<Box<dyn RticPass>>,
+    info_bus: InfoBus,
 }
 ```
 
@@ -82,20 +82,28 @@ Key methods:
 
 | Method | Purpose |
 |--------|---------|
-| `new<T: CorePassBackend>(core_impl: T)` | Create a builder with the target-specific backend. |
-| `bind_pre_core_pass<P: RticPass>(pass: P)` | Register a pass that runs before parsing and core codegen. |
-| `bind_post_core_pass<P: RticPass>(pass: P)` | Register a pass that runs after parsing and core codegen. |
+| `new<T: CorePassBackend + 'static>(core_impl: T)` | Create a builder with the target-specific backend. Owns a fresh `InfoBus`. |
+| `bind_pre_core_pass<P: RticPass + 'static>(pass: P)` | Register a pass that runs before parsing and core codegen. |
 | `build_rtic_macro(self, args, input) -> TokenStream` | Execute the full pipeline and return the expanded code. |
+| `build_rtic_macro2(self, args, app_mod) -> TokenStream2` | Same as `build_rtic_macro` but on `proc_macro2` types, for tests/tooling. |
+| `info_bus(&self) -> &InfoBus` | Read access to the builder's shared `InfoBus`. |
 
-Pipeline order inside `build_rtic_macro`:
+Pipeline order inside `build_rtic_macro2` (the proc-macro entry reuses it via `TokenStream` conversion):
 
 1. Reset `DEFAULT_TASK_PRIORITY` from the backend.
-2. Run `pre_core_passes` in insertion order.
-3. Parse the module with `App::parse(args, app_mod)`.
-4. Run `Analysis::run(&mut parsed_app)` for resource ceiling analysis.
-5. Call `CorePassBackend::pre_codegen_validation`.
-6. Run `CodeGen::new(core_backend, &parsed_app, &analysis).run()`.
-7. If the `debug_expand` feature is enabled, write the expanded code to `examples/{binary_name}_expanded.rs`.
+2. Call `core.subscribe(info_bus.clone())` — the target backend receives the `InfoBus` before anyone else.
+3. For each **pre-core pass** in insertion order:
+   1. Call `pass.subscribe(info_bus.clone())` (guaranteed to happen before the pass's other trait methods).
+   2. Call `pass.run_pass(args, app_mod) -> syn::Result<(TokenStream2, ItemMod)>`; on error, emit a compile error mentioning `pass.pass_name()`.
+4. Parse the module with `App::parse(args, app_mod)`.
+5. Publish the parsed app to the `InfoBus` under the key `rticx_core::App`.
+6. Run `Analysis::run(&mut parsed_app)` for resource ceiling analysis.
+7. Publish the analysis to the `InfoBus` under the key `rticx_core::Analysis`.
+8. Call `CorePassBackend::pre_codegen_validation`.
+9. Run `CodeGen::new(core_backend, &parsed_app, &analysis).run()`.
+10. If the `debug_expand` feature is enabled, write the expanded code to `examples/{binary_name}_expanded.rs`.
+
+> Note: there is no `bind_post_core_pass` anymore — only **pre-core** passes are supported. Passes that need to react after the core codegen must run as the last pre-core pass and inspect the `InfoBus` entries published by the core (e.g. `rticx_core::App`, `rticx_core::Analysis`).
 
 ### The `RticPass` trait
 
@@ -103,11 +111,23 @@ Every compilation pass implements `RticPass` (in `rticx-core/src/lib.rs`):
 
 ```rust
 pub trait RticPass {
-    fn run(&self, args: TokenStream, app_mod: ItemMod) -> (TokenStream, ItemMod);
+    /// Subscribe to the information bus. Guaranteed to be called before
+    /// any other method in this trait.
+    fn subscribe(&mut self, info_bus: InfoBus);
+
+    /// Runs the (partial) proc-macro logic that extends the basic RTIC syntax.
+    fn run_pass(
+        &self,
+        args: TokenStream2,
+        app_mod: ItemMod,
+    ) -> syn::Result<(TokenStream2, ItemMod)>;
+
+    /// Human-readable name/alias used to identify the pass in errors.
+    fn pass_name(&self) -> &str;
 }
 ```
 
-Passes receive the macro arguments and the annotated module, and return transformed versions. They are pure syntax-to-syntax transformations.
+Passes receive the macro arguments and the annotated module, and return transformed versions. They are pure syntax-to-syntax transformations. `subscribe` is the only place where a pass can obtain a (clonable) handle to the shared `InfoBus`.
 
 ### `CorePassBackend`
 
@@ -125,6 +145,7 @@ Notable methods:
 | `populate_idle_loop()` | Custom body for the default idle loop. |
 | `generate_interrupt_free_fn(...)` | Implements the global critical-section function. |
 | `pre_codegen_validation(...)` | Target-specific validation before codegen. |
+| `subscribe(&mut self, _info_bus: InfoBus)` | Default no-op. Called once before any other method, giving the backend a handle to the shared `InfoBus`. |
 | `default_task_priority() -> u16` | Fallback priority when the user omits one. |
 | `entry_attrs() -> Vec<Attribute>` | Attributes injected onto entry points (e.g., `#[riscv_rt::entry]`). |
 | `task_attrs() -> Vec<Attribute>` | Attributes injected onto task interrupt handlers. |
@@ -146,6 +167,35 @@ Default method:
 | Method | Purpose |
 |--------|---------|
 | `custom_interrupt_path(&self, core: u32) -> Option<syn::Path>` | Path to the concrete dispatcher interrupt type. Defaults to `pac[core]::Interrupt`; return a custom path if the PAC's enum is not at the default location or if the target exposes interrupts differently (e.g. an enum re-export or module). |
+| `subscribe(&mut self, _info_bus: InfoBus)` | Default no-op. Called once before any other method. Passes that wrap a backend forward the bus: `SoftwarePass::subscribe` clones the `InfoBus`, stores it, and calls `self.backend.subscribe(info_bus)`. |
+
+### `InfoBus`
+
+`InfoBus` (in `rticx-core/src/info_bus.rs`, re-exported from `rticx-core`) is the shared information bus that lets compilation passes and backends exchange typed data during a single macro expansion. The `RticMacroBuilder` owns the bus and hands clones to the core backend and each pre-core pass via their `subscribe` methods (see the pipeline above).
+
+```rust
+#[derive(Clone)]
+pub struct InfoBus {
+    infos: Arc<Mutex<HashMap<String, Rc<dyn Any>>>>,
+}
+```
+
+Key API:
+
+| Method | Purpose |
+|--------|---------|
+| `InfoBus::new()` | `pub(crate)` — only `RticMacroBuilder` can construct a bus. |
+| `publish<T: Any>(&self, entry: impl ToString, value: T) -> Result<(), errors::Error>` | Store a typed value under a string key. Returns `EntryOccupied` if the key already exists (entries are write-once). |
+| `get<T: 'static>(&self, entry: &str) -> Result<Rc<T>, errors::Error>` | Retrieve and downcast a value. Returns `EntryNotFound` if missing or `InvalidTargetType` if the stored type does not match `T`. |
+
+Conventions:
+
+- `InfoBus` is `Clone` — every clone shares the same underlying `Arc`, so a value published through one handle is visible to all clones.
+- Entry keys are **namespaced by the publishing crate and the type name**: `crate_name::TypeName`. The core pass publishes `rticx_core::App` and `rticx_core::Analysis`; the software-tasks pass publishes `rticx_sw_pass::App` and `rticx_sw_pass::Analysis` (exported as the constants `INFO_APP` / `INFO_ANALYSIS`).
+- Entries are **write-once**: a second `publish` to an existing key is an error. This stops passes from silently overwriting each other's data.
+- Subscribe ordering matters: the core backend is subscribed first, then each pre-core pass in insertion order, **before** its `run_pass` is invoked. So a later pass can `get` entries published by an earlier pass (or by the core, if it ran last), but the reverse is not true.
+
+Error variants live in `rticx-core/src/errors.rs`: `EntryOccupied`, `EntryNotFound`, `InvalidTargetType`.
 
 ### Syntax attributes
 
@@ -263,12 +313,23 @@ If a documentation generation script exists in the root, run it with:
 2. Implement the `RticPass` trait from `rticx-core`:
    ```rust
    impl RticPass for YourPass {
-       fn run(&self, args: TokenStream, app_mod: ItemMod) -> (TokenStream, ItemMod) {
-           // transform and return
+       fn subscribe(&mut self, info_bus: InfoBus) {
+           // store a clone if you need to publish/read data later
        }
+
+       fn run_pass(
+           &self,
+           args: TokenStream2,
+           app_mod: ItemMod,
+       ) -> syn::Result<(TokenStream2, ItemMod)> {
+           // transform and return
+           Ok((args, app_mod))
+       }
+
+       fn pass_name(&self) -> &str { "your-pass" }
    }
    ```
-3. Decide whether the pass must run before the core pass (syntax transformation) or after the core pass (codegen augmentation). Register it with `bind_pre_core_pass` or `bind_post_core_pass` in the distribution macro crate.
+3. Passes are registered as **pre-core** passes with `bind_pre_core_pass` in the distribution macro crate. (There is no post-core pass registration anymore — see the `InfoBus` subsection for how to react to core-published data.)
 4. If the pass needs target-specific hooks, define a new backend trait and implement it in the distributions that use the pass.
 5. Add a feature flag in the distribution crate and gate the pass registration.
 
@@ -292,4 +353,4 @@ If a documentation generation script exists in the root, run it with:
 
 ---
 
-*Last oriented: 2026-07-25*
+*Last oriented: 2026-07-26*

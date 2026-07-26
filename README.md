@@ -1,6 +1,6 @@
 # RTICX: eXtensible Realtime Interrupt Driven Concurrency Framework
 
-This repository contains a from scratch rewrite of the original RTIC framework. The goal is to make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore). The main idea is to separate the generic proc-macro logic from target-specific details and by allowing new language features to be added as external, reusable compilation passes.
+This repository contains a from scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic). The goal is to make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore). The main idea is to separate the generic proc-macro logic from target-specific details and by allowing new language features to be added as external, reusable compilation passes.
 
 The result is a small core framework (`rticx-core`) plus a growing ecosystem of **compilation passes** and **distributions**:
 
