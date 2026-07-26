@@ -137,5 +137,3 @@ pub fn enable(int: Interrupt, prio: u8, cpu_int_id: u8) {
             .modify(|r, w| w.bits((1 << cpu_int_id) | r.bits()));
     }
 }
-
-

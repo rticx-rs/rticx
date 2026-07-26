@@ -3,7 +3,7 @@
 // and define a small `interrupt` shim mirroring the cortex-m layout.
 //
 // Upstream: `upstream/exports/slic.rs`.
-pub use riscv_slic::{self, codegen, lock, pend, run, set_priority, InterruptNumber};
+pub use riscv_slic::{self, InterruptNumber, codegen, lock, pend, run, set_priority};
 
 pub mod interrupt {
     #[inline]

@@ -6,7 +6,7 @@ use rticx_auto_assign::AutoAssignPass;
 use rticx_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
 use syn::Path;
-use syn::{parse_quote, ItemFn};
+use syn::{ItemFn, parse_quote};
 
 extern crate proc_macro;
 

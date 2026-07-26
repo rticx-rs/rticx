@@ -272,4 +272,8 @@ pub trait CorePassBackend {
     fn task_attrs(&self) -> Vec<syn::Attribute> {
         vec![]
     }
+
+    /// Subscribe to info_bus
+    /// This method is guaranteed to be called before any other methods in this trait.
+    fn subscribe(&mut self, _info_bus: InfoBus) {}
 }

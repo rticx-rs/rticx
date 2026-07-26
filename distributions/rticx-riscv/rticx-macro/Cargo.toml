@@ -37,3 +37,6 @@ swtasks = []
 slic = []
 esp32c3 = []
 esp32c6 = []
+
+mecall-backend = ["slic"]
+clint-backend = ["slic"]

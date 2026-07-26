@@ -2,12 +2,15 @@ pub mod analyze;
 mod codegen;
 pub mod parse;
 
-use crate::parse::App;
+pub use crate::parse::App;
 use crate::software_pass::codegen::CodeGen;
-use analyze::Analysis;
+pub use analyze::Analysis;
 use proc_macro2::TokenStream;
 use rticx_core::{InfoBus, RticPass};
 use syn::ItemMod;
+
+pub static INFO_APP: &str = "rticx_sw_pass::App";
+pub static INFO_ANALYSIS: &str = "rticx_sw_pass::Analysis";
 
 pub struct SoftwarePass {
     backend: Box<dyn SwPassBackend>,
@@ -25,7 +28,8 @@ impl SoftwarePass {
 
 impl RticPass for SoftwarePass {
     fn subscribe(&mut self, info_bus: InfoBus) {
-        let _ = self.info_bus.insert(info_bus);
+        let _ = self.info_bus.insert(info_bus.clone());
+        self.backend.subscribe(info_bus);
     }
 
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
@@ -34,10 +38,10 @@ impl RticPass for SoftwarePass {
         let code = CodeGen::new(parsed.clone(), analysis.clone(), self.backend.as_ref()).run();
         // publish info
         self.info_bus.as_ref().inspect(|b| {
-            b.publish("rticx_sw_pass::App", parsed)
-                .expect("no other crate is allowed to publish `rticx_sw_pass::App`");
-            b.publish("rticx_sw_pass::Analysis", analysis)
-                .expect("no other crate is allowed to publish `rticx_sw_pass::Analysis`")
+            b.publish(INFO_APP, parsed)
+                .unwrap_or_else(|_| panic!("no other crate is allowed to publish {INFO_APP}"));
+            b.publish(INFO_ANALYSIS, analysis)
+                .unwrap_or_else(|_| panic!("no other crate is allowed to publish {INFO_ANALYSIS}"))
         });
         Ok((args, code))
     }
@@ -131,4 +135,8 @@ pub trait SwPassBackend {
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         None
     }
+
+    /// Subscribe to info_bus
+    /// This method is guaranteed to be called before any other methods in this trait.
+    fn subscribe(&mut self, _info_bus: InfoBus) {}
 }

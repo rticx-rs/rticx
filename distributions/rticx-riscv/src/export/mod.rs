@@ -1,11 +1,9 @@
 #![allow(clippy::inline_always)]
-///! Re-exports required by the core pass and the software-tasks pass, and by the
-///! backend trait bindings generated code. 
-///! The contents depend on the selected target backend (`slic` / `esp32c3` / `esp32c6`),
-///! controlled by the parent crate's feature flags. The bindings below are adapted from the upstream RTIC RISC-V
-///! backends under `upstream/exports/` of this repository.
-
-
+//! Re-exports required by the core pass and the software-tasks pass, and by the
+//! backend trait bindings generated code.
+//! The contents depend on the selected target backend (`slic` / `esp32c3` / `esp32c6`),
+//! controlled by the parent crate's feature flags. The bindings below are adapted from the upstream RTIC RISC-V
+//! backends under `upstream/exports/` of this repository.
 // Distribution crate must re-export the `export` module from all the used
 // compilation passes. This brings in `rticx_spsc::Queue` used for ready
 // queues and task inputs by the software-tasks pass.

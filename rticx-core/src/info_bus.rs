@@ -7,6 +7,7 @@ use std::{
 
 use crate::errors;
 
+/// A shared bus where compilation passes and backends can publish and get information from.
 #[derive(Clone)]
 pub struct InfoBus {
     infos: Arc<Mutex<HashMap<String, Rc<dyn Any>>>>,

@@ -21,7 +21,7 @@ rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-p
 
 # Generic RISC-V SLIC backend (`slic` feature)
 riscv = { version = "0.16", optional = true }
-riscv-slic = { version = "0.2", optional = true, default-features = false, features = ["clint-backend"] }
+riscv-slic = { version = "0.2", optional = true, default-features = false }
 
 # Espressif ESP32-C3 PAC (`esp32c3` feature)
 esp32c3 = { version = "0.32", optional = true, default-features = false, features = [
@@ -51,10 +51,17 @@ swtasks = ["rticx-riscv-macro/swtasks"]
 # Generic RISC-V target using the SLIC (Software-Level Interrupt Controller)
 # abstraction provided by the `riscv-slic` crate. Works with any PAC that
 # exposes a CLINT/PLIC/ECLIC-compatible interrupt interface.
-slic = [
-    "dep:riscv",
-    "dep:riscv-slic",
-    "rticx-riscv-macro/slic",
+slic = ["dep:riscv", "dep:riscv-slic", "rticx-riscv-macro/slic"]
+
+mecall-backend = [
+    "slic",
+    "rticx-riscv-macro/mecall-backend",
+    "riscv-slic/mecall-backend",
+]
+clint-backend = [
+    "slic",
+    "rticx-riscv-macro/clint-backend",
+    "riscv-slic/clint-backend",
 ]
 
 # Espressif ESP32-C3 (RISC-V RV32IMC). Uses `INTERRUPT_CORE0::cpu_int_thresh`

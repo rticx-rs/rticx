@@ -62,7 +62,6 @@ pub trait RticPass {
 pub struct RticMacroBuilder {
     core: Box<dyn CorePassBackend>,
     pre_std_passes: Vec<Box<dyn RticPass>>,
-    post_std_passes: Vec<Box<dyn RticPass>>,
     info_bus: InfoBus,
 }
 
@@ -71,7 +70,6 @@ impl RticMacroBuilder {
         Self {
             core: Box::new(core_impl),
             pre_std_passes: Vec::new(),
-            post_std_passes: Vec::new(),
             info_bus: InfoBus::new(),
         }
     }
@@ -79,12 +77,6 @@ impl RticMacroBuilder {
     /// Binds a **Compilation Pass** that will run before the **Core Pass**
     pub fn bind_pre_core_pass<P: RticPass + 'static>(&mut self, pass: P) -> &mut Self {
         self.pre_std_passes.push(Box::new(pass));
-        self
-    }
-
-    /// Binds a **Compilation Pass** that will run after the **Core Pass**
-    pub fn bind_post_core_pass<P: RticPass + 'static>(&mut self, pass: P) -> &mut Self {
-        self.post_std_passes.push(Box::new(pass));
         self
     }
 
@@ -103,7 +95,9 @@ impl RticMacroBuilder {
     ///
     /// This method is exposed so that tests and downstream tooling can drive the core pipeline
     /// without needing a proc-macro context.
-    pub fn build_rtic_macro2(self, args: TokenStream2, app_mod: ItemMod) -> TokenStream2 {
+    pub fn build_rtic_macro2(mut self, args: TokenStream2, app_mod: ItemMod) -> TokenStream2 {
+        self.core.subscribe(self.info_bus.clone());
+
         // init statics
         DEFAULT_TASK_PRIORITY.store(self.core.default_task_priority(), Ordering::Relaxed);
 
@@ -111,23 +105,8 @@ impl RticMacroBuilder {
         let mut app_mod = app_mod;
 
         // First, run pre-core passes (in the order of their insertion)
-        for pass in self.pre_std_passes {
-            let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
-                Ok(out) => out,
-                Err(e) => {
-                    eprintln!(
-                        "An error occurred during the `{}` compilation pass",
-                        pass.pass_name()
-                    );
-                    return e.to_compile_error();
-                }
-            };
-            app_mod = out_mod;
-            args = out_args;
-        }
-
-        // Run post-core passes (in the order of their insertion) before the core pass takes over.
-        for pass in self.post_std_passes {
+        for mut pass in self.pre_std_passes {
+            (*pass).subscribe(self.info_bus.clone());
             let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
                 Ok(out) => out,
                 Err(e) => {

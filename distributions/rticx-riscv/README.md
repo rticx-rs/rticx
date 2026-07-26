@@ -20,7 +20,7 @@ or more than one produces a compile error.
 | Feature    | Default | Description                                             |
 |------------|---------|---------------------------------------------------------|
 | `swtasks`  | yes     | Enable the software-tasks compilation pass (`rticx-sw-pass`). Provides `spawn()` / `spawn_dispatch()` APIs. Disable with `default-features = false` for a hardware-task-only distribution. |
-| `slic`     | no      | Generic RISC-V target using the SLIC interrupt controller abstraction. Requires the user to call `riscv_slic::codegen!()` in their crate to generate the interrupt vector. |
+| `slic` + `mecall-backend` or `clint-backend`    | no      | Generic RISC-V target using the SLIC interrupt controller abstraction. Requires the user to call `riscv_slic::codegen!()` in their crate to generate the interrupt vector. |
 | `esp32c3`  | no      | Espressif ESP32-C3. Uses `FROM_CPU_INTR{0..3}` as dispatcher software interrupts. |
 | `esp32c6`  | no      | Espressif ESP32-C6 (machine-mode). Uses `FROM_CPU_INTR{0..3}` as dispatcher software interrupts. |
 
@@ -37,65 +37,11 @@ The distribution binds the following compilation passes into the macro pipeline:
 ## Usage
 
 ### Generic SLIC target
-
-```toml
-[dependencies]
-rticx-riscv = { version = "0.1", default-features = false, features = ["slic", "swtasks"] }
-riscv-slic = "0.2"
-```
-
-```rust
-#[rticx_riscv::app(device = my_pac)]
-mod app {
-    #[sw_task(priority = 1)]
-    #[shared]
-    struct MyShared { /* ... */ }
-
-    #[init]
-    fn init(_cx: init::Context) -> Shared { /* ... */ }
-
-    #[sw_task]
-    fn worker(_cx: worker::Context) { /* ... */ }
-}
-
-// Must be called in the user crate to generate the SLIC interrupt vector:
-riscv_slic::codegen!(
-    slic = riscv_slic,
-    pac = my_pac,
-    swi = [SoftwareInterrupt0]
-);
-```
-
+TBA
 ### ESP32-C3
-
-```toml
-[dependencies]
-rticx-riscv = { version = "0.1", default-features = false, features = ["esp32c3", "swtasks"] }
-```
-
-```rust
-#[rticx_riscv::app(device = esp32c3)]
-mod app {
-    #[sw_task(priority = 2)]
-    #[shared]
-    struct Shared { counter: u32 }
-
-    #[init]
-    fn init(_cx: init::Context) -> Shared { Shared { counter: 0 } }
-
-    #[sw_task]
-    fn worker(_cx: worker::Context) { /* ... */ }
-}
-```
-
+TBA
 ### ESP32-C6
-
-```toml
-[dependencies]
-rticx-riscv = { version = "0.1", default-features = false, features = ["esp32c6", "swtasks"] }
-```
-
-Same structure as ESP32-C3; swap the feature and `device` argument.
+TBA
 
 ## License
 

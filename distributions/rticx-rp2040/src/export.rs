@@ -8,11 +8,11 @@ pub use rticx_sw_pass::export::*;
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 
 pub use cortex_m::{
+    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
-    Peripherals,
+    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
 };
 /// re-exports needed from the code generation in internal rticx-rp2040-macro crate
 pub use rp2040_hal::multicore::{Multicore, Stack};
