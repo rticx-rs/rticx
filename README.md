@@ -27,6 +27,7 @@ This repository maintains the core framework and a set of reference distribution
 | `compilation-passes/rticx-auto-assign/` | `rticx-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
 | `compilation-passes/rticx-deadline-pass/` | `rticx-deadline-pass` | Converts `deadline = D` attributes into RTICX priorities. |
 | `distributions/rticx-cortex-m/` | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) distribution. |
+|  `distributions/rticx-riscv/` | `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 |
 | `distributions/rticx-rp2040/` | `rticx-rp2040` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |
 | `distributions/rticx-stm32-renode/` | `rticx-stm32-renode` | Renode-simulated multicore STM32F1C3-like distribution. |
 | `distributions/rticx-hippo/` | `rticx-hippo` | Single-core RISC-V Hippomenes MCU distribution. |
@@ -38,6 +39,7 @@ This repository maintains the core framework and a set of reference distribution
 | Distribution | Target | Features |
 |--------------|--------|----------|
 | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) | `swtasks` (default), `armv6m` — runnable under QEMU |
+| `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | See README.md of the distro |
 | `rticx-rp2040` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | `autoassign`, `swtasks` |
 | `rticx-stm32-renode` | Renode-simulated multicore STM32F1C3-like | N/A |
 | `rticx-hippo` | Single-core RISC-V Hippomenes MCU | `deadline-pass` |

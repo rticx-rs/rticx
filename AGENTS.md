@@ -50,6 +50,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | `rticx-stm32-renode` | `distributions/rticx-stm32-renode/` | Renode-simulated multicore STM32F1C3-like | Multi-binary. |
 | `rticx-hippo` | `distributions/rticx-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
 | `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default. |
+| `rticx-riscv` | `distributions/rticx-riscv/` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | See README.md of the distro |
 | `rticx-atalanta` | `distributions/rticx-atalanta/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
 | `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | N/A |
 

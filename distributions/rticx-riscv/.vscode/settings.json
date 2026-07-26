@@ -1,0 +1,7 @@
+{
+    "rust-analyzer.cargo.features": [
+        // "slic",
+        // "esp32c3",
+        "esp32c6",
+    ]
+}

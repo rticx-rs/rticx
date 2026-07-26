@@ -3,7 +3,7 @@ name = "rticx-riscv"
 version = "0.1.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
-description = "RTICX distribution for generic RISC-V targets"
+description = "RTICX distribution for single-core RISC-V targets (generic SLIC, ESP32-C3, ESP32-C6)"
 license = "MIT"
 repository = "https://github.com/rticx-rs/rticx"
 homepage = "https://github.com/rticx-rs/rticx/wiki"
@@ -19,6 +19,60 @@ bench = false
 rticx-riscv-macro = { version = "0.1.0", path = "rticx-macro" }
 rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
 
+# Generic RISC-V SLIC backend (`slic` feature)
+riscv = { version = "0.16", optional = true }
+riscv-slic = { version = "0.2", optional = true, default-features = false, features = ["clint-backend"] }
+
+# Espressif ESP32-C3 PAC (`esp32c3` feature)
+esp32c3 = { version = "0.32", optional = true, default-features = false, features = [
+    "critical-section",
+] }
+
+# Espressif ESP32-C6 PAC (`esp32c6` feature)
+esp32c6 = { version = "0.23", optional = true, default-features = false, features = [
+    "critical-section",
+] }
+
+# Cross-platform critical section, used by the ESP lock fallback at max priority.
+critical-section = { version = "1.2", optional = true }
+
 [features]
 default = ["swtasks"]
+
+# Enable software tasks (spawn / spawn_dispatch). On by default.
 swtasks = ["rticx-riscv-macro/swtasks"]
+
+# --- Mutually exclusive target selectors -------------------------------------
+# Exactly one of the following three features must be enabled at build time.
+# Selecting more than one is a user error: the distribution routes through the
+# backend matching the first enabled feature in the order `slic`, `esp32c3`,
+# `esp32c6`, and a `compile_error!` is emitted when none is enabled.
+
+# Generic RISC-V target using the SLIC (Software-Level Interrupt Controller)
+# abstraction provided by the `riscv-slic` crate. Works with any PAC that
+# exposes a CLINT/PLIC/ECLIC-compatible interrupt interface.
+slic = [
+    "dep:riscv",
+    "dep:riscv-slic",
+    "rticx-riscv-macro/slic",
+]
+
+# Espressif ESP32-C3 (RISC-V RV32IMC). Uses `INTERRUPT_CORE0::cpu_int_thresh`
+# for the priority threshold and `SYSTEM::cpu_intr_from_cpu{0..3}` as
+# dispatcher software interrupts.
+esp32c3 = [
+    "dep:riscv",
+    "dep:esp32c3",
+    "dep:critical-section",
+    "rticx-riscv-macro/esp32c3",
+]
+
+# Espressif ESP32-C6 (RISC-V RV32IMAC). Uses `PLIC_MX::mxint_thresh` for the
+# priority threshold and `INTPRI::cpu_intr_from_cpu{0..3}` as dispatcher
+# software interrupts.
+esp32c6 = [
+    "dep:riscv",
+    "dep:esp32c6",
+    "dep:critical-section",
+    "rticx-riscv-macro/esp32c6",
+]

@@ -24,4 +24,16 @@ rticx-sw-pass = { version = "0.1.0", path = "../../../compilation-passes/rticx-s
 ] }
 
 [features]
+default = ["swtasks"]
+
+# Enable software tasks pass (spawn / spawn_dispatch).
 swtasks = []
+
+# --- Target selector features (mirror the parent `rticx-riscv` crate) ---------
+# These are pure cfg gates used by the proc-macro to pick the right
+# `CorePassBackend` + `SwPassBackend` implementation. They carry no
+# dependencies of their own: the actual runtime dependencies live in the
+# library crate.
+slic = []
+esp32c3 = []
+esp32c6 = []
