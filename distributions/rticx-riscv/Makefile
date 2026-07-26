@@ -1,6 +1,5 @@
 .PHONY: all ci fmt fmt-check clippy examples
 
-export RUSTFLAGS := -Dwarnings
 
 all: fmt-check clippy examples
 
@@ -13,11 +12,12 @@ fmt-check:
 	cargo fmt --all --check
 
 clippy:
-	cargo clippy --features "slic","mecall-backend"
-	cargo clippy --features "slic","clint-backend"
-	cargo clippy --features "esp32c3"
-	cargo clippy --features "esp32c6"
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "slic","mecall-backend"
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "slic","clint-backend"
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c3"
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c6"
 
 examples:
-# 	cargo build --examples
+	make -C examples/slic-examples
+	make -C examples/esp32c3-examples
 

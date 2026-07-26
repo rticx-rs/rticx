@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 
-use syn::{parse_quote, ItemFn, Path};
 use rticx_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
+use syn::{parse_quote, ItemFn, Path};
 
 extern crate proc_macro;
 
@@ -121,7 +121,7 @@ impl CorePassBackend for HippoRtic {
     /// Customize how the task is dispatched when its bound interrupt is triggered (save baspri before and restore after executing the task)
     fn wrap_task_execution(
         &self,
-        _task_prio: u16,
+        _task: &rticx_core::RticTask,
         _dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
         None

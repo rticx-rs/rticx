@@ -1,0 +1,26 @@
+[package]
+name = "rticx_riscv_example_esp32c3"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[example]]
+name = "hello_rtic"
+path = "examples/hello_rtic.rs"
+
+[dependencies]
+
+rticx-riscv = { path = "../../", default-features = false, features = ["esp32c3", "swtasks"] }
+esp-backtrace = { version = "0.19.0", features = [
+    "esp32c3",
+    "panic-handler",
+    "println",
+] }
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32c3"] } # TODO: update to 0.5.0
+esp-hal = { version = "=1.0.0-rc.0", features = ["esp32c3", "unstable"] } # TODO: udpate to 1.1.2
+esp-println = { version = "0.17.0", features = ["esp32c3"] }
+esp32c3 = { version = "0.32.2", features = ["critical-section"] }
+riscv-semihosting = "0.2.1"
+
+[profile.release]
+opt-level = "s"

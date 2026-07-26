@@ -185,7 +185,7 @@ impl CorePassBackend for Rp2040Rtic {
 
     fn wrap_task_execution(
         &self,
-        _task_prio: u16,
+        _task: &rticx_core::RticTask,
         _dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
         None

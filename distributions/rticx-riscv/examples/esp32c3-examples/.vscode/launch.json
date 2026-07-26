@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Rust in QEMU",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/riscv32imc-unknown-none-elf/debug/examples/expanded",
+      "MIMode": "gdb",
+      "miDebuggerPath": "riscv32-elf-gdb",
+      "miDebuggerServerAddress": "localhost:1234",
+      "stopAtEntry": true,
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Run QEMU with GDB",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ]
+}

@@ -13,8 +13,10 @@ pub use common_internal::rticx_traits;
 pub use analysis::{Analysis, SubAnalysis};
 pub use backend::CorePassBackend;
 use codegen::CodeGen;
-pub use parser::ast::AppArgs;
-pub use parser::{App, SubApp};
+pub use parser::{
+    App, SubApp,
+    ast::{AppArgs, RticTask},
+};
 
 pub use crate::info_bus::InfoBus;
 

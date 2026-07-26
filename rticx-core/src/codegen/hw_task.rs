@@ -75,16 +75,16 @@ impl HardwareTask {
         &self,
         implementation: &dyn CorePassBackend,
     ) -> Option<TokenStream2> {
-        let task_attrs = implementation.task_attrs();
         let task_static_handle = &self.name_uppercase();
         let task_irq_handler = &self.args.binds.clone()?;
+        let task_attrs = implementation.task_attrs(task_irq_handler.clone());
 
         let default_task_dispatch_call = quote! {
             unsafe {#task_static_handle.assume_init_mut().exec()};
         };
 
         let task_dispatch_call = implementation
-            .wrap_task_execution(self.args.priority, default_task_dispatch_call.clone())
+            .wrap_task_execution(self, default_task_dispatch_call.clone())
             .unwrap_or(default_task_dispatch_call);
 
         Some(quote! {

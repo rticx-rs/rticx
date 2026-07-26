@@ -1,0 +1,13 @@
+# Create machine
+mach create "esp32c3"
+
+# Load the official CPU/board description
+machine LoadPlatformDescription @esp32c3.repl
+
+# Display UART0 output in host window
+showAnalyzer sysbus.uart0
+
+# Load your compiled Rust ELF
+sysbus LoadELF @target/riscv32imc-unknown-none-elf/debug/examples/hello_rtic
+
+start

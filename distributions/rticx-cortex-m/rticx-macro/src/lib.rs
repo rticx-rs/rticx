@@ -206,13 +206,14 @@ impl CorePassBackend for CortexMRtic {
     /// the lock primitives only), so the same call works for both paths.
     fn wrap_task_execution(
         &self,
-        task_prio: u16,
+        task: &rticx_core::RticTask,
         dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
         if cfg!(feature = "armv6m") {
             // No exec wrapping needed in armv6m implementation
             None
         } else {
+            let task_prio = task.args.priority;
             Some(quote! {
                 rticx_cortex_m::export::run(#task_prio as u8, || { #dispatch_task_call });
             })

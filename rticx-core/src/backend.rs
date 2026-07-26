@@ -68,7 +68,7 @@ pub trait CorePassBackend {
     ///     fn lock<R>(&mut self, f: impl FnOnce(&mut Self::ResourceType) -> R) -> R {
     ///         const CEILING: u16 = 3u16; // resource ceiling
     ///         let task_priority = self.task_priority;
-    ///         let resource_ref = unsafe { &mut SHARED.assume_init_mut().resource1 };
+    ///         let resource_ptr = unsafe { &mut SHARED.assume_init_mut().resource1 };
     ///         /* TODO: HARDWARE-SPECIFIC CODE COMES HERE */
     ///     }
     /// }
@@ -91,7 +91,7 @@ pub trait CorePassBackend {
     ///   `incomplete_lock_fn`.
     /// * The implementation must follow SRP rules:
     ///   1. Raise the system interrupt priority ceiling to `CEILING`.
-    ///   2. Call the closure `f`, passing `resource_ref` as the argument
+    ///   2. Call the closure `f`, passing `resource_ptr` as the argument
     ///      (this executes the resource critical section).
     ///   3. Restore the system interrupt priority ceiling to
     ///      `task_priority`.
@@ -105,7 +105,7 @@ pub trait CorePassBackend {
     /// ## Reference
     ///
     /// * **Cortex-M (BASEPRI)**: delegates to
-    ///   `<distro>::export::lock(resource_ref, CEILING as u8,
+    ///   `<distro>::export::lock(resource_ptr, CEILING as u8,
     ///   PAC::NVIC_PRIO_BITS, f)`.
     /// * **Cortex-M (armv6m source-mask)**: same call, but the `Mask`
     ///   type and `NVIC_PRIO_BITS` come from the source-masking
@@ -119,20 +119,12 @@ pub trait CorePassBackend {
         incomplete_lock_fn: syn::ImplItemFn,
     ) -> syn::ImplItemFn;
 
-    /// Global definitions emitted into the crate root scope.
+    /// Global definitions emitted into the app module root.
     ///
     /// Return a `TokenStream` of items (constants, `use` statements,
-    /// helper functions) that the locking implementation needs to
-    /// reference at the global scope.
+    /// helper functions) that the other bindings may refer to.
     ///
-    /// # Porting
-    ///
-    /// * **BASEPRI locks** -- typically need nothing here (return `None`).
-    /// * **Source-mask locks** -- emit the `Mask<N>` struct, `create_mask`,
-    ///   `compute_mask_chunks`, and the `__rticx_internal_MASKS` constant.
-    /// * **Threshold locks** -- may emit a `use` for the threshold register.
-    ///
-    /// Reference: `rticx-cortex-m` (armv6m)
+    /// Reference: `rticx-cortex-m` (armv6m), `rticx-riscv (slic)`
     fn generate_global_definitions(
         &self,
         app_args: &AppArgs,
@@ -157,7 +149,7 @@ pub trait CorePassBackend {
     /// Reference: `rticx-cortex-m` implements execution wrapping for non-armv6m targets
     fn wrap_task_execution(
         &self,
-        task_prio: u16,
+        task: &RticTask,
         dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2>;
 
@@ -258,7 +250,7 @@ pub trait CorePassBackend {
         vec![]
     }
 
-    /// Attribute macros to add to task interrupt handlers.
+    /// Attribute macros to add to a task's interrupt handlers.
     ///
     /// Used by some implementations to inject custom attributes onto
     /// task handler functions.
@@ -266,10 +258,10 @@ pub trait CorePassBackend {
     /// # Examples
     ///
     /// ```rust
-    /// #[riscv_rt::interrupt]
-    /// fn Uart() {}
+    /// #[export_name = "interrupt17"]
+    /// fn GPIO() {}
     /// ```
-    fn task_attrs(&self) -> Vec<syn::Attribute> {
+    fn task_attrs(&self, _interrupt_name: syn::Ident) -> Vec<syn::Attribute> {
         vec![]
     }
 

@@ -23,14 +23,14 @@ where
                 .cpu_int_thresh()
                 .write(|w| w.cpu_int_thresh().bits(1));
         } else {
-            //read current thresh
+            // read current thresh
             let initial = (*INTERRUPT_CORE0::ptr())
                 .cpu_int_thresh()
                 .read()
                 .cpu_int_thresh()
                 .bits();
             f();
-            //write back old thresh
+            // write back old thresh
             (*INTERRUPT_CORE0::ptr())
                 .cpu_int_thresh()
                 .write(|w| w.cpu_int_thresh().bits(initial));

@@ -149,7 +149,7 @@ impl CorePassBackend for AtalantaRtic {
     /// Customize how the task is dispatched when its bound interrupt is triggered
     fn wrap_task_execution(
         &self,
-        _task_prio: u16,
+        _task: &rticx_core::RticTask,
         _dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
         None
@@ -168,7 +168,7 @@ impl CorePassBackend for AtalantaRtic {
         vec![syn::parse_quote!(#[bsp::rt::entry])]
     }
 
-    fn task_attrs(&self) -> Vec<syn::Attribute> {
+    fn task_attrs(&self, _interrupt: syn::Ident) -> Vec<syn::Attribute> {
         vec![
             // Interrupt wrapper generation is delegated to PCS pass if enabled
             #[cfg(not(feature = "pcs-pass"))]

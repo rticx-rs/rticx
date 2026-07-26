@@ -128,9 +128,10 @@ impl CorePassBackend for RenodeRtic {
     /// Customize how the task is dispatched when its bound interrupt is triggered (save baspri before and restore after executing the task)
     fn wrap_task_execution(
         &self,
-        task_prio: u16,
+        task: &rticx_core::RticTask,
         dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
+        let task_prio = task.args.priority;
         Some(quote! {
             rticx_stm32_renode::export::run(#task_prio as u8, || {#dispatch_task_call});
         })

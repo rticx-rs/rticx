@@ -20,16 +20,16 @@ rticx-riscv-macro = { version = "0.1.0", path = "rticx-macro" }
 rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
 
 # Generic RISC-V SLIC backend (`slic` feature)
-riscv = { version = "0.16", optional = true }
+riscv = { version = "0.16.1", optional = true }
 riscv-slic = { version = "0.2", optional = true, default-features = false }
 
 # Espressif ESP32-C3 PAC (`esp32c3` feature)
-esp32c3 = { version = "0.32", optional = true, default-features = false, features = [
+esp32c3 = { version = "0.32.2", optional = true, default-features = false, features = [
     "critical-section",
 ] }
 
 # Espressif ESP32-C6 PAC (`esp32c6` feature)
-esp32c6 = { version = "0.23", optional = true, default-features = false, features = [
+esp32c6 = { version = "0.23.2", optional = true, default-features = false, features = [
     "critical-section",
 ] }
 

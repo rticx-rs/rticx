@@ -148,7 +148,7 @@ Notable methods:
 | `subscribe(&mut self, _info_bus: InfoBus)` | Default no-op. Called once before any other method, giving the backend a handle to the shared `InfoBus`. |
 | `default_task_priority() -> u16` | Fallback priority when the user omits one. |
 | `entry_attrs() -> Vec<Attribute>` | Attributes injected onto entry points (e.g., `#[riscv_rt::entry]`). |
-| `task_attrs() -> Vec<Attribute>` | Attributes injected onto task interrupt handlers. |
+| `task_attrs(...) -> Vec<Attribute>` | Attributes injected onto task interrupt handlers. |
 
 ### `SwPassBackend`
 

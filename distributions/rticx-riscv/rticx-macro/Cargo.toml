@@ -18,6 +18,7 @@ proc-macro = true
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
 rticx-core = { version = "0.1.0", path = "../../../rticx-core" }
+# rticx-core = { version = "0.1.0", path = "../../../rticx-core" , features = ["debug_expand"]}
 syn = { version = "2.0.52", features = ["extra-traits", "full"] }
 rticx-sw-pass = { version = "0.1.0", path = "../../../compilation-passes/rticx-sw-pass", features = [
     "proc-macro",

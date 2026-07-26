@@ -11,7 +11,7 @@ use syn::{Ident, parse_quote};
 use crate::analysis::SubAnalysis;
 use crate::parser::SubApp;
 use crate::parser::ast::AppArgs;
-use crate::{Analysis, App, CorePassBackend};
+use crate::{Analysis, App, CorePassBackend, RticTask};
 
 /// A no-op backend used for testing the parser, analysis, and codegen pieces of `rticx-core`.
 ///
@@ -57,7 +57,7 @@ impl CorePassBackend for MockCoreBackend {
 
     fn wrap_task_execution(
         &self,
-        _task_prio: u16,
+        _task: &RticTask,
         dispatch_task_call: TokenStream2,
     ) -> Option<TokenStream2> {
         Some(dispatch_task_call)
