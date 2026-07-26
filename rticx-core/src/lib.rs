@@ -16,6 +16,8 @@ use codegen::CodeGen;
 pub use parser::ast::AppArgs;
 pub use parser::{App, SubApp};
 
+pub use crate::info_bus::InfoBus;
+
 pub mod analysis;
 mod backend;
 pub mod codegen;
@@ -24,6 +26,7 @@ pub mod errors;
 pub mod mock_backend;
 pub mod parse_utils;
 
+pub mod info_bus;
 pub mod parser;
 
 static DEFAULT_TASK_PRIORITY: AtomicU16 = AtomicU16::new(0);
@@ -37,6 +40,10 @@ static DEFAULT_TASK_PRIORITY: AtomicU16 = AtomicU16::new(0);
 /// then will take over from there to generate all the necessary logic and expand the user application further to an
 /// application understandable by the Rust compiler.
 pub trait RticPass {
+    /// Subscribe to information bus where this and other passes can publish/get information to/from
+    /// This function is guaranteed to be called before any other functions in this trait
+    fn subscribe(&mut self, info_bus: InfoBus);
+
     /// Runs the (partial) proc-macro logic that allows extending the basic RTIC syntax
     fn run_pass(
         &self,
@@ -56,6 +63,7 @@ pub struct RticMacroBuilder {
     core: Box<dyn CorePassBackend>,
     pre_std_passes: Vec<Box<dyn RticPass>>,
     post_std_passes: Vec<Box<dyn RticPass>>,
+    info_bus: InfoBus,
 }
 
 impl RticMacroBuilder {
@@ -64,6 +72,7 @@ impl RticMacroBuilder {
             core: Box::new(core_impl),
             pre_std_passes: Vec::new(),
             post_std_passes: Vec::new(),
+            info_bus: InfoBus::new(),
         }
     }
 
@@ -143,6 +152,9 @@ impl RticMacroBuilder {
                 return e.to_compile_error();
             }
         };
+        self.info_bus
+            .publish("rticx_core::App", parsed_app.clone())
+            .expect("no other pass should publish the entry `rticx_core::App`");
 
         // update resource ceilings and gather more information about the application
         let analysis = match Analysis::run(&mut parsed_app) {
@@ -154,6 +166,9 @@ impl RticMacroBuilder {
                 return e.to_compile_error();
             }
         };
+        self.info_bus
+            .publish("rticx_core::Analysis", analysis.clone())
+            .expect("no other pass should publish the entry `rticx_core::Analysis`");
 
         // Before starting code generation, ask distribution for further checks
         if let Err(e) = self.core.pre_codegen_validation(&parsed_app, &analysis) {
@@ -174,5 +189,9 @@ impl RticMacroBuilder {
         }
 
         code
+    }
+
+    pub fn info_bus(&self) -> &InfoBus {
+        &self.info_bus
     }
 }

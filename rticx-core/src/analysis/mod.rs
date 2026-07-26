@@ -8,7 +8,7 @@ use crate::App;
 use crate::parser::SubApp;
 use crate::parser::ast::{HardwareTask, SharedResources};
 use heck::ToSnakeCase;
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Analysis {
     pub sub_analysis: Vec<SubAnalysis>,
     pub task_traits: HashSet<syn::Ident>,
@@ -48,7 +48,7 @@ impl Analysis {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubAnalysis {
     // used interrupts and their priorities
     pub used_irqs: Vec<(syn::Ident, u16)>,
@@ -113,7 +113,7 @@ fn update_resource_priorities(
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LateResourceTask {
     pub task_name: Ident,
 }

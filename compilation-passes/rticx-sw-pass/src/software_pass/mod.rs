@@ -6,26 +6,39 @@ use crate::parse::App;
 use crate::software_pass::codegen::CodeGen;
 use analyze::Analysis;
 use proc_macro2::TokenStream;
-use rticx_core::RticPass;
+use rticx_core::{InfoBus, RticPass};
 use syn::ItemMod;
 
 pub struct SoftwarePass {
     backend: Box<dyn SwPassBackend>,
+    info_bus: Option<InfoBus>,
 }
 
 impl SoftwarePass {
     pub fn new<T: SwPassBackend + 'static>(backend: T) -> Self {
         Self {
             backend: Box::new(backend),
+            info_bus: None,
         }
     }
 }
 
 impl RticPass for SoftwarePass {
+    fn subscribe(&mut self, info_bus: InfoBus) {
+        let _ = self.info_bus.insert(info_bus);
+    }
+
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
         let parsed = App::parse(&args, app_mod)?;
         let analysis = Analysis::run(&parsed)?;
-        let code = CodeGen::new(parsed, analysis, self.backend.as_ref()).run();
+        let code = CodeGen::new(parsed.clone(), analysis.clone(), self.backend.as_ref()).run();
+        // publish info
+        self.info_bus.as_ref().inspect(|b| {
+            b.publish("rticx_sw_pass::App", parsed)
+                .expect("no other crate is allowed to publish `rticx_sw_pass::App`");
+            b.publish("rticx_sw_pass::Analysis", analysis)
+                .expect("no other crate is allowed to publish `rticx_sw_pass::Analysis`")
+        });
         Ok((args, code))
     }
 

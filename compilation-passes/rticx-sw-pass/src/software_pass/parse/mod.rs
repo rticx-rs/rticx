@@ -9,6 +9,7 @@ pub mod ast;
 pub const SWT_TRAIT_TY: &str = "RticSwTask";
 
 /// Type to represent a sub application (application on a single core)
+#[derive(Clone)]
 pub struct SubApp {
     pub core: u32,
     pub dispatchers: Vec<syn::Path>,
@@ -20,6 +21,7 @@ pub struct SubApp {
 
 /// Type to represent an RTICX application (within software pass context)
 /// The application contains one or more sub-applications (one application per-core)
+#[derive(Clone)]
 pub struct App {
     pub mod_visibility: Visibility,
     pub mod_ident: Ident,

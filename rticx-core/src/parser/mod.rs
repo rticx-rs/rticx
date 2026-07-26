@@ -10,7 +10,7 @@ use crate::common_internal::rticx_traits::{HWT_TRAIT_TY, IDLE_TRAIT_TY, SWT_TRAI
 
 pub mod ast;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubApp {
     pub core: u32,
     pub shared: Option<SharedResources>,
@@ -19,7 +19,7 @@ pub struct SubApp {
     pub tasks: Vec<HardwareTask>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct App {
     pub app_name: Ident,
     pub args: AppArgs,

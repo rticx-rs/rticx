@@ -12,7 +12,7 @@ use crate::{
     DEFAULT_TASK_PRIORITY, errors::ParseError, parse_utils::RticAttr, rticx_traits::HWT_TRAIT_TY,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InitTask {
     pub args: InitTaskArgs,
     pub ident: Ident,
@@ -50,7 +50,7 @@ impl InitTaskArgs {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskArgs {
     /// Interrupt handler name
     pub binds: Option<syn::Ident>,
@@ -145,7 +145,7 @@ pub type HardwareTask = RticTask;
 /// Alias for idle tasks. idle task has `interrupt_handler_name` set to None and priority 0
 pub type IdleTask = RticTask;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RticTask {
     pub args: TaskArgs,
     pub task_struct: ItemStruct,
@@ -239,7 +239,7 @@ impl SharedResources {
 }
 
 /// Arguments provided to the #[app(...)] macro attribute, this includes paths to PACs, number of cores, and peripherals option.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppArgs {
     // path to peripheral crate
     pub pacs: Vec<syn::Path>,

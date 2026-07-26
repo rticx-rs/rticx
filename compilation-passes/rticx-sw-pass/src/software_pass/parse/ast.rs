@@ -3,6 +3,7 @@ use rticx_core::{errors::ParseError, parse_utils::RticAttr};
 use std::collections::HashMap;
 use syn::{Expr, Ident, ItemImpl, ItemStruct, Lit, Path, spanned::Spanned};
 
+#[derive(Clone)]
 pub struct AppParameters {
     pub dispatchers: HashMap<u32, Vec<Path>>,
     pub pacs: Vec<Path>,
@@ -101,7 +102,7 @@ impl AppParameters {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SoftwareTask {
     pub params: TaskParams,
     pub task_struct: ItemStruct,
@@ -114,7 +115,7 @@ impl SoftwareTask {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskParams {
     pub priority: u16,
     pub core: u32,

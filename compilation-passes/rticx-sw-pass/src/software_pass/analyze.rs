@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::software_pass::parse::{App, SubApp};
 use proc_macro2::Span;
 
+#[derive(Clone)]
 pub struct Analysis {
     /// analysis for every sub-application (per-core analysis)
     pub sub_analysis: Vec<SubAnalysis>,
@@ -20,7 +21,7 @@ impl Analysis {
 }
 
 /// Per-core/Sub application analysis
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubAnalysis {
     pub core: u32,
     /// Maps every group of software tasks to some priority level

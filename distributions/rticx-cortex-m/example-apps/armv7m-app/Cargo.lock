@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-cortex-m"
-version = "0.1.0-cortex-m"
+version = "0.1.0"
 dependencies = [
  "cortex-m",
  "rticx-cortex-m-macro",

@@ -20,6 +20,7 @@ impl DeadlineToPriorityPass {
 }
 
 impl RticPass for DeadlineToPriorityPass {
+    fn subscribe(&mut self, _info_bus: rticx_core::InfoBus) {}
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
         let params = RticAttr::parse_from_tokens(args.clone())?;
 

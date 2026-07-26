@@ -16,3 +16,13 @@ impl ParseError {
         syn::Error::new(span, self)
     }
 }
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("Can't publish '{0}' entry to info bus. Entry already exists")]
+    EntryOccupied(String),
+    #[error("Could not find '{0}' entry")]
+    EntryNotFound(String),
+    #[error("The target type is incorrect for entry '{0}'")]
+    InvalidTargetType(String),
+}
