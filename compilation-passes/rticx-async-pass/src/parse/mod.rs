@@ -42,7 +42,7 @@ impl App {
         for item in app_mod_items {
             match item {
                 Item::Struct(struct_) => {
-                    if let Some(attr_idx) = Self::is_struct_with_attr(&struct_, "sw_task") {
+                    if let Some(attr_idx) = Self::is_struct_with_attr(&struct_, "async_task") {
                         sw_task_structs.push((struct_, attr_idx))
                     } else {
                         rest_of_code.push(Item::Struct(struct_))

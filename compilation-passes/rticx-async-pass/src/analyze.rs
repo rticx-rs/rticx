@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::software_pass::parse::{App, SubApp};
+use crate::parse::{App, SubApp};
 use proc_macro2::Span;
 
 #[derive(Clone)]
