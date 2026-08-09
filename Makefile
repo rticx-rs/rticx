@@ -58,10 +58,13 @@ test:
 # qemu-system-arm`) and the `thumbv7m-none-eabi` / `thumbv6m-none-eabi` Rust
 # targets. Not part of `all`/`ci` so a missing QEMU install doesn't break the
 # host-only check/test/clippy jobs.
-qemu: qemu-armv7m qemu-armv6m
+qemu: qemu-armv7m qemu-armv6m qemu-slic
 
 qemu-armv7m:
 	@$(MAKE) -C distributions/rticx-cortex-m qemu-armv7m
 
 qemu-armv6m:
 	@$(MAKE) -C distributions/rticx-cortex-m qemu-armv6m
+
+qemu-slic:
+	@$(MAKE) -C distributions/rticx-riscv/examples/slic-examples

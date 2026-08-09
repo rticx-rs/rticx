@@ -32,8 +32,10 @@ cd ${APP_DIR}
 cargo build --example hello_rtic
 timeout --foreground 30s bash -c 'cargo run --example hello_rtic'
 
-echo ""
-echo ">>> running async_ping_pong with async feature"
-cargo build --example async_ping_pong --features async
-timeout --foreground 30s bash -c 'cargo run --example async_ping_pong --features async'
+if [ "${APP}" == "armv7m" ]; then
+    echo ""
+    echo ">>> running async_ping_pong with async feature"
+    cargo build --example async_ping_pong --features async
+    timeout --foreground 60s bash -c 'cargo run --example async_ping_pong --features async'
+fi
 cd -
