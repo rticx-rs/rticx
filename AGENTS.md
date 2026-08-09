@@ -47,7 +47,6 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | Distribution | Path | Target | Notes |
 |--------------|------|--------|-------|
 | `rticx-rp2040` | `distributions/rticx-rp2040/` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ | Single binary; starts core 1 from `post_init`. |
-| `rticx-stm32-renode` | `distributions/rticx-stm32-renode/` | Renode-simulated multicore STM32F1C3-like | Multi-binary. |
 | `rticx-hippo` | `distributions/rticx-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
 | `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default. |
 | `rticx-riscv` | `distributions/rticx-riscv/` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | See README.md of the distro |
@@ -291,7 +290,7 @@ From the repository root:
 make qemu
 ```
 
-### Multi-binary builds for `rticx-stm32-renode`
+### Multi-binary builds
 
 WIP: unsupported at the moment
 
