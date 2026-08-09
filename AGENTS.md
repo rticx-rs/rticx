@@ -33,7 +33,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 |-------|------|------|
 | `rticx-core` | `rticx-core/` | Core compilation pass, parser, analysis, codegen, and the `RticMacroBuilder` API. |
 | `rticx-spsc` | `rticx-spsc/` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
-| `rticx-async` | `rticx-async/` | `no_std` + `alloc` async runtime: `ExecSlot` future storage, `make_channel!` macro, MPSC channels, waker infrastructure. |
+| `rticx-async` | `rticx-async/` | `no_std` async runtime: `ExecSlot` future storage, `make_channel!` macro, MPSC channels, waker infrastructure. |
 
 ### Compilation passes
 
@@ -276,7 +276,7 @@ Auto-assign and deadline passes read:
 | `rticx-rp2040` | `swtasks` | Enables `rticx-sw-pass`. |
 | `rticx-cortex-m` | `swtasks` | Enables `rticx-sw-pass` (on by default). |
 | `rticx-cortex-m` | `armv6m` | Selects interrupt source-masking locking (Cortex-M0/M0+/M23). When disabled (default), BASEPRI-based locking is used (armv7-m and above). |
-| `rticx-cortex-m` | `async` | Enables `rticx-async-pass` for async/await software tasks. Also pulls in `rticx-async`, `embedded-alloc`, and `portable-atomic/critical-section` for distro-managed heap allocation. |
+| `rticx-cortex-m` | `async` | Enables `rticx-async-pass` for async/await software tasks.|
 | `rticx-hippo` | `deadline-pass` | Enables `rticx-deadline-pass`. |
 | `rticx-atalanta` | `deadline-pass` | Enables `rticx-deadline-pass`. |
 | `rticx-atalanta` | `pcs-pass` | Enables the PCS pass. |

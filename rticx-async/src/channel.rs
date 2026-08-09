@@ -4,7 +4,7 @@ use core::{
     mem::MaybeUninit,
     pin::Pin,
     ptr,
-    sync::atomic::{fence, Ordering},
+    sync::atomic::{Ordering, fence},
     task::{Poll, Waker},
 };
 #[doc(hidden)]
@@ -112,6 +112,12 @@ impl<T, const N: usize> Channel<T, N> {
     }
 }
 
+impl<T, const N: usize> Default for Channel<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // -------- Sender
 
 pub struct NoReceiver<T>(pub T);
@@ -198,13 +204,11 @@ impl<T, const N: usize> Sender<'_, T, N> {
             ptr::write(ptr, val)
         }
 
-        critical_section::with(|cs| {
-            unsafe {
-                self.0.readyq(cs, |readyq| {
-                    debug_assert!(!readyq.is_full());
-                    readyq.push_back_unchecked(idx);
-                });
-            }
+        critical_section::with(|cs| unsafe {
+            self.0.readyq(cs, |readyq| {
+                debug_assert!(!readyq.is_full());
+                readyq.push_back_unchecked(idx);
+            });
         });
 
         fence(Ordering::SeqCst);
@@ -220,9 +224,7 @@ impl<T, const N: usize> Sender<'_, T, N> {
             return Err(TrySendError::NoReceiver(val));
         }
 
-        let free_slot = critical_section::with(|cs| unsafe {
-            self.0.freeq(cs, |q| q.pop_front())
-        });
+        let free_slot = critical_section::with(|cs| unsafe { self.0.freeq(cs, |q| q.pop_front()) });
 
         let idx = if let Some(idx) = free_slot {
             idx
@@ -358,9 +360,8 @@ pub enum ReceiveError {
 
 impl<T, const N: usize> Receiver<'_, T, N> {
     pub fn try_recv(&mut self) -> Result<T, ReceiveError> {
-        let ready_slot = critical_section::with(|cs| unsafe {
-            self.0.readyq(cs, |q| q.pop_front())
-        });
+        let ready_slot =
+            critical_section::with(|cs| unsafe { self.0.readyq(cs, |q| q.pop_front()) });
 
         if let Some(rs) = ready_slot {
             let r = unsafe { self.0.read_slot(rs) };
@@ -405,9 +406,8 @@ impl<T, const N: usize> Drop for Receiver<'_, T, N> {
             self.0.receiver_dropped(cs, |v| *v = true);
         });
 
-        let ready_slot = || {
-            critical_section::with(|cs| unsafe { self.0.readyq(cs, |q| q.pop_back()) })
-        };
+        let ready_slot =
+            || critical_section::with(|cs| unsafe { self.0.readyq(cs, |q| q.pop_back()) });
 
         while let Some(slot) = ready_slot() {
             drop(unsafe { self.0.read_slot(slot) })

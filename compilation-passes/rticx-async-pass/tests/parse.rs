@@ -1,9 +1,9 @@
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 use quote::quote;
-use rticx_core::parse_utils::RticAttr;
 use rticx_async_pass::parse::App;
 use rticx_async_pass::parse::ast::{AppParameters, TaskParams};
+use rticx_core::parse_utils::RticAttr;
 
 mod common;
 

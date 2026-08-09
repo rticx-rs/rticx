@@ -2,8 +2,8 @@ pub mod analyze;
 mod codegen;
 pub mod parse;
 
-pub use crate::parse::App;
 use crate::codegen::CodeGen;
+pub use crate::parse::App;
 pub use analyze::Analysis;
 use proc_macro2::TokenStream;
 use rticx_core::{InfoBus, MainInjectionPoint, RticPass};

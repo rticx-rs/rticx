@@ -127,7 +127,10 @@ impl App {
                 return None;
             }
 
-            if path.segments[0].ident.to_string().ends_with(ASYNC_TASK_TRAIT_TY)
+            if path.segments[0]
+                .ident
+                .to_string()
+                .ends_with(ASYNC_TASK_TRAIT_TY)
                 && let Type::Path(struct_type) = impl_item.self_ty.as_ref()
             {
                 let implementor_name = &struct_type.path.segments[0].ident;

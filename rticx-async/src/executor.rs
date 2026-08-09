@@ -30,6 +30,12 @@ pub struct ExecSlot<F: Future<Output = ()> + 'static> {
 
 unsafe impl<F: Future<Output = ()> + 'static> Sync for ExecSlot<F> {}
 
+impl<F: Future<Output = ()> + 'static> Default for ExecSlot<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<F: Future<Output = ()> + 'static> ExecSlot<F> {
     pub const fn new() -> Self {
         Self {
@@ -53,6 +59,11 @@ impl<F: Future<Output = ()> + 'static> ExecSlot<F> {
             .is_ok()
     }
 
+    /// # Safety
+    ///
+    /// Caller must ensure that `f` has the same concrete type `F` that this
+    /// `ExecSlot` was created with. The slot must be in the allocated
+    /// (`try_allocate` succeeded) but not yet spawned state.
     pub unsafe fn spawn(&self, f: F) {
         unsafe {
             self.future.get().write(MaybeUninit::new(f));
@@ -103,6 +114,12 @@ pub struct ExecSlotPtr {
 
 unsafe impl Sync for ExecSlotPtr {}
 
+impl Default for ExecSlotPtr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExecSlotPtr {
     pub const fn new() -> Self {
         Self {
@@ -119,6 +136,12 @@ impl ExecSlotPtr {
     }
 }
 
+/// # Safety
+///
+/// The caller must guarantee that the `ExecSlotPtr` was previously stored with
+/// a pointer to an `ExecSlot<F>` where `F` is the concrete future type inferred
+/// from the witness function. Using the wrong witness function will result in
+/// type mismatch and undefined behavior.
 pub unsafe fn recover_slot<F: Future<Output = ()> + 'static, T, I>(
     _witness: fn(T, I) -> F,
     ptr: &'static ExecSlotPtr,

@@ -1,14 +1,14 @@
 mod utils;
 
+use crate::AsyncPassBackend;
 use crate::analyze::{Analysis, SubAnalysis};
 use crate::parse::ast::AsyncTask;
-use crate::parse::{App, ASYNC_TASK_TRAIT_TY};
-use crate::AsyncPassBackend;
+use crate::parse::{ASYNC_TASK_TRAIT_TY, App};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use rticx_core::parse_utils::RticAttr;
 use std::cell::RefCell;
-use syn::{parse_quote, ItemMod, LitInt, Path};
+use syn::{ItemMod, LitInt, Path, parse_quote};
 
 fn local_pend_fn_ident(core: u32, num_cores: usize) -> Ident {
     if num_cores == 1 {
@@ -92,11 +92,13 @@ impl<'a> CodeGen<'a> {
         let async_runtime_path = self.backend.async_runtime_path();
         let mut stmts = self.slot_init_stmts.borrow_mut();
 
-        for (sub_app, _) in self.app.sub_apps.iter().zip(self.analysis.sub_analysis.iter()) {
-            let all_tasks = sub_app
-                .sw_tasks
-                .iter()
-                .chain(sub_app.mc_sw_tasks.iter());
+        for (sub_app, _) in self
+            .app
+            .sub_apps
+            .iter()
+            .zip(self.analysis.sub_analysis.iter())
+        {
+            let all_tasks = sub_app.sw_tasks.iter().chain(sub_app.mc_sw_tasks.iter());
 
             for task in all_tasks {
                 let wrapper_fn_ident = utils::async_wrapper_ident(task.name());
@@ -192,7 +194,7 @@ impl<'a> CodeGen<'a> {
         let num_cores = self.app.sub_apps.len();
         let queue_path = self.backend.queue_path();
         let async_runtime_path = self.backend.async_runtime_path();
-        let backend = &*self.backend;
+        let backend = self.backend;
         let app_params = &self.app.app_params;
         let apps = self.app.sub_apps.iter_mut();
         let analysis = self.analysis.sub_analysis.iter();
@@ -207,82 +209,74 @@ impl<'a> CodeGen<'a> {
                 .sw_tasks
                 .iter_mut()
                 .chain(sub_app.mc_sw_tasks.iter_mut());
-            let (sw_tasks, wrapper_fns, ptr_statics, wake_fns): (
-                Vec<_>,
-                Vec<_>,
-                Vec<_>,
-                Vec<_>,
-            ) = tasks_iter
-                .map(|task| {
-                    let attr_idx = task
-                        .task_struct
-                        .attrs
-                        .iter()
-                        .position(|attr| attr.path().is_ident("async_task"))
-                        .expect("An async task must have an async_task attribute");
+            let (sw_tasks, wrapper_fns, ptr_statics, wake_fns): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
+                tasks_iter
+                    .map(|task| {
+                        let attr_idx = task
+                            .task_struct
+                            .attrs
+                            .iter()
+                            .position(|attr| attr.path().is_ident("async_task"))
+                            .expect("An async task must have an async_task attribute");
 
-                    let attr = task.task_struct.attrs.remove(attr_idx);
+                        let attr = task.task_struct.attrs.remove(attr_idx);
 
-                    let mut reconstructed_task_attr =
-                        RticAttr::parse_from_attr(&attr).unwrap();
-                    let _ = reconstructed_task_attr.name.insert(format_ident!("task"));
-                    reconstructed_task_attr.elements.insert(
-                        "task_trait".into(),
-                        syn::parse_str(ASYNC_TASK_TRAIT_TY).unwrap(),
-                    );
+                        let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap();
+                        let _ = reconstructed_task_attr.name.insert(format_ident!("task"));
+                        reconstructed_task_attr.elements.insert(
+                            "task_trait".into(),
+                            syn::parse_str(ASYNC_TASK_TRAIT_TY).unwrap(),
+                        );
 
-                    let task_struct = &task.task_struct;
-                    let task_impl = &task.task_impl;
+                        let task_struct = &task.task_struct;
+                        let task_impl = &task.task_impl;
 
-                    let (wrapper_fn, ptr_static, wake_fn) = generate_exec_static_and_wake(
-                        task,
-                        sub_analysis,
-                        num_cores,
-                        &async_runtime_path,
-                        &interrupt_ty,
-                    );
-                    let dispatcher_irq = sub_analysis
-                        .dispatcher_priority_map
-                        .get(&task.params.priority)
-                        .unwrap();
-                    let spawn_impl = task.generate_spawn_api(
-                        dispatcher_irq,
-                        pac,
-                        self.backend,
-                        num_cores,
-                        &queue_path,
-                        &async_runtime_path,
-                    );
+                        let (wrapper_fn, ptr_static, wake_fn) = generate_exec_static_and_wake(
+                            task,
+                            sub_analysis,
+                            num_cores,
+                            &async_runtime_path,
+                            &interrupt_ty,
+                        );
+                        let dispatcher_irq = sub_analysis
+                            .dispatcher_priority_map
+                            .get(&task.params.priority)
+                            .unwrap();
+                        let spawn_impl = task.generate_spawn_api(
+                            dispatcher_irq,
+                            pac,
+                            self.backend,
+                            num_cores,
+                            &queue_path,
+                            &async_runtime_path,
+                        );
 
-                    (
-                        quote! {
-                            #reconstructed_task_attr
-                            #task_struct
-                            #task_impl
-                            #spawn_impl
+                        (
+                            quote! {
+                                #reconstructed_task_attr
+                                #task_struct
+                                #task_impl
+                                #spawn_impl
+                            },
+                            wrapper_fn,
+                            ptr_static,
+                            wake_fn,
+                        )
+                    })
+                    .fold(
+                        (vec![], vec![], vec![], vec![]),
+                        |(mut tasks, mut wrappers, mut ptrs, mut wakes),
+                         (task, wrapper, ptr, wake)| {
+                            tasks.push(task);
+                            wrappers.push(wrapper);
+                            ptrs.push(ptr);
+                            wakes.push(wake);
+                            (tasks, wrappers, ptrs, wakes)
                         },
-                        wrapper_fn,
-                        ptr_static,
-                        wake_fn,
-                    )
-                })
-                .fold(
-                    (vec![], vec![], vec![], vec![]),
-                    |(mut tasks, mut wrappers, mut ptrs, mut wakes),
-                     (task, wrapper, ptr, wake)| {
-                        tasks.push(task);
-                        wrappers.push(wrapper);
-                        ptrs.push(ptr);
-                        wakes.push(wake);
-                        (tasks, wrappers, ptrs, wakes)
-                    },
-                );
+                    );
 
-            let dispatcher_tasks = generate_dispatcher_tasks(
-                sub_analysis,
-                &queue_path,
-                &async_runtime_path,
-            );
+            let dispatcher_tasks =
+                generate_dispatcher_tasks(sub_analysis, &queue_path, &async_runtime_path);
             let core_doc = format!(" Core {}", sub_app.core);
             quote! {
                 #[doc = " Async tasks of"]

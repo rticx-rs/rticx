@@ -1,7 +1,7 @@
 use proc_macro2::{Span, TokenStream};
 use rticx_core::{errors::ParseError, parse_utils::RticAttr};
 use std::collections::HashMap;
-use syn::{spanned::Spanned, Expr, Ident, ItemImpl, ItemStruct, Lit, Path};
+use syn::{Expr, Ident, ItemImpl, ItemStruct, Lit, Path, spanned::Spanned};
 
 #[derive(Clone)]
 pub struct AppParameters {

@@ -1,7 +1,7 @@
 use core::{
     future::poll_fn,
     marker::PhantomPinned,
-    pin::{pin, Pin},
+    pin::{Pin, pin},
     ptr::null_mut,
     sync::atomic::Ordering,
     task::{Poll, Waker},

@@ -12,10 +12,6 @@ loop** — which is itself a hardware-task, exactly like `sw_task` dispatchers
 in `rticx-sw-pass`.  Tasks at the same (core, priority) share one
 dispatcher/executor.
 
-The pass uses a **type-witness pattern** (borrowed from upstream RTIC) to
-achieve monomorphized inline future storage with **zero heap allocation** on
-stable Rust.
-
 ---
 
 ## Syntax (user-facing)
@@ -289,11 +285,11 @@ The pass inherits the sw-pass multicore model unchanged:
 
 ## Limitations & future work
 
+- **Priority 0 executors** need a dispatcher IRQ assigned in `dispatchers = […]` (no implicit idle-driven loop like upstream RTIC).
 - **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.
 - **No cancellation** — an in-flight future cannot be cancelled; the slot must complete naturally.
-- **Priority 0 executors** need a dispatcher IRQ assigned in `dispatchers = […]` (no implicit idle-driven loop like upstream RTIC).
 - **Cross-core channel waking** requires the backend to implement `generate_wake_pend_fn` with a runtime core check; works automatically on single-core.
-- **Multicore distributor** — currently only the single-core `rticx-cortex-m` distribution implements `AsyncPassBackend`; multicore distributions (e.g. `rticx-stm32-renode`) need an async executor backend.
+- **Multicore distributor** — currently only the single-core `rticx-cortex-m` distribution implements `AsyncPassBackend`; multicore distributions (e.g. `rticx-rp2040`) need an async executor backend.
 
 ---
 

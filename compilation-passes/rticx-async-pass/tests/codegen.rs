@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use rticx_core::RticPass;
 use rticx_async_pass::AsyncPass;
+use rticx_core::RticPass;
 
 mod common;
 
@@ -22,7 +22,11 @@ fn codegen_expands_single_core_sw_app() {
     );
 
     assert_section_present(&generated, quote! { mod app }, "app module declaration");
-    assert_section_present(&generated, quote! { struct Bar ; }, "rest-of-code passthrough");
+    assert_section_present(
+        &generated,
+        quote! { struct Bar ; },
+        "rest-of-code passthrough",
+    );
 
     assert_section_present(
         &generated,
@@ -213,9 +217,21 @@ fn codegen_expands_multi_core_sw_app() {
         "RticAsyncTask trait",
     );
 
-    assert_section_present(&generated, quote! { task_trait = RticAsyncTask }, "task_trait element");
-    assert_section_present(&generated, quote! { struct Task0 ; }, "core0 async_task struct");
-    assert_section_present(&generated, quote! { impl RticAsyncTask for Task0 }, "core0 impl");
+    assert_section_present(
+        &generated,
+        quote! { task_trait = RticAsyncTask },
+        "task_trait element",
+    );
+    assert_section_present(
+        &generated,
+        quote! { struct Task0 ; },
+        "core0 async_task struct",
+    );
+    assert_section_present(
+        &generated,
+        quote! { impl RticAsyncTask for Task0 },
+        "core0 impl",
+    );
 
     assert_section_present(
         &generated,
@@ -253,16 +269,8 @@ fn codegen_expands_multi_core_sw_app() {
         "core0 inputs queue",
     );
 
-    assert_section_present(
-        &generated,
-        quote! { impl Task0 },
-        "core0 spawn impl",
-    );
-    assert_section_present(
-        &generated,
-        quote! { pub fn spawn },
-        "core0 spawn fn",
-    );
+    assert_section_present(&generated, quote! { impl Task0 }, "core0 spawn impl");
+    assert_section_present(&generated, quote! { pub fn spawn }, "core0 spawn fn");
 
     assert_section_present(
         &generated,
@@ -314,11 +322,7 @@ fn codegen_expands_multi_core_sw_app() {
         "core1 wrapper async fn",
     );
 
-    assert_section_present(
-        &generated,
-        quote! { impl Cross },
-        "core1 spawn_from impl",
-    );
+    assert_section_present(&generated, quote! { impl Cross }, "core1 spawn_from impl");
     assert_section_present(
         &generated,
         quote! { pub fn spawn_from },

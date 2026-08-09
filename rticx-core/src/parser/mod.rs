@@ -129,12 +129,11 @@ impl App {
     }
 
     fn capture_trait_impl(impl_item: &ItemImpl) -> Option<String> {
-        if let Some((_, ref path, _)) = impl_item.trait_ {
-            if !path.segments.is_empty() {
-                if let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
-                    return Some(struct_type.path.segments[0].ident.to_string());
-                }
-            }
+        if let Some((_, ref path, _)) = impl_item.trait_
+            && !path.segments.is_empty()
+            && let Type::Path(struct_type) = impl_item.self_ty.as_ref()
+        {
+            return Some(struct_type.path.segments[0].ident.to_string());
         }
         None
     }
@@ -186,21 +185,18 @@ impl App {
 
             // find the task struct impl and verify its trait matches the task_trait
             let trait_name = args.task_trait.to_string();
-            let struct_impl = task_impls
-                .get(&task_struct.ident.to_string())
-                .and_then(|impl_item| {
-                    if let Some((_, path, _)) = &impl_item.trait_ {
-                        if !path.segments.is_empty()
-                            && path.segments[0]
-                                .ident
-                                .to_string()
-                                .ends_with(&trait_name)
+            let struct_impl =
+                task_impls
+                    .get(&task_struct.ident.to_string())
+                    .and_then(|impl_item| {
+                        if let Some((_, path, _)) = &impl_item.trait_
+                            && !path.segments.is_empty()
+                            && path.segments[0].ident.to_string().ends_with(&trait_name)
                         {
                             return Some(impl_item.clone());
                         }
-                    }
-                    None
-                });
+                        None
+                    });
 
             let tasks = out.entry(args.core).or_insert_with(Vec::new);
             let mut task = RticTask {
@@ -223,21 +219,18 @@ impl App {
             .into_iter()
             .map(|(mut idle_struct, init_attr_idx)| {
                 // find the task struct impl and verify its trait is RticIdleTask
-                let struct_impl = task_impls
-                    .get(&idle_struct.ident.to_string())
-                    .and_then(|impl_item| {
-                        if let Some((_, path, _)) = &impl_item.trait_ {
-                            if !path.segments.is_empty()
-                                && path.segments[0]
-                                    .ident
-                                    .to_string()
-                                    .ends_with(IDLE_TRAIT_TY)
+                let struct_impl =
+                    task_impls
+                        .get(&idle_struct.ident.to_string())
+                        .and_then(|impl_item| {
+                            if let Some((_, path, _)) = &impl_item.trait_
+                                && !path.segments.is_empty()
+                                && path.segments[0].ident.to_string().ends_with(IDLE_TRAIT_TY)
                             {
                                 return Some(impl_item.clone());
                             }
-                        }
-                        None
-                    });
+                            None
+                        });
 
                 // remove the #[idle]
                 let attrs = idle_struct.attrs.remove(init_attr_idx);

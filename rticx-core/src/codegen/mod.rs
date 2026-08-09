@@ -3,6 +3,7 @@ use quote::{ToTokens, format_ident, quote};
 use task_init::{generate_late_init_tasks_struct, generate_late_tasks_init_calls};
 
 use crate::CorePassBackend;
+use crate::MainInjections;
 use crate::analysis::Analysis;
 use crate::parser::ast::{RticTask, SharedResources};
 use crate::parser::{App, ast::IdleTask};
@@ -10,7 +11,6 @@ use crate::rticx_functions::{
     INTERRUPT_FREE_FN, generate_task_traits_check_functions, get_interrupt_free_fn,
 };
 use crate::rticx_traits::get_rticx_traits_mod;
-use crate::MainInjections;
 
 pub mod hw_task;
 pub mod shared_resources;
