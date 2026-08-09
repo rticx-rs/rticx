@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use panic_halt as _;
 use rtic_monotonics::systick::prelude::*;
 systick_monotonic!(Mono, 1000);

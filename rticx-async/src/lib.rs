@@ -1,8 +1,6 @@
 #![no_std]
 #![allow(dead_code)]
 
-extern crate alloc;
-
 pub mod channel;
 mod dropper;
 pub mod executor;

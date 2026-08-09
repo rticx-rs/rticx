@@ -43,6 +43,47 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
+            async fn __rticx_async_Foo (task : & mut Foo , input : < Foo as RticAsyncTask > :: SpawnInput)
+        },
+        "wrapper async fn",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            static __rticx_internal__Foo__PTR : rticx_async :: executor :: ExecSlotPtr =
+                rticx_async :: executor :: ExecSlotPtr :: new () ;
+        },
+        "ExecSlotPtr static",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_init_async_slots
+        },
+        "init slots function",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            ExecSlot :: new_from_witness (__rticx_async_Foo)
+        },
+        "new_from_witness in init",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            Box :: leak
+        },
+        "Box::leak in init",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
             pub fn __rticx_async_local_irq_pend (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
@@ -77,22 +118,18 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Foo__EXEC : rticx_async :: executor :: ExecSlot =
-                rticx_async :: executor :: ExecSlot :: new () ;
-        },
-        "EXEC slot static",
-    );
-
-    assert_section_present(
-        &generated,
-        quote! {
             fn __rticx_internal__Foo__wake () {
-                let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
+                let exec = unsafe {
+                    rticx_async :: executor :: recover_slot (
+                        __rticx_async_Foo ,
+                        & __rticx_internal__Foo__PTR ,
+                    )
+                } ;
                 exec . set_pending () ;
                 __rticx_async_wake_irq_pend (mypac :: Interrupt :: IRQ0) ;
             }
         },
-        "wake fn",
+        "wake fn with recover_slot",
     );
 
     assert_section_present(
@@ -105,7 +142,12 @@ fn codegen_expands_single_core_sw_app() {
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
-                        let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
+                        let exec = unsafe {
+                            rticx_async :: executor :: recover_slot (
+                                __rticx_async_Foo ,
+                                & __rticx_internal__Foo__PTR ,
+                            )
+                        } ;
                         if ! exec . try_allocate () { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Foo) } ;
@@ -115,7 +157,7 @@ fn codegen_expands_single_core_sw_app() {
                 }
             }
         },
-        "spawn() api with try_allocate",
+        "spawn() api with recover_slot",
     );
 
     assert_section_present(
@@ -140,22 +182,32 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            let future = RticAsyncTask :: exec (FOO . assume_init_mut () , input ,) ;
-            let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
-            unsafe { exec . install (future) ; }
+            let future = __rticx_async_Foo (FOO . assume_init_mut () , input ,) ;
+            let exec = unsafe {
+                rticx_async :: executor :: recover_slot (
+                    __rticx_async_Foo ,
+                    & __rticx_internal__Foo__PTR ,
+                )
+            } ;
+            unsafe { exec . spawn (future) ; }
         },
-        "dispatcher future install",
+        "dispatcher spawn via wrapper + recover_slot",
     );
 
     assert_section_present(
         &generated,
         quote! {
             {
-                let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
+                let exec = unsafe {
+                    rticx_async :: executor :: recover_slot (
+                        __rticx_async_Foo ,
+                        & __rticx_internal__Foo__PTR ,
+                    )
+                } ;
                 exec . poll (__rticx_internal__Foo__wake) ;
             }
         },
-        "dispatcher poll",
+        "dispatcher poll via recover_slot",
     );
 }
 
@@ -192,10 +244,29 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Task0__EXEC : rticx_async :: executor :: ExecSlot =
-                rticx_async :: executor :: ExecSlot :: new () ;
+            static __rticx_internal__Task0__PTR : rticx_async :: executor :: ExecSlotPtr =
+                rticx_async :: executor :: ExecSlotPtr :: new () ;
         },
-        "core0 EXEC static",
+        "core0 ExecSlotPtr static",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            async fn __rticx_async_Task0 (task : & mut Task0 , input : < Task0 as RticAsyncTask > :: SpawnInput)
+        },
+        "core0 wrapper async fn",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            executor :: recover_slot (
+                __rticx_async_Task0 ,
+                & __rticx_internal__Task0__PTR ,
+            )
+        },
+        "core0 recover_slot",
     );
 
     assert_section_present(
@@ -220,7 +291,17 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Task0__EXEC) } ;
+            recover_slot (
+                __rticx_async_Task0 ,
+                & __rticx_internal__Task0__PTR ,
+            )
+        },
+        "core0 recover in spawn",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
             if ! exec . try_allocate () { return Err (input) ; }
         },
         "core0 try_allocate",
@@ -244,10 +325,17 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Cross__EXEC : rticx_async :: executor :: ExecSlot =
-                rticx_async :: executor :: ExecSlot :: new () ;
+            static __rticx_internal__Cross__PTR : rticx_async :: executor :: ExecSlotPtr =
         },
-        "core1 EXEC static",
+        "core1 ExecSlotPtr static",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            async fn __rticx_async_Cross (task : & mut Cross , input : < Cross as RticAsyncTask > :: SpawnInput)
+        },
+        "core1 wrapper async fn",
     );
 
     assert_section_present(
@@ -304,5 +392,21 @@ fn codegen_expands_multi_core_sw_app() {
             }
         },
         "cross pend core1",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            __rticx_internal__Task0__PTR . store
+        },
+        "init stores Task0 ptr",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            __rticx_internal__Cross__PTR . store
+        },
+        "init stores Cross ptr",
     );
 }

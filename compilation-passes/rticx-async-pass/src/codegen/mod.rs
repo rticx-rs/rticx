@@ -46,6 +46,10 @@ impl<'a> CodeGen<'a> {
 
     pub fn run(&mut self) -> ItemMod {
         let sub_apps = self.generate_subapps();
+        let init_slots_fn = {
+            let async_runtime_path = self.backend.async_runtime_path();
+            generate_init_slots(&self.app, self.analysis.sub_analysis.iter(), &async_runtime_path)
+        };
         let local_pend_fns = self.get_local_pend_fns();
         let cross_pend_fns = self.get_cross_pend_fns();
         let wake_pend_fns = self.get_wake_pend_fns();
@@ -73,6 +77,7 @@ impl<'a> CodeGen<'a> {
                 #local_pend_fns
                 #wake_pend_fns
                 #cross_pend_fns
+                #init_slots_fn
             }
         }
     }
@@ -170,7 +175,12 @@ impl<'a> CodeGen<'a> {
                 .sw_tasks
                 .iter_mut()
                 .chain(sub_app.mc_sw_tasks.iter_mut());
-            let (sw_tasks, exec_statics, wake_fns): (Vec<_>, Vec<_>, Vec<_>) = tasks_iter
+            let (sw_tasks, wrapper_fns, ptr_statics, wake_fns): (
+                Vec<_>,
+                Vec<_>,
+                Vec<_>,
+                Vec<_>,
+            ) = tasks_iter
                 .map(|task| {
                     let attr_idx = task
                         .task_struct
@@ -192,7 +202,7 @@ impl<'a> CodeGen<'a> {
                     let task_struct = &task.task_struct;
                     let task_impl = &task.task_impl;
 
-                    let (exec_static, wake_fn) = generate_exec_static_and_wake(
+                    let (wrapper_fn, ptr_static, wake_fn) = generate_exec_static_and_wake(
                         task,
                         sub_analysis,
                         num_cores,
@@ -209,6 +219,7 @@ impl<'a> CodeGen<'a> {
                         self.backend,
                         num_cores,
                         &queue_path,
+                        &async_runtime_path,
                     );
 
                     (
@@ -218,33 +229,35 @@ impl<'a> CodeGen<'a> {
                             #task_impl
                             #spawn_impl
                         },
-                        exec_static,
+                        wrapper_fn,
+                        ptr_static,
                         wake_fn,
                     )
                 })
                 .fold(
-                    (vec![], vec![], vec![]),
-                    |(mut tasks, mut execs, mut wakes), (task, exec, wake)| {
+                    (vec![], vec![], vec![], vec![]),
+                    |(mut tasks, mut wrappers, mut ptrs, mut wakes),
+                     (task, wrapper, ptr, wake)| {
                         tasks.push(task);
-                        execs.push(exec);
+                        wrappers.push(wrapper);
+                        ptrs.push(ptr);
                         wakes.push(wake);
-                        (tasks, execs, wakes)
+                        (tasks, wrappers, ptrs, wakes)
                     },
                 );
 
             let dispatcher_tasks = generate_dispatcher_tasks(
-                num_cores,
                 sub_analysis,
                 &queue_path,
                 &async_runtime_path,
-                &interrupt_ty,
             );
             let core_doc = format!(" Core {}", sub_app.core);
             quote! {
                 #[doc = " Async tasks of"]
                 #[doc = #core_doc]
                 #(#sw_tasks)*
-                #(#exec_statics)*
+                #(#wrapper_fns)*
+                #(#ptr_statics)*
                 #(#wake_fns)*
 
                 #[doc = " Dispatchers of"]
@@ -265,41 +278,93 @@ fn generate_exec_static_and_wake(
     num_cores: usize,
     async_runtime_path: &Path,
     interrupt_ty: &Path,
-) -> (TokenStream, TokenStream) {
+) -> (TokenStream, TokenStream, TokenStream) {
     let task_name = task.name();
-    let exec_slot_ident = utils::exec_slot_ident(task_name);
+    let task_trait = format_ident!("{ASYNC_TASK_TRAIT_TY}");
+    let wrapper_fn_ident = utils::async_wrapper_ident(task_name);
+    let ptr_ident = utils::exec_ptr_ident(task_name);
     let wake_fn_ident = utils::exec_wake_ident(task_name);
     let wake_pend_fn = wake_pend_fn_ident(task.params.core, num_cores);
+    let inputs_ty = quote!(<#task_name as #task_trait>::SpawnInput);
     let dispatcher_irq = sub_analysis
         .dispatcher_priority_map
         .get(&task.params.priority)
         .unwrap();
 
-    let exec_static = quote! {
+    let wrapper_fn = quote! {
         #[doc(hidden)]
-        #[allow(non_upper_case_globals)]
-        static mut #exec_slot_ident: #async_runtime_path::executor::ExecSlot =
-            #async_runtime_path::executor::ExecSlot::new();
+        async fn #wrapper_fn_ident(task: &mut #task_name, input: #inputs_ty) {
+            <#task_name as #task_trait>::exec(task, input).await;
+        }
+    };
+
+    let ptr_static = quote! {
+        #[doc(hidden)]
+        static #ptr_ident: #async_runtime_path::executor::ExecSlotPtr =
+            #async_runtime_path::executor::ExecSlotPtr::new();
     };
 
     let wake_fn = quote! {
         #[doc(hidden)]
         fn #wake_fn_ident() {
-            let exec = unsafe { &*core::ptr::addr_of!(#exec_slot_ident) };
+            let exec = unsafe {
+                #async_runtime_path::executor::recover_slot(
+                    #wrapper_fn_ident,
+                    &#ptr_ident,
+                )
+            };
             exec.set_pending();
             #wake_pend_fn(#interrupt_ty::#dispatcher_irq);
         }
     };
 
-    (exec_static, wake_fn)
+    (wrapper_fn, ptr_static, wake_fn)
+}
+
+fn generate_init_slots<'a>(
+    app: &App,
+    analysis: impl Iterator<Item = &'a SubAnalysis>,
+    async_runtime_path: &Path,
+) -> TokenStream {
+    let mut init_stmts = Vec::new();
+
+    for (sub_app, sub_analysis) in app.sub_apps.iter().zip(analysis) {
+        let all_tasks = sub_app
+            .sw_tasks
+            .iter()
+            .chain(sub_app.mc_sw_tasks.iter());
+
+        for task in all_tasks {
+            let task_name = task.name();
+            let wrapper_fn_ident = utils::async_wrapper_ident(task_name);
+            let ptr_ident = utils::exec_ptr_ident(task_name);
+            let _ = sub_analysis;
+
+            init_stmts.push(quote! {
+                {
+                    let slot = ::alloc::boxed::Box::leak(
+                        ::alloc::boxed::Box::new(
+                            #async_runtime_path::executor::ExecSlot::new_from_witness(#wrapper_fn_ident)
+                        )
+                    );
+                    #ptr_ident.store(slot as *const _ as *const ());
+                }
+            });
+        }
+    }
+
+    quote! {
+        #[doc(hidden)]
+        fn __rticx_init_async_slots() {
+            #(#init_stmts)*
+        }
+    }
 }
 
 fn generate_dispatcher_tasks(
-    _num_cores: usize,
     sub_analysis: &SubAnalysis,
     queue_path: &Path,
-    _async_runtime_path: &Path,
-    _interrupt_ty: &Path,
+    async_runtime_path: &Path,
 ) -> TokenStream {
     let core = sub_analysis.core;
     let dispatchers = &sub_analysis.dispatcher_priority_map;
@@ -312,28 +377,39 @@ fn generate_dispatcher_tasks(
             let install_branches = tasks.iter().map(|(task_ident, _)| {
                 let task_static_handle = utils::ident_uppercase(task_ident);
                 let task_inputs_queue = utils::sw_task_inputs_ident(task_ident);
-                let exec_slot = utils::exec_slot_ident(task_ident);
-                let task_trait = format_ident!("{ASYNC_TASK_TRAIT_TY}");
+                let wrapper_fn = utils::async_wrapper_ident(task_ident);
+                let ptr_ident = utils::exec_ptr_ident(task_ident);
                 quote! {
                     #prio_ty::#task_ident => {
                         let mut input_consumer = #task_inputs_queue.split().1;
                         let input = input_consumer.dequeue_unchecked();
-                        let future = #task_trait::exec(
+                        let future = #wrapper_fn(
                             #task_static_handle.assume_init_mut(),
                             input,
                         );
-                        let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
-                        unsafe { exec.install(future); }
+                        let exec = unsafe {
+                            #async_runtime_path::executor::recover_slot(
+                                #wrapper_fn,
+                                &#ptr_ident,
+                            )
+                        };
+                        unsafe { exec.spawn(future); }
                     }
                 }
             });
 
             let poll_stmts = tasks.iter().map(|(task_ident, _)| {
-                let exec_slot = utils::exec_slot_ident(task_ident);
+                let wrapper_fn = utils::async_wrapper_ident(task_ident);
+                let ptr_ident = utils::exec_ptr_ident(task_ident);
                 let wake_fn = utils::exec_wake_ident(task_ident);
                 quote! {
                     {
-                        let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
+                        let exec = unsafe {
+                            #async_runtime_path::executor::recover_slot(
+                                #wrapper_fn,
+                                &#ptr_ident,
+                            )
+                        };
                         exec.poll(#wake_fn);
                     }
                 }
@@ -400,10 +476,12 @@ impl AsyncTask {
         backend: &dyn AsyncPassBackend,
         num_cores: usize,
         queue_path: &Path,
+        async_runtime_path: &Path,
     ) -> TokenStream {
         let task_name = self.name();
         let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
-        let exec_slot = utils::exec_slot_ident(task_name);
+        let ptr_ident = utils::exec_ptr_ident(task_name);
+        let wrapper_fn = utils::async_wrapper_ident(task_name);
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
         let inputs_ty = quote!(<#task_name as #task_trait_name>::SpawnInput);
         let prio_ty = utils::priority_ty_ident(self.params.priority, self.params.core);
@@ -425,7 +503,12 @@ impl AsyncTask {
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {
-                            let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
+                            let exec = unsafe {
+                                #async_runtime_path::executor::recover_slot(
+                                    #wrapper_fn,
+                                    &#ptr_ident,
+                                )
+                            };
                             if !exec.try_allocate() {
                                 return Err(input);
                             }
@@ -451,7 +534,12 @@ impl AsyncTask {
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {
-                            let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
+                            let exec = unsafe {
+                                #async_runtime_path::executor::recover_slot(
+                                    #wrapper_fn,
+                                    &#ptr_ident,
+                                )
+                            };
                             if !exec.try_allocate() {
                                 return Err(input);
                             }

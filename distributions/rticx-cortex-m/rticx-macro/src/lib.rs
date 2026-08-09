@@ -124,7 +124,7 @@ impl CorePassBackend for CortexMRtic {
             }
         }
 
-        let async_heap_init: Option<TokenStream2> = {
+        let async_setup: Option<TokenStream2> = {
             #[cfg(feature = "async")]
             {
                 self.info_bus
@@ -133,7 +133,10 @@ impl CorePassBackend for CortexMRtic {
                         bus.get::<rticx_async_pass::Analysis>(rticx_async_pass::INFO_ANALYSIS)
                             .ok()
                     })
-                    .map(|_| quote! { rticx_cortex_m::export::init_async_heap(); })
+                    .map(|_| quote! {
+                        rticx_cortex_m::export::init_async_heap();
+                        __rticx_init_async_slots();
+                    })
             }
             #[cfg(not(feature = "async"))]
             {
@@ -148,7 +151,7 @@ impl CorePassBackend for CortexMRtic {
             unsafe {
                 #(#stmts)*
             }
-            #async_heap_init
+            #async_setup
         })
     }
 

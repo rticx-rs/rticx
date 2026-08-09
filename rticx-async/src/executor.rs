@@ -1,12 +1,12 @@
-use alloc::boxed::Box;
 use core::{
     cell::UnsafeCell,
     future::Future,
-    mem,
+    mem::{self, MaybeUninit},
     pin::Pin,
+    ptr,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
-use portable_atomic::{AtomicBool, Ordering};
+use portable_atomic::{AtomicBool, AtomicPtr, Ordering};
 
 static WAKER_VTABLE: RawWakerVTable =
     RawWakerVTable::new(waker_clone, waker_wake, waker_wake, waker_drop);
@@ -22,21 +22,25 @@ unsafe fn waker_wake(p: *const ()) {
 
 unsafe fn waker_drop(_: *const ()) {}
 
-pub struct ExecSlot {
-    future: UnsafeCell<Option<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
+pub struct ExecSlot<F: Future<Output = ()> + 'static> {
+    future: UnsafeCell<MaybeUninit<F>>,
     running: AtomicBool,
     pending: AtomicBool,
 }
 
-unsafe impl Sync for ExecSlot {}
+unsafe impl<F: Future<Output = ()> + 'static> Sync for ExecSlot<F> {}
 
-impl ExecSlot {
+impl<F: Future<Output = ()> + 'static> ExecSlot<F> {
     pub const fn new() -> Self {
         Self {
-            future: UnsafeCell::new(None),
+            future: UnsafeCell::new(MaybeUninit::uninit()),
             running: AtomicBool::new(false),
             pending: AtomicBool::new(false),
         }
+    }
+
+    pub fn new_from_witness<T, I>(_witness: fn(T, I) -> F) -> Self {
+        Self::new()
     }
 
     pub fn is_running(&self) -> bool {
@@ -49,9 +53,9 @@ impl ExecSlot {
             .is_ok()
     }
 
-    pub unsafe fn install<F: Future<Output = ()> + 'static>(&self, f: F) {
+    pub unsafe fn spawn(&self, f: F) {
         unsafe {
-            (*self.future.get()) = Some(Box::pin(f));
+            self.future.get().write(MaybeUninit::new(f));
         }
         self.set_pending();
     }
@@ -79,16 +83,11 @@ impl ExecSlot {
         }
         let waker = self.waker(wake);
         let mut cx = Context::from_waker(&waker);
-        let future = unsafe { &mut *self.future.get() };
-        match future
-            .as_mut()
-            .expect("running slot must have a future")
-            .as_mut()
-            .poll(&mut cx)
-        {
+        let future = unsafe { Pin::new_unchecked(&mut *(self.future.get() as *mut F)) };
+        match future.poll(&mut cx) {
             Poll::Ready(()) => {
                 unsafe {
-                    (*self.future.get()) = None;
+                    ptr::drop_in_place(self.future.get() as *mut F);
                 }
                 self.running.store(false, Ordering::Release);
                 false
@@ -96,4 +95,33 @@ impl ExecSlot {
             Poll::Pending => true,
         }
     }
+}
+
+pub struct ExecSlotPtr {
+    ptr: AtomicPtr<()>,
+}
+
+unsafe impl Sync for ExecSlotPtr {}
+
+impl ExecSlotPtr {
+    pub const fn new() -> Self {
+        Self {
+            ptr: AtomicPtr::new(core::ptr::null_mut()),
+        }
+    }
+
+    pub fn store(&self, p: *const ()) {
+        self.ptr.store(p as *mut (), Ordering::Relaxed);
+    }
+
+    fn as_ptr(&self) -> *const () {
+        self.ptr.load(Ordering::Relaxed)
+    }
+}
+
+pub unsafe fn recover_slot<F: Future<Output = ()> + 'static, T, I>(
+    _witness: fn(T, I) -> F,
+    ptr: &'static ExecSlotPtr,
+) -> &'static ExecSlot<F> {
+    unsafe { &*(ptr.as_ptr() as *const ExecSlot<F>) }
 }
