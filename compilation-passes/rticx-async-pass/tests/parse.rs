@@ -342,3 +342,39 @@ fn parse_multiple_async_tasks_in_order() {
     assert_eq!(sub.sw_tasks[0].name().to_string(), "Foo");
     assert_eq!(sub.sw_tasks[1].name().to_string(), "Bar");
 }
+
+#[test]
+fn parse_prio_0_with_user_idle_errors() {
+    let items = quote! {
+        #[async_task(priority = 0)]
+        struct Foo;
+        impl RticAsyncTask for Foo {
+            async fn exec(&mut self) {}
+        }
+
+        #[idle]
+        struct MyIdle;
+        impl RticIdleTask for MyIdle {
+            fn exec(&mut self) {}
+        }
+    };
+    assert_err_contains(
+        parse_app(common::single_core_sw_args(), items),
+        "custom `#[idle]` task",
+    );
+}
+
+#[test]
+fn parse_prio_0_without_user_idle_succeeds() {
+    let items = quote! {
+        #[async_task(priority = 0)]
+        struct Foo;
+        impl RticAsyncTask for Foo {
+            fn exec(&mut self) {}
+        }
+    };
+    let app = parse_app(common::single_core_sw_args(), items).expect("valid app");
+    let sub = &app.sub_apps[0];
+    assert_eq!(sub.sw_tasks.len(), 1);
+    assert_eq!(sub.sw_tasks[0].params.priority, 0);
+}

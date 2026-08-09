@@ -374,3 +374,133 @@ fn codegen_expands_multi_core_sw_app() {
         "cross pend core1",
     );
 }
+
+#[test]
+fn codegen_expands_prio_0_executor() {
+    let generated = run_pass(
+        common::single_core_sw_args(),
+        common::single_core_prio_0_app_module(),
+        false,
+    );
+
+    assert_section_present(&generated, quote! { mod app }, "app module declaration");
+
+    assert_section_present(
+        &generated,
+        quote! {
+            pub trait RticAsyncTask {
+                type InitArgs : Sized ;
+                type SpawnInput ;
+                fn init (args : Self :: InitArgs) -> Self ;
+                fn exec (
+                    & mut self ,
+                    input : Self :: SpawnInput ,
+                ) -> impl core :: future :: Future < Output = () > ;
+            }
+        },
+        "RticAsyncTask trait",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! { task_trait = RticAsyncTask },
+        "task_trait element",
+    );
+
+    assert_section_present(&generated, quote! { struct Foo ; }, "async_task struct");
+
+    assert_section_present(
+        &generated,
+        quote! { impl RticAsyncTask for Foo },
+        "async_task impl",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            async fn __rticx_async_Foo (task : & mut Foo , input : < Foo as RticAsyncTask > :: SpawnInput)
+        },
+        "wrapper async fn",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            static __rticx_internal__Foo__PTR : rticx_async :: executor :: ExecSlotPtr =
+                rticx_async :: executor :: ExecSlotPtr :: new () ;
+        },
+        "ExecSlotPtr static",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_internal__Foo__wake () {
+                let exec = unsafe {
+                    rticx_async :: executor :: recover_slot (
+                        __rticx_async_Foo ,
+                        & __rticx_internal__Foo__PTR ,
+                    )
+                } ;
+                exec . set_pending () ;
+            }
+        },
+        "prio-0 wake fn (sets pending, no IRQ pend)",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            impl Foo {
+                pub fn spawn (input : < Foo as RticAsyncTask > :: SpawnInput) -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                    __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                        let exec = unsafe {
+                            rticx_async :: executor :: recover_slot (
+                                __rticx_async_Foo ,
+                                & __rticx_internal__Foo__PTR ,
+                            )
+                        } ;
+                        if ! exec . try_allocate () { return Err (input) ; }
+                        let future = __rticx_async_Foo (
+                            unsafe { FOO . assume_init_mut () } ,
+                            input ,
+                        ) ;
+                        unsafe { exec . spawn (future) ; }
+                        Ok (())
+                    })
+                }
+            }
+        },
+        "prio-0 simplified spawn (no queues, no pend)",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            impl RticIdleTask for __RticxAsyncPrio0ExecutorCore0 {
+                type InitArgs = () ;
+                fn init (_core : u32 , _args : Self :: InitArgs) -> Self { Self }
+                fn exec (& mut self) -> ! {
+                    loop {
+                        {
+                            let exec = unsafe {
+                                rticx_async :: executor :: recover_slot (
+                                    __rticx_async_Foo ,
+                                    & __rticx_internal__Foo__PTR ,
+                                )
+                            } ;
+                            exec . poll (__rticx_internal__Foo__wake) ;
+                        }
+                    }
+                }
+            }
+        },
+        "idle executor for prio-0",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! { #[idle (core = 0)] },
+        "idle executor struct attribute",
+    );
+}

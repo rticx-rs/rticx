@@ -37,6 +37,7 @@ impl App {
         let app_mod_items = app_mod.content.take().unwrap_or_default().1;
         let mut sw_task_structs = Vec::new();
         let mut sw_task_impls = HashMap::new();
+        let mut has_user_idle = false;
         let mut rest_of_code = Vec::with_capacity(app_mod_items.len());
 
         for item in app_mod_items {
@@ -45,6 +46,9 @@ impl App {
                     if let Some(attr_idx) = Self::is_struct_with_attr(&struct_, "async_task") {
                         sw_task_structs.push((struct_, attr_idx))
                     } else {
+                        if struct_.attrs.iter().any(|a| a.path().is_ident("idle")) {
+                            has_user_idle = true;
+                        }
                         rest_of_code.push(Item::Struct(struct_))
                     }
                 }
@@ -93,12 +97,24 @@ impl App {
                 .get(&core)
                 .cloned()
                 .unwrap_or_default();
+            let sw = sw_tasks.remove(&core).unwrap_or_default();
+            let mc = mc_sw_tasks.remove(&core).unwrap_or_default();
             sub_apps.push(SubApp {
                 core,
                 dispatchers,
-                sw_tasks: sw_tasks.remove(&core).unwrap_or_default(),
-                mc_sw_tasks: mc_sw_tasks.remove(&core).unwrap_or_default(),
+                sw_tasks: sw,
+                mc_sw_tasks: mc,
             })
+        }
+
+        let has_prio_0 = sub_apps
+            .iter()
+            .any(|sub| sub.sw_tasks.iter().chain(sub.mc_sw_tasks.iter()).any(|t| t.params.priority == 0));
+        if has_prio_0 && has_user_idle {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "Cannot define a custom `#[idle]` task when priority-0 async tasks are present. Use `#[post_init]` to spawn initial tasks instead.",
+            ));
         }
 
         Ok(Self {

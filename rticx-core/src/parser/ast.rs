@@ -19,6 +19,13 @@ pub struct InitTask {
     pub body: ItemFn,
 }
 
+#[derive(Debug, Clone)]
+pub struct PostInitTask {
+    pub args: InitTaskArgs,
+    pub ident: Ident,
+    pub body: ItemFn,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct InitTaskArgs {
     pub core: u32,

@@ -15,6 +15,7 @@ pub struct SubApp {
     pub core: u32,
     pub shared: Option<SharedResources>,
     pub init: InitTask,
+    pub post_init: Option<PostInitTask>,
     pub idle: Option<IdleTask>,
     pub tasks: Vec<HardwareTask>,
 }
@@ -34,6 +35,7 @@ impl App {
         let args = AppArgs::parse(args)?;
         let mut shared_resources = Vec::new();
         let mut inits = Vec::with_capacity(1);
+        let mut post_inits = Vec::new();
         // idle tasks are a list because the framework may allow more than one idle task in multicore setups,
         // but it is not decided yet how this will be handled
         let mut idles = Vec::new();
@@ -51,6 +53,8 @@ impl App {
                 Item::Fn(function) => {
                     if let Some(attr_idx) = Self::is_init(&function) {
                         inits.push((function, attr_idx))
+                    } else if let Some(attr_idx) = Self::is_post_init(&function) {
+                        post_inits.push((function, attr_idx))
                     } else {
                         other_code.push(function.into())
                     }
@@ -80,6 +84,7 @@ impl App {
 
         let mut shared = Self::construct_shared_resources(shared_resources)?;
         let mut inits = Self::construct_inits(inits, span)?;
+        let mut post_inits = Self::construct_post_inits(post_inits, span)?;
         let mut idles = Self::construct_idle_tasks(idles, &task_impls)?;
         let mut tasks = Self::construct_rtic_tasks(task_structs, &task_impls)?;
 
@@ -92,6 +97,7 @@ impl App {
                 init: inits
                     .remove(&core)
                     .unwrap_or_else(|| panic!("No init found for core {core}")),
+                post_init: post_inits.remove(&core),
                 idle: idles.remove(&core),
                 tasks: tasks.remove(&core).unwrap_or_default(),
             })
@@ -111,6 +117,16 @@ impl App {
             let path = attr.meta.path();
             // we are looking for a path that has a single segment
             if path.segments.len() == 1 && path.segments[0].ident == "init" {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn is_post_init(function: &ItemFn) -> Option<usize> {
+        for (i, attr) in function.attrs.iter().enumerate() {
+            let path = attr.meta.path();
+            if path.segments.len() == 1 && path.segments[0].ident == "post_init" {
                 return Some(i);
             }
         }
@@ -288,5 +304,26 @@ impl App {
                 })
                 .collect::<Result<HashMap<_, _>, syn::Error>>()
         }
+    }
+
+    fn construct_post_inits(
+        post_inits: Vec<(ItemFn, usize)>,
+        _module_span: Span,
+    ) -> syn::Result<HashMap<u32, PostInitTask>> {
+        post_inits
+            .into_iter()
+            .map(|(mut post_init_fn, init_attr_idx)| {
+                let attr = post_init_fn.attrs.remove(init_attr_idx);
+                let args = InitTaskArgs::parse(attr.meta)?;
+                Ok((
+                    args.core,
+                    PostInitTask {
+                        args,
+                        ident: post_init_fn.sig.ident.clone(),
+                        body: post_init_fn,
+                    },
+                ))
+            })
+            .collect::<Result<HashMap<_, _>, syn::Error>>()
     }
 }

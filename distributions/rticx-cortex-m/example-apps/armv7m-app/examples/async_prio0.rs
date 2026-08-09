@@ -11,7 +11,7 @@ systick_monotonic!(Mono, 1000);
 )]
 mod app {
     use super::*;
-    use cortex_m_semihosting::{debug, hprint, hprintln};
+    use cortex_m_semihosting::{debug, hprintln};
     use rticx_async::channel::{Receiver, Sender};
     use rticx_async::make_channel;
 
@@ -39,22 +39,21 @@ mod app {
     #[post_init]
     fn post_init() {
         let _ = Periodic::spawn(10);
+        let _ = Background::spawn(());
     }
 
-    #[idle]
-    struct Idle;
-    impl RticIdleTask for Idle {
+    #[async_task(priority = 0)]
+    struct Background;
+    impl RticAsyncTask for Background {
         type InitArgs = ();
-        fn init(_: ()) -> Self {
+        type SpawnInput = ();
+        fn init(_: Self::InitArgs) -> Self {
             Self
         }
-        fn exec(&mut self) -> ! {
+        async fn exec(&mut self, _input: ()) {
             loop {
-                for _ in 1..=80 {
-                    hprint!("#"); // each '#' indicates that an interrupt occurred and all executors have finished their jobs
-                    cortex_m::asm::wfi();
-                }
-                hprintln!("#");
+                hprintln!("running at priority 0 each second");
+                Mono::delay(1000.millis()).await;
             }
         }
     }

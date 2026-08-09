@@ -29,26 +29,42 @@ pub struct SubAnalysis {
     pub tasks_priority_map: HashMap<u16, Vec<(syn::Ident, u32)>>,
     /// Maps every dispatcher to a priority level
     pub dispatcher_priority_map: HashMap<u16, syn::Path>,
+    /// Priority-0 tasks that run on the idle executor (no dispatcher needed)
+    pub prio_0_tasks: Vec<(syn::Ident, u32)>,
 }
 
 impl SubAnalysis {
     fn analyse_subapp(sub_app: &SubApp) -> syn::Result<Self> {
-        // group sw tasks based on their associated priorities
+        // group sw tasks based on their associated priorities (skip priority 0)
         let mut sw_tasks_pgroups: HashMap<u16, Vec<_>> =
             HashMap::with_capacity(sub_app.dispatchers.len());
+        let mut prio_0_tasks = Vec::new();
         for task in sub_app.sw_tasks.iter() {
             let task_prio = task.params.priority;
-            sw_tasks_pgroups
-                .entry(task_prio)
-                .or_default()
-                .push((task.name().clone(), sub_app.core /* core local tasks*/));
+            if task_prio == 0 {
+                prio_0_tasks.push((task.name().clone(), sub_app.core));
+            } else {
+                sw_tasks_pgroups
+                    .entry(task_prio)
+                    .or_default()
+                    .push((task.name().clone(), sub_app.core /* core local tasks*/));
+            }
         }
 
-        // group multicore sw tasks based on their associated priorities
+        // group multicore sw tasks based on their associated priorities (skip priority 0)
         let mut mc_tasks_pgroups: HashMap<u16, Vec<_>> =
             HashMap::with_capacity(sub_app.dispatchers.len());
         for task in sub_app.mc_sw_tasks.iter() {
             let task_prio = task.params.priority;
+            if task_prio == 0 {
+                return Err(syn::Error::new(
+                    Span::call_site(),
+                    format!(
+                        "Async task `{}`: cross-core spawn (spawn_by != core) is not supported for priority-0 tasks. Use priority > 0 instead.",
+                        task.name()
+                    ),
+                ));
+            }
             mc_tasks_pgroups
                 .entry(task_prio)
                 .or_default()
@@ -111,6 +127,7 @@ impl SubAnalysis {
             core: sub_app.core,
             tasks_priority_map: sw_tasks_pgroups,
             dispatcher_priority_map: dispatcher_priorities,
+            prio_0_tasks,
         })
     }
 }

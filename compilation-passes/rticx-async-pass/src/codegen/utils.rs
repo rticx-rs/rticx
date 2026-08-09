@@ -37,3 +37,7 @@ pub fn async_wrapper_ident(task_ident: &Ident) -> Ident {
 pub fn exec_ptr_ident(task_ident: &Ident) -> Ident {
     format_ident!("__rticx_internal__{}__PTR", task_ident)
 }
+
+pub fn idle_executor_ident(core: u32) -> Ident {
+    format_ident!("__RticxAsyncPrio0ExecutorCore{core}")
+}

@@ -238,18 +238,25 @@ impl<'a> CodeGen<'a> {
                             &async_runtime_path,
                             &interrupt_ty,
                         );
-                        let dispatcher_irq = sub_analysis
-                            .dispatcher_priority_map
-                            .get(&task.params.priority)
-                            .unwrap();
-                        let spawn_impl = task.generate_spawn_api(
-                            dispatcher_irq,
-                            pac,
-                            self.backend,
-                            num_cores,
-                            &queue_path,
-                            &async_runtime_path,
-                        );
+
+                        let is_prio_0 = task.params.priority == 0;
+
+                        let spawn_impl = if is_prio_0 {
+                            task.generate_spawn_api_prio_0(&async_runtime_path)
+                        } else {
+                            let dispatcher_irq = sub_analysis
+                                .dispatcher_priority_map
+                                .get(&task.params.priority)
+                                .unwrap();
+                            task.generate_spawn_api(
+                                dispatcher_irq,
+                                pac,
+                                self.backend,
+                                num_cores,
+                                &queue_path,
+                                &async_runtime_path,
+                            )
+                        };
 
                         (
                             quote! {
@@ -277,6 +284,8 @@ impl<'a> CodeGen<'a> {
 
             let dispatcher_tasks =
                 generate_dispatcher_tasks(sub_analysis, &queue_path, &async_runtime_path);
+            let idle_executor =
+                generate_idle_executor(&sub_analysis.prio_0_tasks, &async_runtime_path, core);
             let core_doc = format!(" Core {}", sub_app.core);
             quote! {
                 #[doc = " Async tasks of"]
@@ -289,6 +298,7 @@ impl<'a> CodeGen<'a> {
                 #[doc = " Dispatchers of"]
                 #[doc = #core_doc]
                 #dispatcher_tasks
+                #idle_executor
             }
         });
 
@@ -310,12 +320,7 @@ fn generate_exec_static_and_wake(
     let wrapper_fn_ident = utils::async_wrapper_ident(task_name);
     let ptr_ident = utils::exec_ptr_ident(task_name);
     let wake_fn_ident = utils::exec_wake_ident(task_name);
-    let wake_pend_fn = wake_pend_fn_ident(task.params.core, num_cores);
     let inputs_ty = quote!(<#task_name as #task_trait>::SpawnInput);
-    let dispatcher_irq = sub_analysis
-        .dispatcher_priority_map
-        .get(&task.params.priority)
-        .unwrap();
 
     let wrapper_fn = quote! {
         #[doc(hidden)]
@@ -330,17 +335,39 @@ fn generate_exec_static_and_wake(
             #async_runtime_path::executor::ExecSlotPtr::new();
     };
 
-    let wake_fn = quote! {
-        #[doc(hidden)]
-        fn #wake_fn_ident() {
-            let exec = unsafe {
-                #async_runtime_path::executor::recover_slot(
-                    #wrapper_fn_ident,
-                    &#ptr_ident,
-                )
-            };
-            exec.set_pending();
-            #wake_pend_fn(#interrupt_ty::#dispatcher_irq);
+    let is_prio_0 = task.params.priority == 0;
+
+    let wake_fn = if is_prio_0 {
+        quote! {
+            #[doc(hidden)]
+            fn #wake_fn_ident() {
+                let exec = unsafe {
+                    #async_runtime_path::executor::recover_slot(
+                        #wrapper_fn_ident,
+                        &#ptr_ident,
+                    )
+                };
+                exec.set_pending();
+            }
+        }
+    } else {
+        let wake_pend_fn = wake_pend_fn_ident(task.params.core, num_cores);
+        let dispatcher_irq = sub_analysis
+            .dispatcher_priority_map
+            .get(&task.params.priority)
+            .unwrap();
+        quote! {
+            #[doc(hidden)]
+            fn #wake_fn_ident() {
+                let exec = unsafe {
+                    #async_runtime_path::executor::recover_slot(
+                        #wrapper_fn_ident,
+                        &#ptr_ident,
+                    )
+                };
+                exec.set_pending();
+                #wake_pend_fn(#interrupt_ty::#dispatcher_irq);
+            }
         }
     };
 
@@ -450,11 +477,95 @@ fn generate_dispatcher_tasks(
     }
 }
 
+fn generate_idle_executor(
+    prio_0_tasks: &[(Ident, u32)],
+    async_runtime_path: &Path,
+    core: u32,
+) -> TokenStream {
+    if prio_0_tasks.is_empty() {
+        return quote! {};
+    }
+
+    let idle_ident = utils::idle_executor_ident(core);
+    let core_nbr = LitInt::new(&core.to_string(), Span::call_site());
+
+    let poll_stmts = prio_0_tasks.iter().map(|(task_ident, _)| {
+        let wrapper_fn = utils::async_wrapper_ident(task_ident);
+        let ptr_ident = utils::exec_ptr_ident(task_ident);
+        let wake_fn = utils::exec_wake_ident(task_ident);
+        quote! {
+            {
+                let exec = unsafe {
+                    #async_runtime_path::executor::recover_slot(
+                        #wrapper_fn,
+                        &#ptr_ident,
+                    )
+                };
+                exec.poll(#wake_fn);
+            }
+        }
+    });
+
+    quote! {
+        #[idle(core = #core_nbr)]
+        struct #idle_ident;
+
+        impl RticIdleTask for #idle_ident {
+            type InitArgs = ();
+            fn init(_core: u32, _args: Self::InitArgs) -> Self { Self }
+            fn exec(&mut self) -> ! {
+                loop {
+                    #(#poll_stmts)*
+                }
+            }
+        }
+    }
+}
+
 pub const SC_PEND_FN_NAME: &str = "__rticx_async_local_irq_pend";
 pub const MC_PEND_FN_NAME: &str = "__rticx_async_cross_irq_pend";
 pub const WAKE_PEND_FN_NAME: &str = "__rticx_async_wake_irq_pend";
 
 impl AsyncTask {
+    fn generate_spawn_api_prio_0(
+        &self,
+        async_runtime_path: &Path,
+    ) -> TokenStream {
+        let task_name = self.name();
+        let ptr_ident = utils::exec_ptr_ident(task_name);
+        let wrapper_fn = utils::async_wrapper_ident(task_name);
+        let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
+        let inputs_ty = quote!(<#task_name as #task_trait_name>::SpawnInput);
+        let task_handle = utils::ident_uppercase(task_name);
+
+        let critical_section_fn =
+            format_ident!("{}", rticx_core::rticx_functions::INTERRUPT_FREE_FN);
+
+        quote! {
+            impl #task_name {
+                pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
+                    #critical_section_fn(|| -> Result<(), #inputs_ty> {
+                        let exec = unsafe {
+                            #async_runtime_path::executor::recover_slot(
+                                #wrapper_fn,
+                                &#ptr_ident,
+                            )
+                        };
+                        if !exec.try_allocate() {
+                            return Err(input);
+                        }
+                        let future = #wrapper_fn(
+                            unsafe { #task_handle.assume_init_mut() },
+                            input,
+                        );
+                        unsafe { exec.spawn(future); }
+                        Ok(())
+                    })
+                }
+            }
+        }
+    }
+
     fn generate_spawn_api(
         &self,
         dispatcher_irq_name: &Path,

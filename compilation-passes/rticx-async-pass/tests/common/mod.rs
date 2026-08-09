@@ -84,6 +84,22 @@ pub fn multi_core_sw_app_module() -> syn::ItemMod {
     })
 }
 
+pub fn single_core_prio_0_app_module() -> syn::ItemMod {
+    app_mod(quote! {
+        #[async_task(priority = 0)]
+        struct Foo;
+
+        impl RticAsyncTask for Foo {
+            type InitArgs = ();
+            type SpawnInput = u32;
+            fn init(_: ()) -> Self {
+                Foo
+            }
+            fn exec(&mut self, _input: u32) {}
+        }
+    })
+}
+
 pub fn assert_err_contains<T>(result: syn::Result<T>, substr: &str) {
     let err = match result {
         Ok(_) => panic!("expected an error, but parsing/analysis succeeded"),

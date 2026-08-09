@@ -111,6 +111,18 @@ impl<'a> CodeGen<'a> {
                 Some(idle_task)
             });
 
+            // post_init
+            let post_init_call = app.post_init.as_ref().map(|pi| {
+                let ident = &pi.ident;
+                let body = &pi.body;
+                quote! {
+                    #[doc(hidden)]
+                    #body
+
+                    #ident();
+                }
+            });
+
             let call_idle_task =
                 generate_idle_call(app.idle.as_ref(), implementation.populate_idle_loop());
 
@@ -228,6 +240,9 @@ impl<'a> CodeGen<'a> {
 
                     // injections before idle
                     #(#before_idle)*
+
+                    // user post_init function
+                    #post_init_call
 
                     #call_idle_task
                 }

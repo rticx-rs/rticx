@@ -285,7 +285,6 @@ The pass inherits the sw-pass multicore model unchanged:
 
 ## Limitations & future work
 
-- **Priority 0 executors** need a dispatcher IRQ assigned in `dispatchers = […]` (no implicit idle-driven loop like upstream RTIC).
 - **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.
 - **No cancellation** — an in-flight future cannot be cancelled; the slot must complete naturally.
 - **Cross-core channel waking** requires the backend to implement `generate_wake_pend_fn` with a runtime core check; works automatically on single-core.
