@@ -6,7 +6,7 @@ use syn::{Ident, Item, ItemFn, ItemImpl, ItemStruct, ItemUse, Type, spanned::Spa
 
 use ast::*;
 
-use crate::common_internal::rticx_traits::{HWT_TRAIT_TY, IDLE_TRAIT_TY, SWT_TRAIT_TY};
+use crate::common_internal::rticx_traits::IDLE_TRAIT_TY;
 
 pub mod ast;
 
@@ -67,7 +67,7 @@ impl App {
                     }
                 }
                 Item::Impl(impl_item) => {
-                    if let Some(implementor) = Self::is_task_impl(&impl_item) {
+                    if let Some(implementor) = Self::capture_trait_impl(&impl_item) {
                         let _ = task_impls.insert(implementor, impl_item);
                     } else {
                         other_code.push(impl_item.into())
@@ -128,20 +128,12 @@ impl App {
         None
     }
 
-    fn is_task_impl(impl_item: &ItemImpl) -> Option<String> {
+    fn capture_trait_impl(impl_item: &ItemImpl) -> Option<String> {
         if let Some((_, ref path, _)) = impl_item.trait_ {
-            if path.segments.is_empty() {
-                return None;
-            }
-
-            let is_hw_task = path.segments[0].ident.to_string().ends_with(HWT_TRAIT_TY);
-            let is_sw_task = path.segments[0].ident.to_string().ends_with(SWT_TRAIT_TY);
-            let is_idle = path.segments[0].ident.to_string().ends_with(IDLE_TRAIT_TY);
-            let is_task = is_hw_task || is_sw_task || is_idle;
-
-            if is_task && let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
-                let implementor_name = struct_type.path.segments[0].ident.to_string();
-                return Some(implementor_name);
+            if !path.segments.is_empty() {
+                if let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
+                    return Some(struct_type.path.segments[0].ident.to_string());
+                }
             }
         }
         None
@@ -192,14 +184,29 @@ impl App {
             let attr = task_struct.attrs.remove(attr_idx);
             let args = TaskArgs::parse(attr.meta)?;
 
-            // find the task struct impl
-            let struct_impl = task_impls.get(&task_struct.ident.to_string());
+            // find the task struct impl and verify its trait matches the task_trait
+            let trait_name = args.task_trait.to_string();
+            let struct_impl = task_impls
+                .get(&task_struct.ident.to_string())
+                .and_then(|impl_item| {
+                    if let Some((_, path, _)) = &impl_item.trait_ {
+                        if !path.segments.is_empty()
+                            && path.segments[0]
+                                .ident
+                                .to_string()
+                                .ends_with(&trait_name)
+                        {
+                            return Some(impl_item.clone());
+                        }
+                    }
+                    None
+                });
 
             let tasks = out.entry(args.core).or_insert_with(Vec::new);
             let mut task = RticTask {
                 args,
                 task_struct,
-                struct_impl: struct_impl.cloned(),
+                struct_impl: struct_impl.clone(),
                 user_initializable: false, //initially this is false.
             };
             task.adjust_task_impl_initialization()?; // adjust the init method and args type of the task trait implementation
@@ -215,8 +222,22 @@ impl App {
         idles
             .into_iter()
             .map(|(mut idle_struct, init_attr_idx)| {
-                // find the task struct impl
-                let struct_impl = task_impls.get(&idle_struct.ident.to_string());
+                // find the task struct impl and verify its trait is RticIdleTask
+                let struct_impl = task_impls
+                    .get(&idle_struct.ident.to_string())
+                    .and_then(|impl_item| {
+                        if let Some((_, path, _)) = &impl_item.trait_ {
+                            if !path.segments.is_empty()
+                                && path.segments[0]
+                                    .ident
+                                    .to_string()
+                                    .ends_with(IDLE_TRAIT_TY)
+                            {
+                                return Some(impl_item.clone());
+                            }
+                        }
+                        None
+                    });
 
                 // remove the #[idle]
                 let attrs = idle_struct.attrs.remove(init_attr_idx);
@@ -226,7 +247,7 @@ impl App {
                 let mut task = IdleTask {
                     args,
                     task_struct: idle_struct,
-                    struct_impl: struct_impl.cloned(),
+                    struct_impl: struct_impl.clone(),
                     user_initializable: false,
                 };
                 task.adjust_task_impl_initialization()?; // adjust the init method and args type of the task trait implementation

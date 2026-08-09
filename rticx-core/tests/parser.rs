@@ -226,3 +226,61 @@ fn task_marks_custom_init_args_as_user_initializable() {
     assert!(task.user_initializable);
     assert!(task.task_init_call().is_none());
 }
+
+#[test]
+fn task_custom_trait_impl_captured() {
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct Shared {
+                pub counter: u32,
+            }
+
+            #[init]
+            fn init() -> Shared {
+                Shared { counter: 0 }
+            }
+
+            #[task(binds = UART, priority = 2, task_trait = RticAsyncTask)]
+            struct Foo;
+
+            impl RticAsyncTask for Foo {
+                type InitArgs = ();
+                fn init(_: ()) -> Self { Foo }
+                fn exec(&mut self) {}
+            }
+        }
+    };
+    let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
+    let app = App::parse(args, module).expect("valid app");
+    let task = &app.sub_apps[0].tasks[0];
+    assert!(task.struct_impl.is_some());
+    assert_eq!(task.args.task_trait.to_string(), "RticAsyncTask");
+}
+
+#[test]
+fn task_mismatched_trait_impl_not_captured() {
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct Shared {}
+
+            #[init]
+            fn init() -> Shared { Shared {} }
+
+            #[task(binds = UART, priority = 2, task_trait = RticAsyncTask)]
+            struct Foo;
+
+            impl RticTask for Foo {
+                type InitArgs = ();
+                fn init(_: ()) -> Self { Foo }
+                fn exec(&mut self) {}
+            }
+        }
+    };
+    let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
+    let app = App::parse(args, module).expect("valid app");
+    let task = &app.sub_apps[0].tasks[0];
+    // The impl RticTask does NOT match task_trait = RticAsyncTask, so it should NOT be captured
+    assert!(task.struct_impl.is_none());
+}

@@ -2,7 +2,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 
 pub const HWT_TRAIT_TY: &str = "RticTask";
-pub const SWT_TRAIT_TY: &str = "RticSwTask"; // FIXME: add a backend trait method to provide a list of additional traits that define task types instead of this wrong way of borrowing from sw pass implicitly !
+pub const SWT_TRAIT_TY: &str = "RticSwTask";
 pub const IDLE_TRAIT_TY: &str = "RticIdleTask";
 
 pub const MUTEX_TY: &str = "RticMutex";
