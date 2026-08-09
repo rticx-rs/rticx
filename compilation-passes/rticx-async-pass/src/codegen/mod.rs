@@ -395,9 +395,9 @@ fn generate_dispatcher_tasks(
     }
 }
 
-pub const SC_PEND_FN_NAME: &str = "__rticx_local_irq_pend";
-pub const MC_PEND_FN_NAME: &str = "__rticx_cross_irq_pend";
-pub const WAKE_PEND_FN_NAME: &str = "__rticx_wake_irq_pend";
+pub const SC_PEND_FN_NAME: &str = "__rticx_async_local_irq_pend";
+pub const MC_PEND_FN_NAME: &str = "__rticx_async_cross_irq_pend";
+pub const WAKE_PEND_FN_NAME: &str = "__rticx_async_wake_irq_pend";
 
 impl AsyncTask {
     fn generate_spawn_api(

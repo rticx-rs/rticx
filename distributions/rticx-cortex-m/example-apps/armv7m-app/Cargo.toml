@@ -8,9 +8,18 @@ publish = false
 name = "hello_rtic"
 path = "examples/hello_rtic.rs"
 
+[[example]]
+name = "async_ping_pong"
+path = "examples/async_ping_pong.rs"
+required-features = ["asynctasks"]
+
+[features]
+asynctasks = ["rticx-cortex-m/asynctasks", "dep:rticx-async"]
+
 [dependencies]
 # default features: swtasks on, BASEPRI locking (armv7-m)
 rticx-cortex-m = { path = "../.." }
+rticx-async = { path = "../../../../rticx-async", optional = true }
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 cortex-m-semihosting = "0.5.0"

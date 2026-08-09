@@ -1,5 +1,6 @@
 #![no_std]
 
+#[cfg(feature = "asynctasks")]
 extern crate alloc;
 
 pub mod export;

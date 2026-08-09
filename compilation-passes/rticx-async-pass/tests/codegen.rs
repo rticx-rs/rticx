@@ -43,7 +43,7 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_local_irq_pend (irq_nbr : mypac :: Interrupt) {
+            pub fn __rticx_async_local_irq_pend (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
         },
@@ -53,7 +53,7 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_wake_irq_pend (irq_nbr : mypac :: Interrupt) {
+            pub fn __rticx_async_wake_irq_pend (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
         },
@@ -89,7 +89,7 @@ fn codegen_expands_single_core_sw_app() {
             fn __rticx_internal__Foo__wake () {
                 let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
                 exec . set_pending () ;
-                __rticx_wake_irq_pend (mypac :: Interrupt :: IRQ0) ;
+                __rticx_async_wake_irq_pend (mypac :: Interrupt :: IRQ0) ;
             }
         },
         "wake fn",
@@ -109,7 +109,7 @@ fn codegen_expands_single_core_sw_app() {
                         if ! exec . try_allocate () { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Foo) } ;
-                        __rticx_local_irq_pend (mypac :: Interrupt :: IRQ0) ;
+                        __rticx_async_local_irq_pend (mypac :: Interrupt :: IRQ0) ;
                         Ok (())
                     })
                 }
@@ -156,7 +156,7 @@ fn codegen_expands_single_core_sw_app() {
                 let still_running = exec . poll (__rticx_internal__Foo__wake) ;
                 any_running = any_running || still_running ;
             }
-            if any_running { __rticx_local_irq_pend (mypac :: Interrupt :: IRQ0) ; }
+            if any_running { __rticx_async_local_irq_pend (mypac :: Interrupt :: IRQ0) ; }
         },
         "dispatcher poll + self-repend",
     );
@@ -266,7 +266,7 @@ fn codegen_expands_multi_core_sw_app() {
 
     assert_section_present(
         &generated,
-        quote! { __rticx_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1) },
+        quote! { __rticx_async_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1) },
         "core1 cross pend call",
     );
 
@@ -282,7 +282,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_wake_irq_pend_core0 (irq_nbr : mypac :: Interrupt) {
+            pub fn __rticx_async_wake_irq_pend_core0 (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
         },
@@ -292,7 +292,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_wake_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
+            pub fn __rticx_async_wake_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
         },
@@ -302,7 +302,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
+            pub fn __rticx_async_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
                 mock_cross_pend (irq_nbr) ;
             }
         },

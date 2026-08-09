@@ -24,11 +24,16 @@ if ! command -v qemu-system-arm >/dev/null 2>&1; then
     exit 2
 fi
 
-echo ">>> building and running $APP example under QEMU"
+echo ">>> building and running $APP examples under QEMU"
 # Run from the app dir so its `.cargo/config.toml` (target triple + QEMU runner)
 # is discovered by Cargo — `--manifest-path` alone would ignore it and fall back
 # to the host target.
 cd ${APP_DIR}
 cargo build --example hello_rtic
-timeout --foreground 30s bash -c 'cargo run --example hello_rtic' 
+timeout --foreground 30s bash -c 'cargo run --example hello_rtic'
+
+echo ""
+echo ">>> running async_ping_pong with asynctasks feature"
+cargo build --example async_ping_pong --features asynctasks
+timeout --foreground 30s bash -c 'cargo run --example async_ping_pong --features asynctasks'
 cd -
