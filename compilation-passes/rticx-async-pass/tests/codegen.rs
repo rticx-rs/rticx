@@ -13,10 +13,6 @@ fn run_pass(args: TokenStream, app_mod: syn::ItemMod, cross: bool) -> String {
     mod_to_string(&module)
 }
 
-// ===========================================================================
-// Single-core expansion
-// ===========================================================================
-
 #[test]
 fn codegen_expands_single_core_sw_app() {
     let generated = run_pass(
@@ -26,11 +22,7 @@ fn codegen_expands_single_core_sw_app() {
     );
 
     assert_section_present(&generated, quote! { mod app }, "app module declaration");
-    assert_section_present(
-        &generated,
-        quote! { struct Bar ; },
-        "rest-of-code passthrough",
-    );
+    assert_section_present(&generated, quote! { struct Bar ; }, "rest-of-code passthrough");
 
     assert_section_present(
         &generated,
@@ -39,7 +31,10 @@ fn codegen_expands_single_core_sw_app() {
                 type InitArgs : Sized ;
                 type SpawnInput ;
                 fn init (args : Self :: InitArgs) -> Self ;
-                fn exec (& mut self , input : Self :: SpawnInput) ;
+                fn exec (
+                    & mut self ,
+                    input : Self :: SpawnInput ,
+                ) -> impl core :: future :: Future < Output = () > ;
             }
         },
         "RticAsyncTask trait",
@@ -57,33 +52,61 @@ fn codegen_expands_single_core_sw_app() {
 
     assert_section_present(
         &generated,
+        quote! {
+            pub fn __rticx_wake_irq_pend (irq_nbr : mypac :: Interrupt) {
+                mock_local_pend (irq_nbr) ;
+            }
+        },
+        "wake pend fn",
+    );
+
+    assert_section_present(
+        &generated,
         quote! { task_trait = RticAsyncTask },
         "reconstructed task_trait element",
     );
 
     assert_section_present(&generated, quote! { struct Foo ; }, "async_task struct");
+
     assert_section_present(
         &generated,
-        quote! {
-            impl RticAsyncTask for Foo {
-                type InitArgs = () ;
-                type SpawnInput = u32 ;
-                fn init (_ : ()) -> Self { Foo }
-                fn exec (& mut self , input : u32) { }
-            }
-        },
+        quote! { impl RticAsyncTask for Foo },
         "async_task impl",
     );
 
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticAsyncTask > :: SpawnInput , 2 > = rticx :: export :: Queue :: new () ;
+            static mut __rticx_internal__Foo__EXEC : rticx_async :: executor :: ExecSlot =
+                rticx_async :: executor :: ExecSlot :: new () ;
+        },
+        "EXEC slot static",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_internal__Foo__wake () {
+                let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
+                exec . set_pending () ;
+                __rticx_wake_irq_pend (mypac :: Interrupt :: IRQ0) ;
+            }
+        },
+        "wake fn",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticAsyncTask > :: SpawnInput , 2 > =
+                rticx :: export :: Queue :: new () ;
             impl Foo {
                 pub fn spawn (input : < Foo as RticAsyncTask > :: SpawnInput) -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                        let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
+                        if ! exec . try_allocate () { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Foo) } ;
                         __rticx_local_irq_pend (mypac :: Interrupt :: IRQ0) ;
@@ -92,7 +115,7 @@ fn codegen_expands_single_core_sw_app() {
                 }
             }
         },
-        "spawn() api",
+        "spawn() api with try_allocate",
     );
 
     assert_section_present(
@@ -101,40 +124,43 @@ fn codegen_expands_single_core_sw_app() {
             #[derive (Clone , Copy)]
             #[doc (hidden)]
             pub enum Core0Prio2Tasks { Foo , }
+        },
+        "priority task enum",
+    );
 
-            #[doc (hidden)]
-            #[allow (non_upper_case_globals)]
-            static mut __rticx_internal__Core0Prio2Tasks__RQ : rticx :: export :: Queue < Core0Prio2Tasks , 2usize > = rticx :: export :: Queue :: new () ;
-
-            #[doc (hidden)]
+    assert_section_present(
+        &generated,
+        quote! {
             #[task (binds = IRQ0 , priority = 2u16 , core = 0)]
             pub struct Core0Priority2Dispatcher ;
-
-            impl RticTask for Core0Priority2Dispatcher {
-                fn init () -> Self { Self }
-                fn exec (& mut self) {
-                    unsafe {
-                        let mut ready_consumer = __rticx_internal__Core0Prio2Tasks__RQ . split () . 1 ;
-                        while let Some (task) = ready_consumer . dequeue () {
-                            match task {
-                                Core0Prio2Tasks :: Foo => {
-                                    let mut input_consumer = __rticx_internal__Foo__INPUTS . split () . 1 ;
-                                    let input = input_consumer . dequeue_unchecked () ;
-                                    FOO . assume_init_mut () . exec (input) ;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         },
-        "dispatcher block",
+        "dispatcher task struct",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            let future = RticAsyncTask :: exec (FOO . assume_init_mut () , input ,) ;
+            let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
+            unsafe { exec . install (future) ; }
+        },
+        "dispatcher future install",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            let mut any_running = false ;
+            {
+                let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
+                let still_running = exec . poll (__rticx_internal__Foo__wake) ;
+                any_running = any_running || still_running ;
+            }
+            if any_running { __rticx_local_irq_pend (mypac :: Interrupt :: IRQ0) ; }
+        },
+        "dispatcher poll + self-repend",
     );
 }
-
-// ===========================================================================
-// Multi-core expansion
-// ===========================================================================
 
 #[test]
 fn codegen_expands_multi_core_sw_app() {
@@ -153,83 +179,63 @@ fn codegen_expands_multi_core_sw_app() {
                 type InitArgs : Sized ;
                 type SpawnInput ;
                 fn init (args : Self :: InitArgs) -> Self ;
-                fn exec (& mut self , input : Self :: SpawnInput) ;
+                fn exec (
+                    & mut self ,
+                    input : Self :: SpawnInput ,
+                ) -> impl core :: future :: Future < Output = () > ;
             }
         },
         "RticAsyncTask trait",
     );
 
+    assert_section_present(&generated, quote! { task_trait = RticAsyncTask }, "task_trait element");
+    assert_section_present(&generated, quote! { struct Task0 ; }, "core0 async_task struct");
+    assert_section_present(&generated, quote! { impl RticAsyncTask for Task0 }, "core0 impl");
+
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_local_irq_pend_core0 (irq_nbr : mypac :: Interrupt) {
-                mock_local_pend (irq_nbr) ;
-            }
+            static mut __rticx_internal__Task0__EXEC : rticx_async :: executor :: ExecSlot =
+                rticx_async :: executor :: ExecSlot :: new () ;
         },
-        "local pend fn",
+        "core0 EXEC static",
     );
+
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
-                mock_cross_pend (irq_nbr) ;
-            }
+            static mut __rticx_internal__Task0__INPUTS : rticx :: export :: Queue
         },
-        "cross pend fn",
+        "core0 inputs queue",
     );
 
     assert_section_present(
         &generated,
-        quote! { task_trait = RticAsyncTask },
-        "core0 reconstructed task_trait element",
+        quote! { impl Task0 },
+        "core0 spawn impl",
     );
     assert_section_present(
         &generated,
-        quote! { struct Task0 ; },
-        "core0 async_task struct",
-    );
-    assert_section_present(
-        &generated,
-        quote! { impl RticAsyncTask for Task0 },
-        "core0 async_task impl",
+        quote! { pub fn spawn },
+        "core0 spawn fn",
     );
 
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Task0__INPUTS : rticx :: export :: Queue < < Task0 as RticAsyncTask > :: SpawnInput , 2 > = rticx :: export :: Queue :: new () ;
-            impl Task0 {
-                pub fn spawn (input : < Task0 as RticAsyncTask > :: SpawnInput) -> Result < () , < Task0 as RticAsyncTask > :: SpawnInput > {
-                    let mut inputs_producer = unsafe { __rticx_internal__Task0__INPUTS . split () . 0 } ;
-                    let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
-                    __rticx_interrupt_free (| | -> Result < () , < Task0 as RticAsyncTask > :: SpawnInput > {
-                        inputs_producer . enqueue (input) ? ;
-                        unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Task0) } ;
-                        __rticx_local_irq_pend_core0 (mypac :: Interrupt :: IRQ0) ;
-                        Ok (())
-                    })
-                }
-            }
+            let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Task0__EXEC) } ;
+            if ! exec . try_allocate () { return Err (input) ; }
         },
-        "core0 spawn() api",
+        "core0 try_allocate",
     );
 
     assert_section_present(
         &generated,
         quote! {
-            #[derive (Clone , Copy)]
-            #[doc (hidden)]
-            pub enum Core0Prio2Tasks { Task0 , }
-
-            #[doc (hidden)]
-            #[allow (non_upper_case_globals)]
-            static mut __rticx_internal__Core0Prio2Tasks__RQ : rticx :: export :: Queue < Core0Prio2Tasks , 2usize > = rticx :: export :: Queue :: new () ;
-
-            #[doc (hidden)]
             #[task (binds = IRQ0 , priority = 2u16 , core = 0)]
             pub struct Core0Priority2Dispatcher ;
         },
-        "core0 dispatcher decl",
+        "core0 dispatcher",
     );
 
     assert_section_present(
@@ -237,47 +243,69 @@ fn codegen_expands_multi_core_sw_app() {
         quote! { struct Cross ; },
         "core1 async_task struct",
     );
-    assert_section_present(
-        &generated,
-        quote! { impl RticAsyncTask for Cross },
-        "core1 async_task impl",
-    );
 
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Cross__INPUTS : rticx :: export :: Queue < < Cross as RticAsyncTask > :: SpawnInput , 2 > = rticx :: export :: Queue :: new () ;
-            impl Cross {
-                pub fn spawn_from (_spawner : __rticx__internal__Core0 , input : < Cross as RticAsyncTask > :: SpawnInput) -> Result < () , < Cross as RticAsyncTask > :: SpawnInput > {
-                    let mut inputs_producer = unsafe { __rticx_internal__Cross__INPUTS . split () . 0 } ;
-                    let mut ready_producer = unsafe { __rticx_internal__Core1Prio3Tasks__RQ . split () . 0 } ;
-                    __rticx_interrupt_free (| | -> Result < () , < Cross as RticAsyncTask > :: SpawnInput > {
-                        inputs_producer . enqueue (input) ? ;
-                        unsafe { ready_producer . enqueue_unchecked (Core1Prio3Tasks :: Cross) } ;
-                        __rticx_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1) ;
-                        Ok (())
-                    })
-                }
-            }
+            static mut __rticx_internal__Cross__EXEC : rticx_async :: executor :: ExecSlot =
+                rticx_async :: executor :: ExecSlot :: new () ;
         },
-        "core1 spawn_from() api",
+        "core1 EXEC static",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! { impl Cross },
+        "core1 spawn_from impl",
+    );
+    assert_section_present(
+        &generated,
+        quote! { pub fn spawn_from },
+        "core1 spawn_from fn",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! { __rticx_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1) },
+        "core1 cross pend call",
     );
 
     assert_section_present(
         &generated,
         quote! {
-            #[derive (Clone , Copy)]
-            #[doc (hidden)]
-            pub enum Core1Prio3Tasks { Cross , }
-
-            #[doc (hidden)]
-            #[allow (non_upper_case_globals)]
-            static mut __rticx_internal__Core1Prio3Tasks__RQ : rticx :: export :: Queue < Core1Prio3Tasks , 2usize > = rticx :: export :: Queue :: new () ;
-
-            #[doc (hidden)]
             #[task (binds = IRQ1 , priority = 3u16 , core = 1)]
             pub struct Core1Priority3Dispatcher ;
         },
-        "core1 dispatcher decl",
+        "core1 dispatcher",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            pub fn __rticx_wake_irq_pend_core0 (irq_nbr : mypac :: Interrupt) {
+                mock_local_pend (irq_nbr) ;
+            }
+        },
+        "wake pend core0",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            pub fn __rticx_wake_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
+                mock_local_pend (irq_nbr) ;
+            }
+        },
+        "wake pend core1",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            pub fn __rticx_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
+                mock_cross_pend (irq_nbr) ;
+            }
+        },
+        "cross pend core1",
     );
 }

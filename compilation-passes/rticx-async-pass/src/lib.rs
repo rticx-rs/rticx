@@ -53,6 +53,8 @@ impl RticPass for AsyncPass {
 pub trait AsyncPassBackend {
     fn queue_path(&self) -> syn::Path;
 
+    fn async_runtime_path(&self) -> syn::Path;
+
     fn generate_local_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn;
 
     fn generate_cross_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> Option<syn::ItemFn>;

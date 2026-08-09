@@ -114,6 +114,10 @@ impl AsyncPassBackend for MockAsyncBackend {
         parse_quote!(rticx::export::Queue)
     }
 
+    fn async_runtime_path(&self) -> syn::Path {
+        parse_quote!(rticx_async)
+    }
+
     fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         let body = parse_quote!({
             mock_local_pend(irq_nbr);

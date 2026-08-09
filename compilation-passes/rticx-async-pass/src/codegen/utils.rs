@@ -1,18 +1,9 @@
 use heck::ToSnakeCase;
-use proc_macro2::Span;
+use proc_macro2::Ident;
 use quote::format_ident;
-use syn::Ident;
 
-/// used for statics
 pub fn ident_uppercase(ident: &Ident) -> Ident {
-    let name = ident.to_string().to_snake_case().to_uppercase();
-    Ident::new(&name, Span::call_site())
-}
-
-#[allow(unused)]
-pub fn ident_snakecase(ident: &Ident) -> Ident {
-    let name = ident.to_string().to_snake_case();
-    Ident::new(&name, Span::call_site())
+    format_ident!("{}", ident.to_string().to_snake_case().to_uppercase())
 }
 
 pub fn priority_ty_ident(priority: u16, core: u32) -> Ident {
@@ -22,17 +13,23 @@ pub fn priority_ty_ident(priority: u16, core: u32) -> Ident {
 pub fn dispatcher_ident(priority: u16, core: u32) -> Ident {
     format_ident!("Core{core}Priority{priority}Dispatcher")
 }
+
 pub fn priority_queue_ident(prio_ty: &Ident) -> Ident {
-    format_ident!("__rticx_internal__{prio_ty}__RQ")
+    format_ident!("__rticx_internal__{}__RQ", prio_ty)
 }
 
 pub fn sw_task_inputs_ident(task_ident: &Ident) -> Ident {
-    format_ident!("__rticx_internal__{task_ident}__INPUTS")
+    format_ident!("__rticx_internal__{}__INPUTS", task_ident)
 }
 
-/// Type that will be generated in the standard pass for every core
-/// The type will be unsafe for the user to create, so this type can be used to force the user to follow a specific contract
-/// TODO: why are these types generated in standard pass ????? why not here ?
+pub fn exec_slot_ident(task_ident: &Ident) -> Ident {
+    format_ident!("__rticx_internal__{}__EXEC", task_ident)
+}
+
+pub fn exec_wake_ident(task_ident: &Ident) -> Ident {
+    format_ident!("__rticx_internal__{}__wake", task_ident)
+}
+
 pub fn core_type(core: u32) -> Ident {
     format_ident!("__rticx__internal__Core{core}")
 }

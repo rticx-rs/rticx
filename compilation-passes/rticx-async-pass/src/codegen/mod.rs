@@ -21,6 +21,14 @@ fn cross_pend_fn_ident(core: u32) -> Ident {
     format_ident!("{MC_PEND_FN_NAME}_core{core}")
 }
 
+fn wake_pend_fn_ident(core: u32, num_cores: usize) -> Ident {
+    if num_cores == 1 {
+        format_ident!("{WAKE_PEND_FN_NAME}")
+    } else {
+        format_ident!("{WAKE_PEND_FN_NAME}_core{core}")
+    }
+}
+
 pub struct CodeGen<'a> {
     app: App,
     analysis: Analysis,
@@ -40,6 +48,7 @@ impl<'a> CodeGen<'a> {
         let sub_apps = self.generate_subapps();
         let local_pend_fns = self.get_local_pend_fns();
         let cross_pend_fns = self.get_cross_pend_fns();
+        let wake_pend_fns = self.get_wake_pend_fns();
         let rest_of_code = &self.app.rest_of_code;
         let software_task_trait = format_ident!("{ASYNC_TASK_TRAIT_TY}");
         let sw_task_trait_def = quote! {
@@ -47,7 +56,10 @@ impl<'a> CodeGen<'a> {
                 type InitArgs: Sized;
                 type SpawnInput;
                 fn init(args: Self::InitArgs) -> Self;
-                fn exec(&mut self, input: Self::SpawnInput);
+                fn exec(
+                    &mut self,
+                    input: Self::SpawnInput,
+                ) -> impl core::future::Future<Output = ()>;
             }
         };
         let mod_visibility = &self.app.mod_visibility;
@@ -59,6 +71,7 @@ impl<'a> CodeGen<'a> {
                 #sub_apps
                 #sw_task_trait_def
                 #local_pend_fns
+                #wake_pend_fns
                 #cross_pend_fns
             }
         }
@@ -116,58 +129,123 @@ impl<'a> CodeGen<'a> {
         quote!(#(#fns)*)
     }
 
+    fn get_wake_pend_fns(&self) -> TokenStream {
+        let num_cores = self.app.sub_apps.len();
+        let fns: Vec<TokenStream> = self
+            .app
+            .sub_apps
+            .iter()
+            .map(|sub_app| {
+                let core = sub_app.core;
+                let interrupt_ty = self.get_interrupt_path(core);
+                let fn_ident = wake_pend_fn_ident(core, num_cores);
+                let empty_body_fn = parse_quote! {
+                    #[doc(hidden)]
+                    #[inline]
+                    pub fn #fn_ident(irq_nbr: #interrupt_ty) {}
+                };
+                let fn_def = self.backend.generate_wake_pend_fn(core, empty_body_fn);
+                quote!(#fn_def)
+            })
+            .collect();
+        quote!(#(#fns)*)
+    }
+
     fn generate_subapps(&mut self) -> TokenStream {
         let num_cores = self.app.sub_apps.len();
         let queue_path = self.backend.queue_path();
+        let async_runtime_path = self.backend.async_runtime_path();
+        let backend = &*self.backend;
+        let app_params = &self.app.app_params;
         let apps = self.app.sub_apps.iter_mut();
         let analysis = self.analysis.sub_analysis.iter();
 
         let sub_apps = apps.zip(analysis).map(|(sub_app, sub_analysis)| {
-            let pac = &self.app.app_params.pacs[sub_app.core as usize];
+            let core = sub_app.core;
+            let pac = &app_params.pacs[core as usize];
+            let interrupt_ty = backend
+                .custom_interrupt_path(core)
+                .unwrap_or_else(|| parse_quote!(#pac::Interrupt));
             let tasks_iter = sub_app
                 .sw_tasks
                 .iter_mut()
                 .chain(sub_app.mc_sw_tasks.iter_mut());
-            let sw_tasks = tasks_iter.map(|task| {
-                let attr_idx = task
-                    .task_struct
-                    .attrs
-                    .iter()
-                    .position(|attr| attr.path().is_ident("async_task"))
-                    .expect("An async task must have an async_task attribute");
+            let (sw_tasks, exec_statics, wake_fns): (Vec<_>, Vec<_>, Vec<_>) = tasks_iter
+                .map(|task| {
+                    let attr_idx = task
+                        .task_struct
+                        .attrs
+                        .iter()
+                        .position(|attr| attr.path().is_ident("async_task"))
+                        .expect("An async task must have an async_task attribute");
 
-                let attr = task.task_struct.attrs.remove(attr_idx);
+                    let attr = task.task_struct.attrs.remove(attr_idx);
 
-                let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap();
-                let _ = reconstructed_task_attr.name.insert(format_ident!("task"));
-                reconstructed_task_attr.elements.insert(
-                    "task_trait".into(),
-                    syn::parse_str(ASYNC_TASK_TRAIT_TY).unwrap(),
+                    let mut reconstructed_task_attr =
+                        RticAttr::parse_from_attr(&attr).unwrap();
+                    let _ = reconstructed_task_attr.name.insert(format_ident!("task"));
+                    reconstructed_task_attr.elements.insert(
+                        "task_trait".into(),
+                        syn::parse_str(ASYNC_TASK_TRAIT_TY).unwrap(),
+                    );
+
+                    let task_struct = &task.task_struct;
+                    let task_impl = &task.task_impl;
+
+                    let (exec_static, wake_fn) = generate_exec_static_and_wake(
+                        task,
+                        sub_analysis,
+                        num_cores,
+                        &async_runtime_path,
+                        &interrupt_ty,
+                    );
+                    let dispatcher_irq = sub_analysis
+                        .dispatcher_priority_map
+                        .get(&task.params.priority)
+                        .unwrap();
+                    let spawn_impl = task.generate_spawn_api(
+                        dispatcher_irq,
+                        pac,
+                        self.backend,
+                        num_cores,
+                        &queue_path,
+                    );
+
+                    (
+                        quote! {
+                            #reconstructed_task_attr
+                            #task_struct
+                            #task_impl
+                            #spawn_impl
+                        },
+                        exec_static,
+                        wake_fn,
+                    )
+                })
+                .fold(
+                    (vec![], vec![], vec![]),
+                    |(mut tasks, mut execs, mut wakes), (task, exec, wake)| {
+                        tasks.push(task);
+                        execs.push(exec);
+                        wakes.push(wake);
+                        (tasks, execs, wakes)
+                    },
                 );
 
-                let task_struct = &task.task_struct;
-                let task_impl = &task.task_impl;
-                let dispatcher = sub_analysis
-                    .dispatcher_priority_map
-                    .get(&task.params.priority)
-                    .unwrap();
-                let spawn_impl =
-                    task.generate_spawn_api(dispatcher, pac, self.backend, num_cores, &queue_path);
-
-                quote! {
-                    #reconstructed_task_attr
-                    #task_struct
-                    #task_impl
-                    #spawn_impl
-                }
-            });
-
-            let dispatcher_tasks = generate_dispatcher_tasks(sub_analysis, &queue_path);
+            let dispatcher_tasks = generate_dispatcher_tasks(
+                num_cores,
+                sub_analysis,
+                &queue_path,
+                &async_runtime_path,
+                &interrupt_ty,
+            );
             let core_doc = format!(" Core {}", sub_app.core);
             quote! {
                 #[doc = " Async tasks of"]
                 #[doc = #core_doc]
                 #(#sw_tasks)*
+                #(#exec_statics)*
+                #(#wake_fns)*
 
                 #[doc = " Dispatchers of"]
                 #[doc = #core_doc]
@@ -181,66 +259,136 @@ impl<'a> CodeGen<'a> {
     }
 }
 
-fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis, queue_path: &Path) -> TokenStream {
+fn generate_exec_static_and_wake(
+    task: &AsyncTask,
+    sub_analysis: &SubAnalysis,
+    num_cores: usize,
+    async_runtime_path: &Path,
+    interrupt_ty: &Path,
+) -> (TokenStream, TokenStream) {
+    let task_name = task.name();
+    let exec_slot_ident = utils::exec_slot_ident(task_name);
+    let wake_fn_ident = utils::exec_wake_ident(task_name);
+    let wake_pend_fn = wake_pend_fn_ident(task.params.core, num_cores);
+    let dispatcher_irq = sub_analysis
+        .dispatcher_priority_map
+        .get(&task.params.priority)
+        .unwrap();
+
+    let exec_static = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        static mut #exec_slot_ident: #async_runtime_path::executor::ExecSlot =
+            #async_runtime_path::executor::ExecSlot::new();
+    };
+
+    let wake_fn = quote! {
+        #[doc(hidden)]
+        fn #wake_fn_ident() {
+            let exec = unsafe { &*core::ptr::addr_of!(#exec_slot_ident) };
+            exec.set_pending();
+            #wake_pend_fn(#interrupt_ty::#dispatcher_irq);
+        }
+    };
+
+    (exec_static, wake_fn)
+}
+
+fn generate_dispatcher_tasks(
+    num_cores: usize,
+    sub_analysis: &SubAnalysis,
+    queue_path: &Path,
+    _async_runtime_path: &Path,
+    interrupt_ty: &Path,
+) -> TokenStream {
     let core = sub_analysis.core;
     let dispatchers = &sub_analysis.dispatcher_priority_map;
-    let dispatcher_tasks = sub_analysis.tasks_priority_map.iter().map(|(prio, tasks)| {
-        let prio_ty = utils::priority_ty_ident(*prio, core);
+    let local_pend = local_pend_fn_ident(core, num_cores);
+    let dispatcher_tasks = sub_analysis
+        .tasks_priority_map
+        .iter()
+        .map(|(prio, tasks)| {
+            let prio_ty = utils::priority_ty_ident(*prio, core);
 
-        let dispatch_match_branches = tasks.iter().map(|(task_ident, _)| {
-            let task_static_handle = utils::ident_uppercase(task_ident);
-            let task_inputs_queue = utils::sw_task_inputs_ident(task_ident);
-            let prio_ty = &prio_ty;
+            let install_branches = tasks.iter().map(|(task_ident, _)| {
+                let task_static_handle = utils::ident_uppercase(task_ident);
+                let task_inputs_queue = utils::sw_task_inputs_ident(task_ident);
+                let exec_slot = utils::exec_slot_ident(task_ident);
+                let task_trait = format_ident!("{ASYNC_TASK_TRAIT_TY}");
+                quote! {
+                    #prio_ty::#task_ident => {
+                        let mut input_consumer = #task_inputs_queue.split().1;
+                        let input = input_consumer.dequeue_unchecked();
+                        let future = #task_trait::exec(
+                            #task_static_handle.assume_init_mut(),
+                            input,
+                        );
+                        let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
+                        unsafe { exec.install(future); }
+                    }
+                }
+            });
+
+            let poll_stmts = tasks.iter().map(|(task_ident, _)| {
+                let exec_slot = utils::exec_slot_ident(task_ident);
+                let wake_fn = utils::exec_wake_ident(task_ident);
+                quote! {
+                    {
+                        let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
+                        let still_running = exec.poll(#wake_fn);
+                        any_running = any_running || still_running;
+                    }
+                }
+            });
+
+            let ready_queue_name = utils::priority_queue_ident(&prio_ty);
+            let ready_queue_size = tasks.len() + 1;
+            let dispatcher_irq_name = dispatchers.get(prio).unwrap();
+            let dispatcher_priority = prio;
+            let dispatcher_task_ty = utils::dispatcher_ident(*prio, core);
+            let core_nbr = LitInt::new(&core.to_string(), Span::call_site());
+            let tasks = tasks.iter().map(|(ident, _)| ident);
+
             quote! {
-                #prio_ty::#task_ident => {
-                    let mut input_consumer = #task_inputs_queue.split().1;
-                    let input = input_consumer.dequeue_unchecked();
-                    #task_static_handle.assume_init_mut().exec(input);
-                }
-            }
-        });
-
-        let ready_queue_name = utils::priority_queue_ident(&prio_ty);
-        let ready_queue_size = tasks.len() + 1;
-        let dispatcher_irq_name = dispatchers.get(prio).unwrap();
-        let dispatcher_priority = prio;
-        let dispatcher_task_ty = utils::dispatcher_ident(*prio, core);
-        let core_nbr = LitInt::new(&core.to_string(), Span::call_site());
-        let tasks = tasks.iter().map(|(ident, _span_by)| ident);
-
-        quote! {
-            #[derive(Clone, Copy)]
-            #[doc(hidden)]
-            pub enum #prio_ty {
-                #(#tasks,)*
-            }
-
-            #[doc(hidden)]
-            #[allow(non_upper_case_globals)]
-            static mut #ready_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
-
-            #[doc(hidden)]
-            #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr )]
-            pub struct #dispatcher_task_ty;
-
-            impl RticTask for #dispatcher_task_ty {
-                fn init() -> Self {
-                    Self
+                #[derive(Clone, Copy)]
+                #[doc(hidden)]
+                pub enum #prio_ty {
+                    #(#tasks,)*
                 }
 
-                fn exec(&mut self) {
-                    unsafe {
-                        let mut ready_consumer = #ready_queue_name.split().1;
-                        while let Some(task) = ready_consumer.dequeue() {
-                            match task {
-                                #(#dispatch_match_branches)*
+                #[doc(hidden)]
+                #[allow(non_upper_case_globals)]
+                static mut #ready_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
+
+                #[doc(hidden)]
+                #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr )]
+                pub struct #dispatcher_task_ty;
+
+                impl RticTask for #dispatcher_task_ty {
+                    fn init() -> Self {
+                        Self
+                    }
+
+                    fn exec(&mut self) {
+                        unsafe {
+                            let mut ready_consumer = #ready_queue_name.split().1;
+                            while let Some(task) = ready_consumer.dequeue() {
+                                match task {
+                                    #(#install_branches)*
+                                }
                             }
+                        }
+
+                        let mut any_running = false;
+                        #(#poll_stmts)*
+
+                        if any_running {
+                            #local_pend(#interrupt_ty::#dispatcher_irq_name);
                         }
                     }
                 }
             }
-        }
-    });
+        });
 
     quote! {
         #(#dispatcher_tasks)*
@@ -249,6 +397,7 @@ fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis, queue_path: &Path) -> T
 
 pub const SC_PEND_FN_NAME: &str = "__rticx_local_irq_pend";
 pub const MC_PEND_FN_NAME: &str = "__rticx_cross_irq_pend";
+pub const WAKE_PEND_FN_NAME: &str = "__rticx_wake_irq_pend";
 
 impl AsyncTask {
     fn generate_spawn_api(
@@ -261,6 +410,7 @@ impl AsyncTask {
     ) -> TokenStream {
         let task_name = self.name();
         let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
+        let exec_slot = utils::exec_slot_ident(task_name);
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
         let inputs_ty = quote!(<#task_name as #task_trait_name>::SpawnInput);
         let prio_ty = utils::priority_ty_ident(self.params.priority, self.params.core);
@@ -278,12 +428,16 @@ impl AsyncTask {
                 static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
 
                 impl #task_name {
-                    pub fn spawn(input : #inputs_ty) -> Result<(), #inputs_ty> {
-                        let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
-                        let mut ready_producer = unsafe {#ready_queue_name.split().0};
-                        #critical_section_fn(|| -> Result<(), #inputs_ty>  {
+                    pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
+                        let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
+                        let mut ready_producer = unsafe { #ready_queue_name.split().0 };
+                        #critical_section_fn(|| -> Result<(), #inputs_ty> {
+                            let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
+                            if !exec.try_allocate() {
+                                return Err(input);
+                            }
                             inputs_producer.enqueue(input)?;
-                            unsafe {ready_producer.enqueue_unchecked(#prio_ty::#task_name)};
+                            unsafe { ready_producer.enqueue_unchecked(#prio_ty::#task_name) };
                             #pend_fn(#interrupt_ty::#dispatcher_irq_name);
                             Ok(())
                         })
@@ -297,12 +451,19 @@ impl AsyncTask {
                 static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
 
                 impl #task_name {
-                    pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), #inputs_ty> {
-                        let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
-                        let mut ready_producer = unsafe {#ready_queue_name.split().0};
-                        #critical_section_fn(|| -> Result<(), #inputs_ty>  {
+                    pub fn spawn_from(
+                        _spawner: #spawner_ty,
+                        input: #inputs_ty,
+                    ) -> Result<(), #inputs_ty> {
+                        let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
+                        let mut ready_producer = unsafe { #ready_queue_name.split().0 };
+                        #critical_section_fn(|| -> Result<(), #inputs_ty> {
+                            let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
+                            if !exec.try_allocate() {
+                                return Err(input);
+                            }
                             inputs_producer.enqueue(input)?;
-                            unsafe {ready_producer.enqueue_unchecked(#prio_ty::#task_name)};
+                            unsafe { ready_producer.enqueue_unchecked(#prio_ty::#task_name) };
                             #pend_fn(#interrupt_ty::#dispatcher_irq_name);
                             Ok(())
                         })
