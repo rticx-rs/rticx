@@ -124,25 +124,7 @@ impl CorePassBackend for CortexMRtic {
             }
         }
 
-        let async_setup: Option<TokenStream2> = {
-            #[cfg(feature = "async")]
-            {
-                self.info_bus
-                    .as_ref()
-                    .and_then(|bus| {
-                        bus.get::<rticx_async_pass::Analysis>(rticx_async_pass::INFO_ANALYSIS)
-                            .ok()
-                    })
-                    .map(|_| quote! {
-                        rticx_cortex_m::export::init_async_heap();
-                        __rticx_init_async_slots();
-                    })
-            }
-            #[cfg(not(feature = "async"))]
-            {
-                None
-            }
-        };
+        let async_setup: Option<TokenStream2> = None;
 
         // `core::peripheral::Peripherals` handle for SCB/NVIC access at runtime.
         // `post_init` already runs inside a critical section, so stealing is safe.

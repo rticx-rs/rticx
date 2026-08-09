@@ -239,28 +239,3 @@ mod source_mask {
         }
     }
 }
-
-// ============================================================================
-// Async task heap (embedded-alloc, distro-managed, invisible to end users)
-// ============================================================================
-
-#[cfg(feature = "async")]
-mod async_heap {
-    use embedded_alloc::Heap;
-
-    const HEAP_SIZE: usize = 2048;
-
-    #[global_allocator]
-    static ALLOC: Heap = Heap::empty();
-
-    static mut HEAP: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
-
-    pub fn init_async_heap() {
-        unsafe {
-            ALLOC.init(core::ptr::addr_of!(HEAP) as usize, HEAP_SIZE);
-        }
-    }
-}
-
-#[cfg(feature = "async")]
-pub use async_heap::init_async_heap;

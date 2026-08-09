@@ -60,30 +60,6 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            fn __rticx_init_async_slots
-        },
-        "init slots function",
-    );
-
-    assert_section_present(
-        &generated,
-        quote! {
-            ExecSlot :: new_from_witness (__rticx_async_Foo)
-        },
-        "new_from_witness in init",
-    );
-
-    assert_section_present(
-        &generated,
-        quote! {
-            Box :: leak
-        },
-        "Box::leak in init",
-    );
-
-    assert_section_present(
-        &generated,
-        quote! {
             pub fn __rticx_async_local_irq_pend (irq_nbr : mypac :: Interrupt) {
                 mock_local_pend (irq_nbr) ;
             }
@@ -392,21 +368,5 @@ fn codegen_expands_multi_core_sw_app() {
             }
         },
         "cross pend core1",
-    );
-
-    assert_section_present(
-        &generated,
-        quote! {
-            __rticx_internal__Task0__PTR . store
-        },
-        "init stores Task0 ptr",
-    );
-
-    assert_section_present(
-        &generated,
-        quote! {
-            __rticx_internal__Cross__PTR . store
-        },
-        "init stores Cross ptr",
     );
 }

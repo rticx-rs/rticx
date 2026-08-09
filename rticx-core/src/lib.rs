@@ -33,6 +33,24 @@ pub mod parser;
 
 static DEFAULT_TASK_PRIORITY: AtomicU16 = AtomicU16::new(0);
 
+/// Points in the generated `main()` where passes can inject code.
+pub enum MainInjectionPoint {
+    /// Inside the `interrupt_free` block, before system_init
+    BeforeInit,
+    /// Inside the `interrupt_free` block, after system_init + task_init, before post_init
+    BeforePostInit,
+    /// After the `interrupt_free` block, before the idle loop
+    BeforeIdle,
+}
+
+/// Collected token streams from passes, keyed by injection point.
+#[derive(Default)]
+pub struct MainInjections {
+    pub before_init: Vec<TokenStream2>,
+    pub before_post_init: Vec<TokenStream2>,
+    pub before_idle: Vec<TokenStream2>,
+}
+
 /// A trait that allows defining a **Compilation Pass**.
 ///
 /// A **Compilation Pass** can be thought of as a (partial) proc-macro that expands parts of the user application
@@ -56,6 +74,12 @@ pub trait RticPass {
     /// Returns a human readable name/alias used to identify the pass. This identifier will show np in errors for example
     /// to help knowing exactly which compilation pass has failed in that case.
     fn pass_name(&self) -> &str;
+
+    /// Return tokens to inject into `main()` at the given injection point.
+    /// Called after all passes have run and before the core pass generates `main()`.
+    fn main_injection(&self, _point: &MainInjectionPoint) -> Option<TokenStream2> {
+        None
+    }
 }
 
 /// This should be used to compose an **RTIC distribution**. In other words, it allows building the RTIC **app** macro
@@ -107,7 +131,7 @@ impl RticMacroBuilder {
         let mut app_mod = app_mod;
 
         // First, run pre-core passes (in the order of their insertion)
-        for mut pass in self.pre_std_passes {
+        for pass in &mut self.pre_std_passes {
             (*pass).subscribe(self.info_bus.clone());
             let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
                 Ok(out) => out,
@@ -156,7 +180,23 @@ impl RticMacroBuilder {
             return e.to_compile_error();
         }
 
-        let code = CodeGen::new(self.core.as_ref(), &parsed_app, &analysis).run();
+        // Collect injections from all passes
+        let mut injections = MainInjections::default();
+        for pass in &self.pre_std_passes {
+            if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforeInit) {
+                injections.before_init.push(tokens);
+            }
+            if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforePostInit) {
+                injections.before_post_init.push(tokens);
+            }
+            if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforeIdle) {
+                injections.before_idle.push(tokens);
+            }
+        }
+
+        let code = CodeGen::new(self.core.as_ref(), &parsed_app, &analysis)
+            .with_injections(&injections)
+            .run();
 
         #[cfg(feature = "debug_expand")]
         if let Ok(binary_name) = std::env::var("CARGO_BIN_NAME")

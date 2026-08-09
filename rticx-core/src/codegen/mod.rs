@@ -10,6 +10,7 @@ use crate::rticx_functions::{
     INTERRUPT_FREE_FN, generate_task_traits_check_functions, get_interrupt_free_fn,
 };
 use crate::rticx_traits::get_rticx_traits_mod;
+use crate::MainInjections;
 
 pub mod hw_task;
 pub mod shared_resources;
@@ -20,6 +21,7 @@ pub struct CodeGen<'a> {
     app: &'a App,
     analysis: &'a Analysis,
     implementation: &'a dyn CorePassBackend,
+    injections: Option<&'a MainInjections>,
 }
 
 impl<'a> CodeGen<'a> {
@@ -32,7 +34,13 @@ impl<'a> CodeGen<'a> {
             app,
             analysis,
             implementation,
+            injections: None,
         }
+    }
+
+    pub fn with_injections(mut self, injections: &'a MainInjections) -> Self {
+        self.injections = Some(injections);
+        self
     }
 
     pub fn run(&self) -> TokenStream2 {
@@ -160,6 +168,20 @@ impl<'a> CodeGen<'a> {
 
             let def_core_type = generate_core_type(app.core);
 
+            let empty = Vec::new();
+            let before_init = self
+                .injections
+                .map(|inj| &inj.before_init)
+                .unwrap_or(&empty);
+            let before_post_init = self
+                .injections
+                .map(|inj| &inj.before_post_init)
+                .unwrap_or(&empty);
+            let before_idle = self
+                .injections
+                .map(|inj| &inj.before_idle)
+                .unwrap_or(&empty);
+
             let doc = format!(" # CORE {}", app.core);
             let entry_of = format!(" # Entry of CORE {}", app.core);
             quote! {
@@ -189,15 +211,23 @@ impl<'a> CodeGen<'a> {
                 fn #entry_name() -> ! {
                     // Disable interrupts during initialization
                     #interrupt_free(||{
+                        #(#before_init)*
+
                         // user init code
                         #init_system
 
                         // init tasks
                         unsafe {#(#task_init_calls)*}
 
+                        // injections before post_init
+                        #(#before_post_init)*
+
                         // post initialization code
                         #post_init
                     });
+
+                    // injections before idle
+                    #(#before_idle)*
 
                     #call_idle_task
                 }

@@ -7,6 +7,7 @@ use crate::AsyncPassBackend;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use rticx_core::parse_utils::RticAttr;
+use std::cell::RefCell;
 use syn::{parse_quote, ItemMod, LitInt, Path};
 
 fn local_pend_fn_ident(core: u32, num_cores: usize) -> Ident {
@@ -33,23 +34,26 @@ pub struct CodeGen<'a> {
     app: App,
     analysis: Analysis,
     backend: &'a dyn AsyncPassBackend,
+    slot_init_stmts: &'a RefCell<Vec<TokenStream>>,
 }
 
 impl<'a> CodeGen<'a> {
-    pub fn new(app: App, analysis: Analysis, backend: &'a dyn AsyncPassBackend) -> CodeGen<'a> {
+    pub fn new(
+        app: App,
+        analysis: Analysis,
+        backend: &'a dyn AsyncPassBackend,
+        slot_init_stmts: &'a RefCell<Vec<TokenStream>>,
+    ) -> CodeGen<'a> {
         Self {
             app,
             analysis,
             backend,
+            slot_init_stmts,
         }
     }
 
     pub fn run(&mut self) -> ItemMod {
         let sub_apps = self.generate_subapps();
-        let init_slots_fn = {
-            let async_runtime_path = self.backend.async_runtime_path();
-            generate_init_slots(&self.app, self.analysis.sub_analysis.iter(), &async_runtime_path)
-        };
         let local_pend_fns = self.get_local_pend_fns();
         let cross_pend_fns = self.get_cross_pend_fns();
         let wake_pend_fns = self.get_wake_pend_fns();
@@ -69,6 +73,9 @@ impl<'a> CodeGen<'a> {
         let mod_visibility = &self.app.mod_visibility;
         let mod_ident = &self.app.mod_ident;
 
+        // Push slot init statements for main_injection
+        self.push_slot_inits();
+
         parse_quote! {
             #mod_visibility mod #mod_ident {
                 #(#rest_of_code)*
@@ -77,7 +84,32 @@ impl<'a> CodeGen<'a> {
                 #local_pend_fns
                 #wake_pend_fns
                 #cross_pend_fns
-                #init_slots_fn
+            }
+        }
+    }
+
+    fn push_slot_inits(&self) {
+        let async_runtime_path = self.backend.async_runtime_path();
+        let mut stmts = self.slot_init_stmts.borrow_mut();
+
+        for (sub_app, _) in self.app.sub_apps.iter().zip(self.analysis.sub_analysis.iter()) {
+            let all_tasks = sub_app
+                .sw_tasks
+                .iter()
+                .chain(sub_app.mc_sw_tasks.iter());
+
+            for task in all_tasks {
+                let wrapper_fn_ident = utils::async_wrapper_ident(task.name());
+                let ptr_ident = utils::exec_ptr_ident(task.name());
+
+                stmts.push(quote! {
+                    {
+                        let __s = core::mem::ManuallyDrop::new(
+                            #async_runtime_path::executor::ExecSlot::new_from_witness(#wrapper_fn_ident)
+                        );
+                        #ptr_ident.store(&*__s as *const _ as *const ());
+                    }
+                });
             }
         }
     }
@@ -319,46 +351,6 @@ fn generate_exec_static_and_wake(
     };
 
     (wrapper_fn, ptr_static, wake_fn)
-}
-
-fn generate_init_slots<'a>(
-    app: &App,
-    analysis: impl Iterator<Item = &'a SubAnalysis>,
-    async_runtime_path: &Path,
-) -> TokenStream {
-    let mut init_stmts = Vec::new();
-
-    for (sub_app, sub_analysis) in app.sub_apps.iter().zip(analysis) {
-        let all_tasks = sub_app
-            .sw_tasks
-            .iter()
-            .chain(sub_app.mc_sw_tasks.iter());
-
-        for task in all_tasks {
-            let task_name = task.name();
-            let wrapper_fn_ident = utils::async_wrapper_ident(task_name);
-            let ptr_ident = utils::exec_ptr_ident(task_name);
-            let _ = sub_analysis;
-
-            init_stmts.push(quote! {
-                {
-                    let slot = ::alloc::boxed::Box::leak(
-                        ::alloc::boxed::Box::new(
-                            #async_runtime_path::executor::ExecSlot::new_from_witness(#wrapper_fn_ident)
-                        )
-                    );
-                    #ptr_ident.store(slot as *const _ as *const ());
-                }
-            });
-        }
-    }
-
-    quote! {
-        #[doc(hidden)]
-        fn __rticx_init_async_slots() {
-            #(#init_stmts)*
-        }
-    }
 }
 
 fn generate_dispatcher_tasks(

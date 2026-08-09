@@ -6,7 +6,8 @@ pub use crate::parse::App;
 use crate::codegen::CodeGen;
 pub use analyze::Analysis;
 use proc_macro2::TokenStream;
-use rticx_core::{InfoBus, RticPass};
+use rticx_core::{InfoBus, MainInjectionPoint, RticPass};
+use std::cell::RefCell;
 use syn::ItemMod;
 
 pub static INFO_APP: &str = "rticx_async_pass::App";
@@ -15,6 +16,7 @@ pub static INFO_ANALYSIS: &str = "rticx_async_pass::Analysis";
 pub struct AsyncPass {
     backend: Box<dyn AsyncPassBackend>,
     info_bus: Option<InfoBus>,
+    slot_init_stmts: RefCell<Vec<TokenStream>>,
 }
 
 impl AsyncPass {
@@ -22,6 +24,7 @@ impl AsyncPass {
         Self {
             backend: Box::new(backend),
             info_bus: None,
+            slot_init_stmts: RefCell::new(Vec::new()),
         }
     }
 }
@@ -35,7 +38,13 @@ impl RticPass for AsyncPass {
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
         let parsed = App::parse(&args, app_mod)?;
         let analysis = Analysis::run(&parsed)?;
-        let code = CodeGen::new(parsed.clone(), analysis.clone(), self.backend.as_ref()).run();
+        let code = CodeGen::new(
+            parsed.clone(),
+            analysis.clone(),
+            self.backend.as_ref(),
+            &self.slot_init_stmts,
+        )
+        .run();
         self.info_bus.as_ref().inspect(|b| {
             b.publish(INFO_APP, parsed)
                 .unwrap_or_else(|_| panic!("no other crate is allowed to publish {INFO_APP}"));
@@ -47,6 +56,21 @@ impl RticPass for AsyncPass {
 
     fn pass_name(&self) -> &str {
         "AsyncPass"
+    }
+
+    fn main_injection(&self, point: &MainInjectionPoint) -> Option<TokenStream> {
+        match point {
+            MainInjectionPoint::BeforeIdle => {
+                let stmts = self.slot_init_stmts.borrow();
+                if stmts.is_empty() {
+                    None
+                } else {
+                    let stmts = &*stmts;
+                    Some(quote::quote! { #(#stmts)* })
+                }
+            }
+            _ => None,
+        }
     }
 }
 
