@@ -101,8 +101,9 @@ Pipeline order inside `build_rtic_macro2` (the proc-macro entry reuses it via `T
 6. Run `Analysis::run(&mut parsed_app)` for resource ceiling analysis.
 7. Publish the analysis to the `InfoBus` under the key `rticx_core::Analysis`.
 8. Call `CorePassBackend::pre_codegen_validation`.
-9. Run `CodeGen::new(core_backend, &parsed_app, &analysis).run()`.
-10. If the `debug_expand` feature is enabled, write the expanded code to `examples/{binary_name}_expanded.rs`.
+9. Collect injections from all passes by calling `pass.main_injection(&point)` for each `MainInjectionPoint`.
+10. Run `CodeGen::new(core_backend, &parsed_app, &analysis).with_injections(&injections).run()`.
+11. If the `debug_expand` feature is enabled, write the expanded code to `examples/{binary_name}_expanded.rs`.
 
 > Note: there is no `bind_post_core_pass` anymore — only **pre-core** passes are supported. Passes that need to react after the core codegen must run as the last pre-core pass and inspect the `InfoBus` entries published by the core (e.g. `rticx_core::App`, `rticx_core::Analysis`).
 
@@ -125,10 +126,33 @@ pub trait RticPass {
 
     /// Human-readable name/alias used to identify the pass in errors.
     fn pass_name(&self) -> &str;
+
+    /// Return tokens to inject into `main()` at the given injection point.
+    /// Called after all passes have run and before the core pass generates `main()`.
+    fn main_injection(&self, _point: &MainInjectionPoint) -> Option<TokenStream2> {
+        None
+    }
 }
 ```
 
 Passes receive the macro arguments and the annotated module, and return transformed versions. They are pure syntax-to-syntax transformations. `subscribe` is the only place where a pass can obtain a (clonable) handle to the shared `InfoBus`.
+
+### `MainInjectionPoint`
+
+```rust
+pub enum MainInjectionPoint {
+    BeforeInit,      // inside interrupt_free, before system_init
+    BeforePostInit,  // inside interrupt_free, before post_init
+    BeforeIdle,      // after interrupt_free, before idle loop
+}
+```
+
+Passes use `main_injection` to inject code (e.g. variable declarations) directly
+into `main()`'s body.  Since `main() -> !`, injected locals live forever on the
+stack.  The builder collects injections from all passes after parse/analysis,
+bundles them into a `MainInjections` struct, and passes them to the core
+`CodeGen`.  See `rticx-async-pass` for the primary consumer (injects executor
+slot locals at `BeforeIdle`).
 
 ### `CorePassBackend`
 
