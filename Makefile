@@ -2,9 +2,11 @@
 
 CRATES := rticx-core \
           rticx-spsc \
+          rticx-async \
           compilation-passes/rticx-sw-pass \
           compilation-passes/rticx-auto-assign \
-          compilation-passes/rticx-deadline-pass
+          compilation-passes/rticx-deadline-pass \
+          compilation-passes/rticx-async-pass
 
 # Default target: run everything CI would run.
 all: fmt-check test clippy

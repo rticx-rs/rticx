@@ -11,7 +11,6 @@ use portable_atomic::{AtomicBool, AtomicPtr};
 
 use crate::dropper::OnDropWith;
 
-#[allow(dead_code)]
 pub type WaitQueue = DoublyLinkedList<Waker>;
 
 pub struct DoublyLinkedList<T> {
@@ -154,7 +153,6 @@ impl<T: Clone> Link<T> {
 }
 
 impl DoublyLinkedList<Waker> {
-    #[allow(dead_code)]
     pub async fn wait_until<T, F: FnMut() -> Option<T>>(&self, mut f: F) -> T {
         let link_place = pin!(None::<Link<Waker>>);
 

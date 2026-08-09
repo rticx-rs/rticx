@@ -6,6 +6,10 @@
 /// Distribution crate must re-export the `export` module from all the used compilation passes
 pub use rticx_sw_pass::export::*;
 
+// Async runtime re-export
+#[cfg(feature = "asynctasks")]
+pub use rticx_async as async_rt;
+
 /// Exports required by the core pass and by generated code
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 pub use cortex_m::{
@@ -235,3 +239,28 @@ mod source_mask {
         }
     }
 }
+
+// ============================================================================
+// Async task heap (embedded-alloc, distro-managed, invisible to end users)
+// ============================================================================
+
+#[cfg(feature = "asynctasks")]
+mod async_heap {
+    use embedded_alloc::Heap;
+
+    const HEAP_SIZE: usize = 2048;
+
+    #[global_allocator]
+    static ALLOC: Heap = Heap::empty();
+
+    static mut HEAP: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
+
+    pub fn init_async_heap() {
+        unsafe {
+            ALLOC.init(core::ptr::addr_of!(HEAP) as usize, HEAP_SIZE);
+        }
+    }
+}
+
+#[cfg(feature = "asynctasks")]
+pub use async_heap::init_async_heap;

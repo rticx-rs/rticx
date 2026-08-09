@@ -2,14 +2,24 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 
-use rticx_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
+use rticx_core::{AppArgs, CorePassBackend, InfoBus, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
+#[cfg(feature = "asynctasks")]
+use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 use syn::{parse_quote, ItemFn, Path};
 
 extern crate proc_macro;
 
-struct CortexMRtic;
+struct CortexMRtic {
+    info_bus: Option<InfoBus>,
+}
+
+impl CortexMRtic {
+    fn new() -> Self {
+        Self { info_bus: None }
+    }
+}
 
 /// Cortex-M exceptions that have a *configurable* priority. These may be bound
 /// to hardware tasks (their priority is set via `SCB`), but must not be used as
@@ -44,16 +54,24 @@ const MIN_TASK_PRIORITY: u16 = 0b11;
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     #[cfg(feature = "swtasks")]
     let sw_pass = SoftwarePass::new(SwPassBackendImpl);
+    #[cfg(feature = "asynctasks")]
+    let async_pass = AsyncPass::new(AsyncPassBackendImpl);
 
     #[allow(unused_mut)]
-    let mut builder = RticMacroBuilder::new(CortexMRtic);
+    let mut builder = RticMacroBuilder::new(CortexMRtic::new());
     #[cfg(feature = "swtasks")]
-    builder.bind_pre_core_pass(sw_pass); // run software pass before the core pass
+    builder.bind_pre_core_pass(sw_pass);
+    #[cfg(feature = "asynctasks")]
+    builder.bind_pre_core_pass(async_pass);
     builder.build_rtic_macro(args, input)
 }
 
 // =========================================== CorePassBackend ===================================================
 impl CorePassBackend for CortexMRtic {
+    fn subscribe(&mut self, info_bus: InfoBus) {
+        self.info_bus = Some(info_bus);
+    }
+
     fn default_task_priority(&self) -> u16 {
         MIN_TASK_PRIORITY
     }
@@ -106,6 +124,25 @@ impl CorePassBackend for CortexMRtic {
             }
         }
 
+        let async_heap_init: Option<TokenStream2> = {
+            #[cfg(feature = "asynctasks")]
+            {
+                self.info_bus
+                    .as_ref()
+                    .and_then(|bus| {
+                        bus.get::<rticx_async_pass::Analysis>(
+                            rticx_async_pass::INFO_ANALYSIS,
+                        )
+                        .ok()
+                    })
+                    .map(|_| quote! { rticx_cortex_m::export::init_async_heap(); })
+            }
+            #[cfg(not(feature = "asynctasks"))]
+            {
+                None
+            }
+        };
+
         // `core::peripheral::Peripherals` handle for SCB/NVIC access at runtime.
         // `post_init` already runs inside a critical section, so stealing is safe.
         Some(quote! {
@@ -113,6 +150,7 @@ impl CorePassBackend for CortexMRtic {
             unsafe {
                 #(#stmts)*
             }
+            #async_heap_init
         })
     }
 
@@ -329,6 +367,33 @@ impl SwPassBackend for SwPassBackendImpl {
 
     /// No secondary core: cross-core pending is unavailable on this single-core
     /// distribution.
+    fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
+        None
+    }
+}
+
+// =========================================== Async pass backend ===========================================
+#[cfg(feature = "asynctasks")]
+struct AsyncPassBackendImpl;
+
+#[cfg(feature = "asynctasks")]
+impl AsyncPassBackend for AsyncPassBackendImpl {
+    fn queue_path(&self) -> Path {
+        parse_quote!(rticx_cortex_m::export::Queue)
+    }
+
+    fn async_runtime_path(&self) -> Path {
+        parse_quote!(rticx_cortex_m::export::async_rt)
+    }
+
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
+        let body = parse_quote!({
+            rticx_cortex_m::export::NVIC::pend(irq_nbr);
+        });
+        empty_body_fn.block = Box::new(body);
+        empty_body_fn
+    }
+
     fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
         None
     }

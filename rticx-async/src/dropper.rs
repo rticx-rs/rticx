@@ -4,7 +4,6 @@ pub struct OnDrop<F: FnOnce()> {
     f: core::mem::MaybeUninit<F>,
 }
 
-#[allow(dead_code)]
 impl<F: FnOnce()> OnDrop<F> {
     pub fn new(f: F) -> Self {
         Self {
@@ -12,7 +11,6 @@ impl<F: FnOnce()> OnDrop<F> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn defuse(self) {
         core::mem::forget(self)
     }
@@ -24,16 +22,13 @@ impl<F: FnOnce()> Drop for OnDrop<F> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) struct OnDropWith<T, F: FnMut(&mut T)>(T, F);
 
 impl<T, F: FnMut(&mut T)> OnDropWith<T, F> {
-    #[allow(dead_code)]
     pub(crate) fn new(value: T, f: F) -> Self {
         Self(value, f)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn execute(&mut self) {
         (self.1)(&mut self.0);
     }
