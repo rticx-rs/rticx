@@ -129,10 +129,85 @@ detected on the `InfoBus`.  End-user code never sees a `#[global_allocator]` or
 heap configuration.
 
 ## Heap allocation lifecycle
-Allocation: Box::pin(future) inside ExecSlot::install() (called by the dispatcher ISR). Uses a 2048-byte embedded-alloc::Heap (bump allocator) configured as #[global_allocator].
-Freeing: When poll() returns Poll::Ready(()), the code does *self.future.get() = None, which drops the Pin<Box<dyn Future>>. The Box deallocator runs, but with a bump allocator, individual dealloc calls are typically no-ops — the heap space isn't truly reclaimed.
-Why fragmentation isn't an issue: Each task has exactly one ExecSlot, and try_allocate() (CAS) ensures only one future per slot at a time. When a future completes, the slot becomes IDLE, and the next spawn() of the same task allocates a new Box::pin() into the same slot position. The bump pointer doesn't advance because old futures are dropped, so the allocator reuses the same heap region. No fragmentation for same-size futures.
-Overflow prevention: Fixed 2048-byte heap. If all concurrent futures exceed that, Box::pin() panics (OOM). TODO: we need to improve this later so that heap size is adjustable by the user + spawn/spawn_from return out of memory error
+
+**Allocation**: `Box::pin(future)` inside `ExecSlot::install()` (called by the dispatcher ISR). Uses a 2048-byte `embedded-alloc::Heap` (bump allocator) configured as `#[global_allocator]`.
+
+**Freeing**: When `poll()` returns `Poll::Ready(())`, the code does `*self.future.get() = None`, which drops the `Pin<Box<dyn Future>>`. The `Box` deallocator runs, but with a bump allocator, individual `dealloc` calls are typically no-ops — the heap space isn't truly reclaimed.
+
+**Why fragmentation isn't an issue**: Each task has exactly one `ExecSlot`, and `try_allocate()` (CAS) ensures only one future per slot at a time. When a future completes, the slot becomes IDLE, and the next `spawn()` of the same task allocates a new `Box::pin()` into the same slot position. The bump pointer doesn't advance because old futures are dropped, so the allocator reuses the same heap region. No fragmentation for same-size futures.
+
+**Overflow prevention**: Fixed 2048-byte heap. If all concurrent futures exceed that, `Box::pin()` panics (OOM). TODO: we need to improve this later so that heap size is adjustable by the user + `spawn`/`spawn_from` return out of memory error.
+
+### Why heap allocation instead of static allocation?
+
+The RTICX async pass was explicitly designed to keep `rticx-async` 
+(codegen-independent runtime) separate from `rticx-async-pass` (proc-macro 
+codegen). A consequence of this separation is that the proc-macro cannot know 
+the concrete future type at codegen time — the user's `async fn exec(&mut self, 
+input) { ... }` generates an anonymous `impl Future` type that is opaque to the 
+macro system.
+
+The trait method returns `impl Future` (RPIT — return-position impl trait), 
+making it impossible to name the concrete type in a `static mut` declaration:
+
+```rust
+pub trait RticAsyncTask {
+    fn exec(&mut self, Self::SpawnInput) -> impl core::future::Future<Output = ()>;
+}
+//                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+// Cannot reference this type in a static declaration.
+```
+
+To store the future inline (without `Box`), we would need to name the concrete 
+type. This requires a trait with an **associated future type**:
+
+```rust
+pub trait RticAsyncTask {
+    type Future: core::future::Future<Output = ()>;
+    fn exec(&mut self, Self::SpawnInput) -> Self::Future;
+}
+```
+
+The impl would then set `type Future` to a named opaque type, enabling:
+
+```rust
+static mut FOO_EXEC: ExecSlot<<Foo as RticAsyncTask>::Future> = ExecSlot::new();
+```
+
+However, on **stable Rust 1.97** this pattern is blocked by two missing features:
+
+| Feature | Purpose | Status |
+|---------|---------|--------|
+| `impl_trait_in_assoc_type` | `type Future = impl Future<Output = ()>;` in impl blocks | **Nightly** |
+| `type_alias_impl_trait` (TAIT) | `type FooFuture = impl Future<Output = ()>;` at module scope | **Nightly** |
+
+And even with nightly, `async fn exec(...)` creates its own `impl Future` opaque 
+type that cannot be unified with the associated type's `impl Future` — distinct
+`impl Trait` occurrences produce *distinct* opaque types.  The user would need 
+to write `fn exec() -> Self::Future { async move { ... } }` instead of 
+`async fn exec()`, which is less ergonomic.
+
+**Proven viable pattern (nightly-only):**
+
+```rust
+#![feature(impl_trait_in_assoc_type)]
+
+pub trait RticAsyncTask {
+    type Future: Future<Output = ()>;
+    fn exec(&mut self, input: Self::SpawnInput) -> Self::Future;
+}
+
+impl RticAsyncTask for Ping {
+    type Future = impl Future<Output = ()>;
+    fn exec(&mut self, input: ()) -> Self::Future {
+        async move { /* user's async body */ }
+    }
+}
+```
+
+Once these features stabilize, RTICX can switch to static future storage,
+eliminating the heap, `extern crate alloc`, and `#[global_allocator]`.
+The architecture has been prototyped and the approach is verified correct.
 
 ## Starvation between dispatchers
 Correct by design. Each priority level gets its own dispatcher interrupt, and each task's waker pends only its own dispatcher. A high-priority dispatcher can starve lower ones — this is normal NVIC priority-preemptive behavior, identical to vanilla RTIC hardware tasks. If a prio-3 task keeps reawakening, the CPU serves it ahead of prio-2 tasks, which is correct.
@@ -220,7 +295,7 @@ The pass inherits the sw-pass multicore model unchanged:
 
 - **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.
 - **No cancellation** — an in-flight future cannot be cancelled; the slot must complete naturally.
-- **Heap required** — future storage uses `Box`; a future iteration could provide fixed-capacity inline slots with a compile-time size assertion.
+- **Heap required** — future storage uses `Box`; see [Why heap allocation?](#why-heap-allocation-instead-of-static-allocation) for rationale. Once `impl_trait_in_assoc_type` stabilizes, static allocation is feasible.
 - **Priority 0 executors** need a dispatcher IRQ assigned in `dispatchers = […]` (no implicit idle-driven loop like upstream RTIC).
 - **Cross-core channel waking** requires the backend to implement `generate_wake_pend_fn` with a runtime core check; works automatically on single-core.
 
