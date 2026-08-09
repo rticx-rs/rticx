@@ -150,15 +150,12 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            let mut any_running = false ;
             {
                 let exec = unsafe { & * core :: ptr :: addr_of ! (__rticx_internal__Foo__EXEC) } ;
-                let still_running = exec . poll (__rticx_internal__Foo__wake) ;
-                any_running = any_running || still_running ;
+                exec . poll (__rticx_internal__Foo__wake) ;
             }
-            if any_running { __rticx_async_local_irq_pend (mypac :: Interrupt :: IRQ0) ; }
         },
-        "dispatcher poll + self-repend",
+        "dispatcher poll",
     );
 }
 

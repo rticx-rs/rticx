@@ -43,8 +43,8 @@ mod app {
             Self
         }
         fn exec(&mut self) -> ! {
-            let _ = Ping::spawn(());
             let _ = Pong::spawn(());
+            let _ = Ping::spawn(());
             loop {
                 cortex_m::asm::wfi();
             }

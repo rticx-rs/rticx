@@ -90,13 +90,16 @@ impl RticTask for Core0Priority2Dispatcher {
         //    dequeue task ident → dequeue input → Box::pin(RticAsyncTask::exec(…))
         // 2. Poll every slot once (when pending)
         // 3. On Poll::Ready: drop the future, free the slot (running ← false)
-        // 4. If any slot is still running → re-pend myself
     }
 }
 ```
 
-The dispatcher self-pends until all futures complete (the executor keeps the
-hardware-task ISR alive as long as work remains).
+The dispatcher is **waker-driven**: when a future returns `Poll::Pending`, it
+has registered a waker; when a channel `send` or `recv` completes, the waker
+fires, which calls the task's generated wake function.  The wake function sets
+the slot's `pending` flag *and* pends the dispatcher interrupt, causing the
+dispatcher ISR to run again and poll the now-ready future.  No busy-looping;
+the dispatcher returns between polls.
 
 ---
 

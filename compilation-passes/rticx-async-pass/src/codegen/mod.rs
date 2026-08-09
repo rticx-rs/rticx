@@ -295,15 +295,14 @@ fn generate_exec_static_and_wake(
 }
 
 fn generate_dispatcher_tasks(
-    num_cores: usize,
+    _num_cores: usize,
     sub_analysis: &SubAnalysis,
     queue_path: &Path,
     _async_runtime_path: &Path,
-    interrupt_ty: &Path,
+    _interrupt_ty: &Path,
 ) -> TokenStream {
     let core = sub_analysis.core;
     let dispatchers = &sub_analysis.dispatcher_priority_map;
-    let local_pend = local_pend_fn_ident(core, num_cores);
     let dispatcher_tasks = sub_analysis
         .tasks_priority_map
         .iter()
@@ -335,8 +334,7 @@ fn generate_dispatcher_tasks(
                 quote! {
                     {
                         let exec = unsafe { &*core::ptr::addr_of!(#exec_slot) };
-                        let still_running = exec.poll(#wake_fn);
-                        any_running = any_running || still_running;
+                        exec.poll(#wake_fn);
                     }
                 }
             });
@@ -369,23 +367,18 @@ fn generate_dispatcher_tasks(
                         Self
                     }
 
-                    fn exec(&mut self) {
-                        unsafe {
-                            let mut ready_consumer = #ready_queue_name.split().1;
-                            while let Some(task) = ready_consumer.dequeue() {
-                                match task {
-                                    #(#install_branches)*
-                                }
+                fn exec(&mut self) {
+                    unsafe {
+                        let mut ready_consumer = #ready_queue_name.split().1;
+                        while let Some(task) = ready_consumer.dequeue() {
+                            match task {
+                                #(#install_branches)*
                             }
                         }
-
-                        let mut any_running = false;
-                        #(#poll_stmts)*
-
-                        if any_running {
-                            #local_pend(#interrupt_ty::#dispatcher_irq_name);
-                        }
                     }
+
+                    #(#poll_stmts)*
+                }
                 }
             }
         });
