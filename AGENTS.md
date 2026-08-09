@@ -284,6 +284,7 @@ Auto-assign and deadline passes read:
 ---
 
 ## 4. Development Workflow & Testing Commands
+Before finalizing any change always make sure that `make fmt all` from the project root succeeds
 
 ### Building and testing individual crates
 

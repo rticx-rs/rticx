@@ -122,6 +122,7 @@ fn codegen_expands_single_core_sw_app() {
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                        if unsafe { ! __rticx_async_system_initialized } { return Err (input) ; }
                         let exec = unsafe {
                             rticx_async :: executor :: recover_slot (
                                 __rticx_async_Foo ,
@@ -454,6 +455,7 @@ fn codegen_expands_prio_0_executor() {
             impl Foo {
                 pub fn spawn (input : < Foo as RticAsyncTask > :: SpawnInput) -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                        if unsafe { ! __rticx_async_system_initialized } { return Err (input) ; }
                         let exec = unsafe {
                             rticx_async :: executor :: recover_slot (
                                 __rticx_async_Foo ,

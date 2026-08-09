@@ -6,7 +6,8 @@ pub use crate::parse::App;
 use crate::software_pass::codegen::CodeGen;
 pub use analyze::Analysis;
 use proc_macro2::TokenStream;
-use rticx_core::{InfoBus, RticPass};
+use rticx_core::{InfoBus, MainInjectionPoint, RticPass};
+use std::cell::RefCell;
 use syn::ItemMod;
 
 pub static INFO_APP: &str = "rticx_sw_pass::App";
@@ -15,6 +16,7 @@ pub static INFO_ANALYSIS: &str = "rticx_sw_pass::Analysis";
 pub struct SoftwarePass {
     backend: Box<dyn SwPassBackend>,
     info_bus: Option<InfoBus>,
+    has_tasks: RefCell<bool>,
 }
 
 impl SoftwarePass {
@@ -22,6 +24,7 @@ impl SoftwarePass {
         Self {
             backend: Box::new(backend),
             info_bus: None,
+            has_tasks: RefCell::new(false),
         }
     }
 }
@@ -35,6 +38,11 @@ impl RticPass for SoftwarePass {
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
         let parsed = App::parse(&args, app_mod)?;
         let analysis = Analysis::run(&parsed)?;
+        let has_any = parsed
+            .sub_apps
+            .iter()
+            .any(|s| !s.sw_tasks.is_empty() || !s.mc_sw_tasks.is_empty());
+        *self.has_tasks.borrow_mut() = has_any;
         let code = CodeGen::new(parsed.clone(), analysis.clone(), self.backend.as_ref()).run();
         // publish info
         self.info_bus.as_ref().inspect(|b| {
@@ -48,6 +56,16 @@ impl RticPass for SoftwarePass {
 
     fn pass_name(&self) -> &str {
         "SoftwareTasks"
+    }
+
+    fn main_injection(&self, point: &MainInjectionPoint) -> Option<TokenStream> {
+        if matches!(point, MainInjectionPoint::BeforePostInit) && *self.has_tasks.borrow() {
+            Some(quote::quote! {
+                unsafe { __rticx_sw_system_initialized = true; }
+            })
+        } else {
+            None
+        }
     }
 }
 

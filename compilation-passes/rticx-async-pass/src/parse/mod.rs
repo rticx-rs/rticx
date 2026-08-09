@@ -107,9 +107,12 @@ impl App {
             })
         }
 
-        let has_prio_0 = sub_apps
-            .iter()
-            .any(|sub| sub.sw_tasks.iter().chain(sub.mc_sw_tasks.iter()).any(|t| t.params.priority == 0));
+        let has_prio_0 = sub_apps.iter().any(|sub| {
+            sub.sw_tasks
+                .iter()
+                .chain(sub.mc_sw_tasks.iter())
+                .any(|t| t.params.priority == 0)
+        });
         if has_prio_0 && has_user_idle {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),

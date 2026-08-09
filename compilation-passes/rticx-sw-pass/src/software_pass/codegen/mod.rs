@@ -69,6 +69,8 @@ impl<'a> CodeGen<'a> {
                 #local_pend_fns
                 // (optional) Cross Core interrupt pending
                 #cross_pend_fns
+                /// Flag set to true after system initialization completes
+                static mut __rticx_sw_system_initialized: bool = false;
             }
         }
     }
@@ -330,6 +332,9 @@ impl SoftwareTask {
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};
                         /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                         #critical_section_fn(|| -> Result<(), #inputs_ty>  {
+                            if unsafe { !__rticx_sw_system_initialized } {
+                                return Err(input);
+                            }
                             // enqueue inputs
                             inputs_producer.enqueue(input)?;
                             // enqueue task to ready queue
@@ -355,6 +360,9 @@ impl SoftwareTask {
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};
                         /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                         #critical_section_fn(|| -> Result<(), #inputs_ty>  {
+                            if unsafe { !__rticx_sw_system_initialized } {
+                                return Err(input);
+                            }
                             // enqueue inputs
                             inputs_producer.enqueue(input)?;
                             // enqueue task to ready queue

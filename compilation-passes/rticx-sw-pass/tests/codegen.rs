@@ -102,6 +102,7 @@ fn codegen_expands_single_core_sw_app() {
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticSwTask > :: SpawnInput > {
+                        if unsafe { ! __rticx_sw_system_initialized } { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Foo) } ;
                         __rticx_local_irq_pend (mypac :: Interrupt :: IRQ0) ;
@@ -228,6 +229,7 @@ fn codegen_expands_multi_core_sw_app() {
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                     __rticx_interrupt_free (| | -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
+                        if unsafe { ! __rticx_sw_system_initialized } { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Task0) } ;
                         __rticx_local_irq_pend_core0 (mypac :: Interrupt :: IRQ0) ;
@@ -301,6 +303,7 @@ fn codegen_expands_multi_core_sw_app() {
                     let mut ready_producer = unsafe { __rticx_internal__Core1Prio3Tasks__RQ . split () . 0 } ;
                     /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                     __rticx_interrupt_free (| | -> Result < () , < Cross as RticSwTask > :: SpawnInput > {
+                        if unsafe { ! __rticx_sw_system_initialized } { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core1Prio3Tasks :: Cross) } ;
                         __rticx_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1) ;

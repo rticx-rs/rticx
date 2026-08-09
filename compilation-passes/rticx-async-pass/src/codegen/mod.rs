@@ -84,6 +84,8 @@ impl<'a> CodeGen<'a> {
                 #local_pend_fns
                 #wake_pend_fns
                 #cross_pend_fns
+                /// Flag set to true after system initialization completes
+                static mut __rticx_async_system_initialized: bool = false;
             }
         }
     }
@@ -527,10 +529,7 @@ pub const MC_PEND_FN_NAME: &str = "__rticx_async_cross_irq_pend";
 pub const WAKE_PEND_FN_NAME: &str = "__rticx_async_wake_irq_pend";
 
 impl AsyncTask {
-    fn generate_spawn_api_prio_0(
-        &self,
-        async_runtime_path: &Path,
-    ) -> TokenStream {
+    fn generate_spawn_api_prio_0(&self, async_runtime_path: &Path) -> TokenStream {
         let task_name = self.name();
         let ptr_ident = utils::exec_ptr_ident(task_name);
         let wrapper_fn = utils::async_wrapper_ident(task_name);
@@ -545,6 +544,9 @@ impl AsyncTask {
             impl #task_name {
                 pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
                     #critical_section_fn(|| -> Result<(), #inputs_ty> {
+                        if unsafe { !__rticx_async_system_initialized } {
+                            return Err(input);
+                        }
                         let exec = unsafe {
                             #async_runtime_path::executor::recover_slot(
                                 #wrapper_fn,
@@ -600,6 +602,9 @@ impl AsyncTask {
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {
+                            if unsafe { !__rticx_async_system_initialized } {
+                                return Err(input);
+                            }
                             let exec = unsafe {
                                 #async_runtime_path::executor::recover_slot(
                                     #wrapper_fn,
@@ -631,6 +636,9 @@ impl AsyncTask {
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {
+                            if unsafe { !__rticx_async_system_initialized } {
+                                return Err(input);
+                            }
                             let exec = unsafe {
                                 #async_runtime_path::executor::recover_slot(
                                     #wrapper_fn,

@@ -17,6 +17,7 @@ pub struct AsyncPass {
     backend: Box<dyn AsyncPassBackend>,
     info_bus: Option<InfoBus>,
     slot_init_stmts: RefCell<Vec<TokenStream>>,
+    has_tasks: RefCell<bool>,
 }
 
 impl AsyncPass {
@@ -25,6 +26,7 @@ impl AsyncPass {
             backend: Box::new(backend),
             info_bus: None,
             slot_init_stmts: RefCell::new(Vec::new()),
+            has_tasks: RefCell::new(false),
         }
     }
 }
@@ -38,6 +40,11 @@ impl RticPass for AsyncPass {
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
         let parsed = App::parse(&args, app_mod)?;
         let analysis = Analysis::run(&parsed)?;
+        let has_any = parsed
+            .sub_apps
+            .iter()
+            .any(|s| !s.sw_tasks.is_empty() || !s.mc_sw_tasks.is_empty());
+        *self.has_tasks.borrow_mut() = has_any;
         let code = CodeGen::new(
             parsed.clone(),
             analysis.clone(),
@@ -60,6 +67,15 @@ impl RticPass for AsyncPass {
 
     fn main_injection(&self, point: &MainInjectionPoint) -> Option<TokenStream> {
         match point {
+            MainInjectionPoint::BeforePostInit => {
+                if *self.has_tasks.borrow() {
+                    Some(quote::quote! {
+                        unsafe { __rticx_async_system_initialized = true; }
+                    })
+                } else {
+                    None
+                }
+            }
             MainInjectionPoint::BeforeIdle => {
                 let stmts = self.slot_init_stmts.borrow();
                 if stmts.is_empty() {
