@@ -33,6 +33,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 |-------|------|------|
 | `rticx-core` | `rticx-core/` | Core compilation pass, parser, analysis, codegen, and the `RticMacroBuilder` API. |
 | `rticx-spsc` | `rticx-spsc/` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
+| `rticx-async` | `rticx-async/` | `no_std` + `alloc` async runtime: `ExecSlot` future storage, `make_channel!` macro, MPSC channels, waker infrastructure. |
 
 ### Compilation passes
 
@@ -41,6 +42,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 | `rticx-sw-pass` | `compilation-passes/rticx-sw-pass/` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
 | `rticx-auto-assign` | `compilation-passes/rticx-auto-assign/` | Automatic `core = N` assignment for tasks based on shared resource usage. |
 | `rticx-deadline-pass` | `compilation-passes/rticx-deadline-pass/` | Converts `deadline = D` attributes into RTICX priorities. |
+| `rticx-async-pass` | `compilation-passes/rticx-async-pass/` | Async/await software tasks pass: executors, dispatcher poll loops, `spawn`/`spawn_from` with `Result<(), Input>` error return. |
 
 ### Distributions
 
@@ -48,7 +50,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 |--------------|------|--------|-------|
 | `rticx-rp2040` | `distributions/rticx-rp2040/` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ | Single binary; starts core 1 from `post_init`. |
 | `rticx-hippo` | `distributions/rticx-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
-| `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default. |
+| `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default; `asynctasks` enables async/await software tasks. |
 | `rticx-riscv` | `distributions/rticx-riscv/` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | See README.md of the distro |
 | `rticx-atalanta` | `distributions/rticx-atalanta/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
 | `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | N/A |
@@ -168,6 +170,27 @@ Default method:
 | `custom_interrupt_path(&self, core: u32) -> Option<syn::Path>` | Path to the concrete dispatcher interrupt type. Defaults to `pac[core]::Interrupt`; return a custom path if the PAC's enum is not at the default location or if the target exposes interrupts differently (e.g. an enum re-export or module). |
 | `subscribe(&mut self, _info_bus: InfoBus)` | Default no-op. Called once before any other method. Passes that wrap a backend forward the bus: `SoftwarePass::subscribe` clones the `InfoBus`, stores it, and calls `self.backend.subscribe(info_bus)`. |
 
+### `AsyncPassBackend`
+
+`AsyncPassBackend` (in `compilation-passes/rticx-async-pass/src/lib.rs`) is the backend extension for the async tasks pass.
+
+Required methods:
+
+| Method | Purpose |
+|--------|---------|
+| `queue_path(&self) -> syn::Path` | Path to the SPSC queue type used for input/ready queues (same as `SwPassBackend`). |
+| `async_runtime_path(&self) -> syn::Path` | Path to the `rticx-async` re-export, e.g. `rticx_cortex_m::export::async_rt`. |
+| `generate_local_pend_fn(&self, core: u32, empty_body_fn: ItemFn) -> ItemFn` | Fill the per-core local interrupt-pend function used by `spawn`. |
+| `generate_cross_pend_fn(&self, core: u32, empty_body_fn: ItemFn) -> Option<ItemFn>` | Fill the per-target-core cross-core pend function used by `spawn_from`. Returns `None` on single-core targets. |
+
+Default method:
+
+| Method | Purpose |
+|--------|---------|
+| `generate_wake_pend_fn(&self, core: u32, empty_body_fn: ItemFn) -> ItemFn` | Fill the body of the pend inside generated waker fns. Default delegates to `generate_local_pend_fn`. Multicore backends can override with a runtime core check. |
+| `custom_interrupt_path(&self, core: u32) -> Option<syn::Path>` | Same as `SwPassBackend`. |
+| `subscribe(&mut self, _info_bus: InfoBus)` | Default no-op. |
+
 ### `InfoBus`
 
 `InfoBus` (in `rticx-core/src/info_bus.rs`, re-exported from `rticx-core`) is the shared information bus that lets compilation passes and backends exchange typed data during a single macro expansion. The `RticMacroBuilder` owns the bus and hands clones to the core backend and each pre-core pass via their `subscribe` methods (see the pipeline above).
@@ -229,6 +252,7 @@ Auto-assign and deadline passes read:
 | `rticx-rp2040` | `swtasks` | Enables `rticx-sw-pass`. |
 | `rticx-cortex-m` | `swtasks` | Enables `rticx-sw-pass` (on by default). |
 | `rticx-cortex-m` | `armv6m` | Selects interrupt source-masking locking (Cortex-M0/M0+/M23). When disabled (default), BASEPRI-based locking is used (armv7-m and above). |
+| `rticx-cortex-m` | `asynctasks` | Enables `rticx-async-pass` for async/await software tasks. Also pulls in `rticx-async`, `embedded-alloc`, and `portable-atomic/critical-section` for distro-managed heap allocation. |
 | `rticx-hippo` | `deadline-pass` | Enables `rticx-deadline-pass`. |
 | `rticx-atalanta` | `deadline-pass` | Enables `rticx-deadline-pass`. |
 | `rticx-atalanta` | `pcs-pass` | Enables the PCS pass. |
@@ -244,6 +268,11 @@ Test the SPSC queue crate
 cd rticx-spsc && cargo test
 ```
 
+Test the async runtime crate
+```bash
+cd rticx-async && cargo test
+```
+
 Test rticx-core integration tests using the mock backend
 ```bash
 cd rticx-core
@@ -254,6 +283,11 @@ cargo test
 Build a pass crate
 ```bash
 cd compilation-passes/rticx-sw-pass && cargo build
+```
+
+Test the async pass crate
+```bash
+cd compilation-passes/rticx-async-pass && cargo test
 ```
 
 ### Building distribution examples
