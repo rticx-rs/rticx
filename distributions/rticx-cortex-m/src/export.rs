@@ -7,7 +7,7 @@
 pub use rticx_sw_pass::export::*;
 
 // Async runtime re-export
-#[cfg(feature = "asynctasks")]
+#[cfg(feature = "async")]
 pub use rticx_async as async_rt;
 
 /// Exports required by the core pass and by generated code
@@ -244,7 +244,7 @@ mod source_mask {
 // Async task heap (embedded-alloc, distro-managed, invisible to end users)
 // ============================================================================
 
-#[cfg(feature = "asynctasks")]
+#[cfg(feature = "async")]
 mod async_heap {
     use embedded_alloc::Heap;
 
@@ -262,5 +262,5 @@ mod async_heap {
     }
 }
 
-#[cfg(feature = "asynctasks")]
+#[cfg(feature = "async")]
 pub use async_heap::init_async_heap;

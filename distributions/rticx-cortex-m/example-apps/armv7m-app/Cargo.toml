@@ -11,13 +11,9 @@ path = "examples/hello_rtic.rs"
 [[example]]
 name = "async_ping_pong"
 path = "examples/async_ping_pong.rs"
-required-features = ["asynctasks"]
-
-[features]
-asynctasks = ["rticx-cortex-m/asynctasks", "dep:rticx-async"]
+required-features = ["async"]
 
 [dependencies]
-# default features: swtasks on, BASEPRI locking (armv7-m)
 rticx-cortex-m = { path = "../.." }
 rticx-async = { path = "../../../../rticx-async", optional = true }
 cortex-m = "0.7.7"
@@ -28,6 +24,7 @@ panic-halt = "0.2.0"
 # We use the same PAC for both the armv7m and armv6m example apps so that the
 # only differences between the two are the build target and the `armv6m` RTIC feature
 stm32f0 = { version = "0.15.1", features = ["stm32f0x0", "rt"] }
+rtic-monotonics = { version = "2.2.1", features = ["cortex-m-systick"] }
 
 [profile.dev]
 panic = "abort"
@@ -35,3 +32,7 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 opt-level = "s"
+
+
+[features]
+async = ["rticx-cortex-m/async", "dep:rticx-async"]

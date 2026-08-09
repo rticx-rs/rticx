@@ -2,14 +2,16 @@
 #![no_main]
 
 use panic_halt as _;
-use rticx_cortex_m as _;
+use rtic_monotonics::systick::prelude::*;
+systick_monotonic!(Mono, 1000);
 
 #[rticx_cortex_m::app(
     device = stm32f0::stm32f0x0,
-    dispatchers = [TIM6]
+    dispatchers = [TIM6, TIM3]
 )]
 mod app {
-    use cortex_m_semihosting::{debug, hprintln};
+    use super::*;
+    use cortex_m_semihosting::{debug, hprint, hprintln};
     use rticx_async::channel::{Receiver, Sender};
     use rticx_async::make_channel;
 
@@ -18,19 +20,18 @@ mod app {
 
     #[init]
     fn system_init() -> (Shared, TaskInits) {
+        // Setup clocks
+        let core = unsafe { cortex_m::Peripherals::steal() };
+        Mono::start(core.SYST, 10_000_000); // 10MHz
+
         let (tx1, rx1) = make_channel!(u32, 4);
         let (tx2, rx2) = make_channel!(u32, 4);
+
         (
             Shared,
             TaskInits {
-                ping: Ping {
-                    rx: rx1,
-                    tx: tx2,
-                },
-                pong: Pong {
-                    rx: rx2,
-                    tx: tx1,
-                },
+                ping: Ping { rx: rx1, tx: tx2 },
+                pong: Pong { rx: rx2, tx: tx1 },
             },
         )
     }
@@ -43,10 +44,13 @@ mod app {
             Self
         }
         fn exec(&mut self) -> ! {
-            let _ = Pong::spawn(());
-            let _ = Ping::spawn(());
+            let _ = Periodic::spawn(10);
             loop {
-                cortex_m::asm::wfi();
+                for _ in 1..=80 {
+                    hprint!("#"); // each '#' indicates that an interrupt occurred and all executors have finished their jobs
+                    cortex_m::asm::wfi();
+                }
+                hprintln!("#");
             }
         }
     }
@@ -65,15 +69,9 @@ mod app {
         async fn exec(&mut self, _input: ()) {
             hprintln!("ping: sending 1 to pong");
             self.tx.send(1).await.expect("ping send must succeed");
+            hprintln!("ping: waiting reply from pong");
             let r = self.rx.recv().await.expect("ping recv must succeed");
             hprintln!("ping: got {} from pong", r);
-            if r == 7 {
-                hprintln!("SUCCESS: ping received expected value 7");
-                debug::exit(debug::EXIT_SUCCESS);
-            } else {
-                hprintln!("FAILURE: expected 7, got {}", r);
-                debug::exit(debug::EXIT_FAILURE);
-            }
         }
     }
 
@@ -94,6 +92,30 @@ mod app {
             hprintln!("pong: got {} from ping, sending reply 7", r);
             self.tx.send(7).await.expect("pong send must succeed");
             hprintln!("pong: done");
+        }
+    }
+
+    #[async_task(priority = 3)]
+    struct Periodic;
+    impl RticAsyncTask for Periodic {
+        type InitArgs = ();
+        type SpawnInput = u32;
+        fn init(_: Self::InitArgs) -> Self {
+            Self
+        }
+        async fn exec(&mut self, count: u32) {
+            hprintln!("periodic task started");
+            for i in 1..=count {
+                hprintln!("");
+                hprintln!("[{}/{}]: Spawning lower prio tasks ping and pong", i, count);
+                let _ = Pong::spawn(());
+                let _ = Ping::spawn(());
+
+                hprintln!("Sleeping for 500ms");
+                Mono::delay(500.millis()).await;
+            }
+            hprintln!("exiting");
+            debug::exit(debug::EXIT_SUCCESS);
         }
     }
 }

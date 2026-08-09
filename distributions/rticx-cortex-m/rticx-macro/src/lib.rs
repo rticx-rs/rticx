@@ -2,11 +2,11 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 
+#[cfg(feature = "async")]
+use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 use rticx_core::{AppArgs, CorePassBackend, InfoBus, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-#[cfg(feature = "asynctasks")]
-use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 use syn::{parse_quote, ItemFn, Path};
 
 extern crate proc_macro;
@@ -54,14 +54,14 @@ const MIN_TASK_PRIORITY: u16 = 0b11;
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     #[cfg(feature = "swtasks")]
     let sw_pass = SoftwarePass::new(SwPassBackendImpl);
-    #[cfg(feature = "asynctasks")]
+    #[cfg(feature = "async")]
     let async_pass = AsyncPass::new(AsyncPassBackendImpl);
 
     #[allow(unused_mut)]
     let mut builder = RticMacroBuilder::new(CortexMRtic::new());
     #[cfg(feature = "swtasks")]
     builder.bind_pre_core_pass(sw_pass);
-    #[cfg(feature = "asynctasks")]
+    #[cfg(feature = "async")]
     builder.bind_pre_core_pass(async_pass);
     builder.build_rtic_macro(args, input)
 }
@@ -125,19 +125,17 @@ impl CorePassBackend for CortexMRtic {
         }
 
         let async_heap_init: Option<TokenStream2> = {
-            #[cfg(feature = "asynctasks")]
+            #[cfg(feature = "async")]
             {
                 self.info_bus
                     .as_ref()
                     .and_then(|bus| {
-                        bus.get::<rticx_async_pass::Analysis>(
-                            rticx_async_pass::INFO_ANALYSIS,
-                        )
-                        .ok()
+                        bus.get::<rticx_async_pass::Analysis>(rticx_async_pass::INFO_ANALYSIS)
+                            .ok()
                     })
                     .map(|_| quote! { rticx_cortex_m::export::init_async_heap(); })
             }
-            #[cfg(not(feature = "asynctasks"))]
+            #[cfg(not(feature = "async"))]
             {
                 None
             }
@@ -373,10 +371,10 @@ impl SwPassBackend for SwPassBackendImpl {
 }
 
 // =========================================== Async pass backend ===========================================
-#[cfg(feature = "asynctasks")]
+#[cfg(feature = "async")]
 struct AsyncPassBackendImpl;
 
-#[cfg(feature = "asynctasks")]
+#[cfg(feature = "async")]
 impl AsyncPassBackend for AsyncPassBackendImpl {
     fn queue_path(&self) -> Path {
         parse_quote!(rticx_cortex_m::export::Queue)

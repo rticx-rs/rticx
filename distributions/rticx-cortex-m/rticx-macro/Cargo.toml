@@ -27,4 +27,4 @@ rticx-async-pass = { version = "0.1.0", path = "../../../compilation-passes/rtic
 [features]
 swtasks = []
 armv6m = []
-asynctasks = ["dep:rticx-async-pass"]
+async = ["dep:rticx-async-pass"]

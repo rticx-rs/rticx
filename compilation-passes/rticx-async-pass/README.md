@@ -8,51 +8,58 @@ concurrency framework.
 `rticx-async-pass` extends the RTICX syntax with `#[async_task]` attributes,
 adding first-class `async fn` / `.await` software tasks on top of the RTIC
 priority model.  Each async task has a future that is polled by an **executor
-loop** — which is itself a hardware-task dispatcher, exactly like `sw_task`
-dispatchers in `rticx-sw-pass`.  Tasks at the same (core, priority) share one
+loop** — which is itself a hardware-task, exactly like `sw_task` dispatchers 
+in `rticx-sw-pass`. Also tasks at the same (core, priority) share one
 dispatcher/executor.
-
-The pass is a **pre-core pass** registered by a distribution via
-`RticMacroBuilder::bind_pre_core_pass`.  It rewrites `#[async_task]` structs
-into `#[task(…, task_trait = RticAsyncTask)]` so that the core pass handles
-initialization, resource locking, and SRP ceiling analysis unchanged.
 
 ---
 
 ## Syntax (user-facing)
 
 ```rust
-// ── Attribute ───────────────────────────────────────────────────────
-#[async_task(priority = 2, shared = [counter])]          // core, spawn_by optional
+#[async_task(priority = 2, shared = [counter])] // core, spawn_by optional for multicore
 struct Ping {
     rx: Receiver<'static, u32, 4>,
     tx: Sender<'static, u32, 4>,
 }
 
 impl RticAsyncTask for Ping {
-    type InitArgs = Self;           // → late-init via TaskInits
+    type InitArgs = Self;           // late-init via TaskInits
     type SpawnInput = ();           // input type for exec
     fn init(s: Self::InitArgs) -> Self { s }
     async fn exec(&mut self, _input: Self::SpawnInput) { … }
 }
 ```
 
-Channels are created with the `make_channel!` macro provided by `rticx-async`
-(no `static mut`, no user `unsafe`):
+Channels are created with the `make_channel!` macro provided by `rticx-async`:
 
 ```rust
 use rticx_async::{channel::{Receiver, Sender}, make_channel};
 
-let (tx, rx) = make_channel!(u32, 4);
-// tx, rx: 'static — can immediately go into TaskInits
-TaskInits { ping: Ping { tx, rx: … }, … }
+let (tx1, rx1) = make_channel!(u32, 4);
+let (tx2, rx2) = make_channel!(u32, 4);
+TaskInits { ping: Ping { tx: tx1, rx: rx2}, … }
+```
+
+`make_channel!` generates static definition for a channel and as a result it should not be used in re-entrant code:
+```rust
+fn create_ping_pong_channel() -> (Sender<'static, u32, 4>, Receiver<'static, u32, 4>) {
+    make_channel!(u32, 4) // same expansion site → same `static CHANNEL`
+}
+
+#[init]
+fn init() -> (Shared, TaskInits) {
+    let (tx1, rx1) = create_ping_pong_channel(); // 1st call: OK
+    let (tx2, rx2) = create_ping_pong_channel(); // 2nd call: PANICS
+    // ...
+}
 ```
 
 Spawning:
 
 ```rust
-let _ = Ping::spawn(());                         // same core → Result<(), Input>
-let _ = Pong::spawn_from(core_token, input);     // cross-core (spawn_by)
+let _ = Ping::spawn(());                         // same core -> Result<(), Input>
+let _ = Pong::spawn_from(Self::current_core(), input);     // cross-core (spawn_by)
 // Ok(()) on success; Err(input) if the task is already running
 // No join handle is returned.
 ```
@@ -96,10 +103,11 @@ impl RticTask for Core0Priority2Dispatcher {
 
 The dispatcher is **waker-driven**: when a future returns `Poll::Pending`, it
 has registered a waker; when a channel `send` or `recv` completes, the waker
-fires, which calls the task's generated wake function.  The wake function sets
+fires, which calls the task's generated wake function. The wake function sets
 the slot's `pending` flag *and* pends the dispatcher interrupt, causing the
-dispatcher ISR to run again and poll the now-ready future.  No busy-looping;
-the dispatcher returns between polls.
+dispatcher ISR to run again and poll the now-ready future. No busy-looping;
+the dispatcher returns between polls. This way a high priority dispatcher would 
+not starve a low priority dispatcher when the tasks bound to it are not ready. 
 
 ---
 
@@ -120,6 +128,16 @@ and calls its init from the core backend's `post_init` hook when the pass is
 detected on the `InfoBus`.  End-user code never sees a `#[global_allocator]` or
 heap configuration.
 
+## Heap allocation lifecycle
+Allocation: Box::pin(future) inside ExecSlot::install() (called by the dispatcher ISR). Uses a 2048-byte embedded-alloc::Heap (bump allocator) configured as #[global_allocator].
+Freeing: When poll() returns Poll::Ready(()), the code does *self.future.get() = None, which drops the Pin<Box<dyn Future>>. The Box deallocator runs, but with a bump allocator, individual dealloc calls are typically no-ops — the heap space isn't truly reclaimed.
+Why fragmentation isn't an issue: Each task has exactly one ExecSlot, and try_allocate() (CAS) ensures only one future per slot at a time. When a future completes, the slot becomes IDLE, and the next spawn() of the same task allocates a new Box::pin() into the same slot position. The bump pointer doesn't advance because old futures are dropped, so the allocator reuses the same heap region. No fragmentation for same-size futures.
+Overflow prevention: Fixed 2048-byte heap. If all concurrent futures exceed that, Box::pin() panics (OOM). TODO: we need to improve this later so that heap size is adjustable by the user + spawn/spawn_from return out of memory error
+
+## Starvation between dispatchers
+Correct by design. Each priority level gets its own dispatcher interrupt, and each task's waker pends only its own dispatcher. A high-priority dispatcher can starve lower ones — this is normal NVIC priority-preemptive behavior, identical to vanilla RTIC hardware tasks. If a prio-3 task keeps reawakening, the CPU serves it ahead of prio-2 tasks, which is correct.
+Within the same priority: all tasks share one dispatcher. The dispatcher polls all tasks in its group each invocation. If TaskA's poll wakes TaskB (same prio), the dispatcher ISR is re-pended and re-enters after returning — effectively round-robin.
+
 ---
 
 ## Waker design
@@ -128,7 +146,7 @@ Wakers follow upstream RTIC's bare-function-pointer pattern:
 
 ```
 RawWaker.data = transmuted fn()
-RawWaker.wake  = data → fn()()
+RawWaker.wake  = data -> fn()()
 ```
 
 The generated `__<Task>__wake` function sets the slot's `pending` flag and pends the
@@ -146,16 +164,11 @@ core, cross pend when called from another core).
 
 The async pass **does not change** SRP analysis:
 
-- `#[async_task(shared = [counter])]` is rewritten to
-  `#[task(shared = [counter], priority = 2, task_trait = RticAsyncTask)]`.
-- The core pass computes the resource ceiling from `shared` declarations exactly
-  as for hardware tasks.
-- The generated `shared()` proxy and its `lock(|r| …)` body use the same
-  BASEPRI / source-masking backend hooks.
-- The future is polled inside the dispatcher ISR at the **task's hardware
-  priority** — ceiling elevation works identically to a sync task's `exec()`.
-- The closure-based `lock` API makes it structurally impossible to hold a
-  resource guard across an `.await` point.
+- `#[async_task(shared = [counter])]` is rewritten to  `#[task(shared = [counter], priority = 2, task_trait = RticAsyncTask)]`.
+- The core pass computes the resource ceiling from `shared` declarations exactly as for hardware tasks.
+- The generated `shared()` proxy and its `lock(|r| …)` body use the same BASEPRI / source-masking backend hooks.
+- The future is polled inside the dispatcher ISR at the **task's hardware priority** — ceiling elevation works identically to a sync task's `exec()`.
+- The closure-based `lock` API makes it structurally impossible to hold a resource guard across an `.await` point.
 
 Preemption is unchanged: the dispatcher is a normal interrupt and can be
 preempted by higher-priority interrupts; the future's polling simply resumes
@@ -184,14 +197,10 @@ Distribution proc-macro crates implement `AsyncPassBackend` and pass it to
 
 The pass inherits the sw-pass multicore model unchanged:
 
-- `#[async_task(core = C, spawn_by = S)]` — task lives on core `C`, spawnable
-  from core `S`.
-- Each core gets its own dispatchers; cross-core and core-local task priorities
-  must be disjoint (analysis rejects overlap).
-- `spawn_from(spawner_token, input)` sends the input to the target core's queue
-  and triggers the cross-pend mechanism.
-- The future is always created **on the target core** by the target core's
-  dispatcher — only the spawn input travels across cores.
+- `#[async_task(core = C, spawn_by = S)]` — task lives on core `C`, spawnable from core `S`.
+- Each core gets its own dispatchers; cross-core and core-local task priorities must be disjoint (analysis rejects overlap).
+- `spawn_from(spawner_token, input)` sends the input to the target core's queue and triggers the cross-pend mechanism.
+- The future is always created **on the target core** by the target core's dispatcher — only the spawn input travels across cores.
 
 ---
 
@@ -209,17 +218,11 @@ The pass inherits the sw-pass multicore model unchanged:
 
 ## Limitations & future work
 
-- **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task
-  cannot be awaited from the spawner.
-- **No cancellation** — an in-flight future cannot be cancelled; the slot must
-  complete naturally.
-- **Heap required** — future storage uses `Box`; a future iteration could
-  provide fixed-capacity inline slots with a compile-time size assertion.
-- **Priority 0 executors** need a dispatcher IRQ assigned in `dispatchers = […]`
-  (no implicit idle-driven loop like upstream RTIC).
-- **Cross-core channel waking** requires the backend to implement
-  `generate_wake_pend_fn` with a runtime core check; works automatically on
-  single-core.
+- **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.
+- **No cancellation** — an in-flight future cannot be cancelled; the slot must complete naturally.
+- **Heap required** — future storage uses `Box`; a future iteration could provide fixed-capacity inline slots with a compile-time size assertion.
+- **Priority 0 executors** need a dispatcher IRQ assigned in `dispatchers = […]` (no implicit idle-driven loop like upstream RTIC).
+- **Cross-core channel waking** requires the backend to implement `generate_wake_pend_fn` with a runtime core check; works automatically on single-core.
 
 ---
 

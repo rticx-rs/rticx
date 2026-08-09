@@ -50,7 +50,7 @@ There is **no root `Cargo.toml`**. The repository is a collection of independent
 |--------------|------|--------|-------|
 | `rticx-rp2040` | `distributions/rticx-rp2040/` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ | Single binary; starts core 1 from `post_init`. |
 | `rticx-hippo` | `distributions/rticx-hippo/` | Single-core RISC-V Hippomenes MCU | Uses threshold-based (`mintthresh`) locking. |
-| `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default; `asynctasks` enables async/await software tasks. |
+| `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (armv6-m and armv7-m and above) | BASEPRI locking by default; `armv6m` feature switches to interrupt source masking. `swtasks` enabled by default; `async` enables async/await software tasks. |
 | `rticx-riscv` | `distributions/rticx-riscv/` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | See README.md of the distro |
 | `rticx-atalanta` | `distributions/rticx-atalanta/` | Single-core RISC-V Atalanta MCU (SoC-Hub) | Includes PCS (Parallel Context Stacking) support via `pcs-pass`. |
 | `distribution-template` | `distributions/distribution-template/` | Reference/template to be copy-pasted when creating new distributions | N/A |
@@ -252,7 +252,7 @@ Auto-assign and deadline passes read:
 | `rticx-rp2040` | `swtasks` | Enables `rticx-sw-pass`. |
 | `rticx-cortex-m` | `swtasks` | Enables `rticx-sw-pass` (on by default). |
 | `rticx-cortex-m` | `armv6m` | Selects interrupt source-masking locking (Cortex-M0/M0+/M23). When disabled (default), BASEPRI-based locking is used (armv7-m and above). |
-| `rticx-cortex-m` | `asynctasks` | Enables `rticx-async-pass` for async/await software tasks. Also pulls in `rticx-async`, `embedded-alloc`, and `portable-atomic/critical-section` for distro-managed heap allocation. |
+| `rticx-cortex-m` | `async` | Enables `rticx-async-pass` for async/await software tasks. Also pulls in `rticx-async`, `embedded-alloc`, and `portable-atomic/critical-section` for distro-managed heap allocation. |
 | `rticx-hippo` | `deadline-pass` | Enables `rticx-deadline-pass`. |
 | `rticx-atalanta` | `deadline-pass` | Enables `rticx-deadline-pass`. |
 | `rticx-atalanta` | `pcs-pass` | Enables the PCS pass. |

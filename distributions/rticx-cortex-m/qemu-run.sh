@@ -33,7 +33,7 @@ cargo build --example hello_rtic
 timeout --foreground 30s bash -c 'cargo run --example hello_rtic'
 
 echo ""
-echo ">>> running async_ping_pong with asynctasks feature"
-cargo build --example async_ping_pong --features asynctasks
-timeout --foreground 30s bash -c 'cargo run --example async_ping_pong --features asynctasks'
+echo ">>> running async_ping_pong with async feature"
+cargo build --example async_ping_pong --features async
+timeout --foreground 30s bash -c 'cargo run --example async_ping_pong --features async'
 cd -
