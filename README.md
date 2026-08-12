@@ -19,6 +19,10 @@ This repository maintains the core framework and a set of reference distribution
 - **Compilation passes** implement the `RticPass` trait and run before or after the core pass as pure syntax-to-syntax transformations.
 - **Distributions** provide the low-level hardware bindings via the `CorePassBackend` trait (and optional pass-specific backends), select which passes to use, and re-export the generated `#[<distro>::app]` macro.
 
+## Documentation
+
+Full user and distributor guides are available in the [project wiki](https://github.com/zakimadaoui/rtic-mc-experiments/wiki).
+
 ## Repository layout
 
 | Path | Crate / Directory | Role |
@@ -67,11 +71,7 @@ The examples are located in `distributions/rticx-cortex-m/example-apps`. You can
 - [RTICX ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_ping_pong.rs)
 - [RTICX ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_prio0.rs)
 - [RTICX RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
-- [Multicore ping-pong with cross-core communication](distributions/rticx-rp2040/examples/ping_pong.rs)
-
-## Documentation
-
-Full user and distributor guides are available in the [project wiki](https://github.com/zakimadaoui/rtic-mc-experiments/wiki).
+- [Single binary multicore ping-pong](distributions/rticx-rp2040/examples/ping_pong.rs)
 
 ## Academic Publications
 
