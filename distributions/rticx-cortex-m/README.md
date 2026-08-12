@@ -8,6 +8,8 @@ strategies selected at crate-feature time:
 |-----------|-----------------------|--------------------------------------------|
 | *(default)* | armv7-m and above    | BASEPRI register (priority threshold)      |
 | `armv6m`  | armv6-m (M0/M0+/M23)  | Interrupt source masking via NVIC ISER/ICER|
+| `async`  | all  | Async/Await software tasks|
+| `swtasks`  | all  | Simple software tasks|
 
 Software tasks are enabled by default through the `swtasks` feature; disable it (`--no-default-features`) for a hardware-task-only build.
 
@@ -49,8 +51,8 @@ rustup target add thumbv7m-none-eabi thumbv6m-none-eabi
 ### Running the examples
 
 ```bash
-./qemu-run.sh armv7m
-./qemu-run.sh armv6m
+make qemu-armv7m
+make qemu-armv6m
 ```
 
 Or, per-example (the `.cargo/config.toml` wires up the QEMU runner, so `cargo
@@ -58,5 +60,5 @@ run` both builds and boots QEMU):
 
 ```bash
 cd example-apps/armv7m-app && cargo run --example hello_rtic
-cd example-apps/armv6m-app && cargo run --example hello_rtic
+cd example-apps/armv7m-app && cargo run --example async_ping_pong --features "async"
 ```

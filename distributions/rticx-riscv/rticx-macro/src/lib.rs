@@ -4,6 +4,8 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 
+#[cfg(feature = "async")]
+use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 use rticx_core::{
     Analysis, App, AppArgs, CorePassBackend, InfoBus, RticMacroBuilder, SubAnalysis, SubApp,
 };
@@ -25,11 +27,15 @@ const MIN_TASK_PRIORITY: u16 = 1;
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     #[cfg(feature = "swtasks")]
     let sw_pass = SoftwarePass::new(SwBackendImpl);
+    #[cfg(feature = "async")]
+    let async_pass = AsyncPass::new(AsyncPassBackendImpl);
 
     #[allow(unused_mut)]
     let mut builder = RticMacroBuilder::new(BackendImpl::default());
     #[cfg(feature = "swtasks")]
     builder.bind_pre_core_pass(sw_pass);
+    #[cfg(feature = "async")]
+    builder.bind_pre_core_pass(async_pass);
     builder.build_rtic_macro(args, input)
 }
 
@@ -340,5 +346,35 @@ impl SwPassBackend for SwBackendImpl {
     #[cfg(feature = "slic")]
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         Some(parse_quote!(slic::SoftwareInterrupt))
+    }
+}
+
+// ============================================================================
+// Async-tasks pass backend
+// ============================================================================
+
+#[cfg(feature = "async")]
+struct AsyncPassBackendImpl;
+
+#[cfg(feature = "async")]
+impl AsyncPassBackend for AsyncPassBackendImpl {
+    fn queue_path(&self) -> Path {
+        parse_quote!(rticx_riscv::export::Queue)
+    }
+
+    fn async_runtime_path(&self) -> Path {
+        parse_quote!(rticx_riscv::export::async_rt)
+    }
+
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
+        let body = parse_quote!({
+            rticx_riscv::export::pend(irq_nbr);
+        });
+        empty_body_fn.block = Box::new(body);
+        empty_body_fn
+    }
+
+    fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
+        None
     }
 }

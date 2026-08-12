@@ -1,6 +1,8 @@
 # RTICX: eXtensible Realtime Interrupt Driven Concurrency Framework
 
-This repository contains a from scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic). The goal is to make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore). The main idea is to separate the generic proc-macro logic from target-specific details and by allowing new language features to be added as external, reusable compilation passes.
+This repository contains a from scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic). The goal make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore) in order to to reduce the barrier of entry for contributing to with newer syntax features and hardware ports.
+
+The main idea is to breakdown RTIC's monolithic codebase by separating the generic proc-macro logic (RTIC syntax) from target-specific details (Interrupt handling, system initialization.. etc). Furthermore, the proc-macro logic is split to core and addons, where the core logic captures only the SRP Tasks/Resources model and the rest will be external addons like software tasks and async/await..etc.
 
 The result is a small core framework (`rticx-core`) plus a growing ecosystem of **compilation passes** and **distributions**:
 
@@ -9,7 +11,7 @@ The result is a small core framework (`rticx-core`) plus a growing ecosystem of 
 
 In addition, the user application syntax (Referred to now as RTICX syntax) has been refactored to provide less magic and more idiomatic Rust experience while preserving the core concepts of the original RTIC framework (Tasks and Resources model). 
 
-This repository maintains the core framework and a set of reference distributions. New hardware distributions are developed as out-of-tree crates and are not hosted here.
+This repository maintains the core framework and a set of reference distributions. New hardware distributions and fancier syntax extensions are developed as out-of-tree crates and are not hosted here.
 
 ## Architecture
 
@@ -23,25 +25,25 @@ This repository maintains the core framework and a set of reference distribution
 |------|-------------------|------|
 | `rticx-core/` | `rticx-core` | Core parser, analysis, codegen, and `RticMacroBuilder`. |
 | `rticx-spsc/` | `rticx-spsc` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
-| `compilation-passes/rticx-sw-pass/` | `rticx-sw-pass` | Software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
+| `rticx-async/` | `rticx-async` | `no_std` async runtime: `ExecSlot` future storage, `make_channel!` macro, MPSC channels, waker infrastructure.  |
+| `compilation-passes/rticx-async-pass/` | `rticx-async-pass` | Async/Await software tasks pass: executors, message queues, `spawn`, `spawn_from`. |
+| `compilation-passes/rticx-sw-pass/` | `rticx-sw-pass` | Vanilla software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
 | `compilation-passes/rticx-auto-assign/` | `rticx-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
 | `compilation-passes/rticx-deadline-pass/` | `rticx-deadline-pass` | Converts `deadline = D` attributes into RTICX priorities. |
 | `distributions/rticx-cortex-m/` | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) distribution. |
-|  `distributions/rticx-riscv/` | `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 |
+| `distributions/rticx-riscv/` | `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 |
 | `distributions/rticx-rp2040/` | `rticx-rp2040` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |
-| `distributions/rticx-hippo/` | `rticx-hippo` | Single-core RISC-V Hippomenes MCU distribution. |
-| `distributions/rticx-atalanta/` | `rticx-atalanta` | Single-core RISC-V Atalanta MCU distribution. |
 | `distributions/distribution-template/` | `distribution-template` | Conceptual starting point for new distributions. |
 
 ## Supported distributions
 
-| Distribution | Target | Features |
+| Distribution | Target | Link |
 |--------------|--------|----------|
-| `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) | `swtasks` (default), `armv6m` — runnable under QEMU |
-| `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | See README.md of the distro |
-| `rticx-rp2040` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | `autoassign`, `swtasks` |
-| `rticx-hippo` | Single-core RISC-V Hippomenes MCU | `deadline-pass` |
-| `rticx-atalanta` | Single-core RISC-V Atalanta MCU | `deadline-pass` |
+| `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-cortex-m |
+| `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-riscv |
+| `rticx-rp2040` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-rp2040 |
+| `rticx-hippo` | Single-core RISC-V Hippomenes MCU | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-hippo |
+| `rticx-atalanta` | Single-core RISC-V Atalanta MCU | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-atalanta |
 
 ## Quick start
 
@@ -54,21 +56,17 @@ through RTIC's SRP `lock`.
 sudo apt-get install -y qemu-system-arm
 rustup target add thumbv7m-none-eabi thumbv6m-none-eabi
 
-# Run both locking codepaths; fails (non-zero) if either misbehaves
-make qemu
+make qemu-armv7m
 ```
 
-The examples are located in `distributions/rticx-cortex-m/example-apps`. You modify them, rebuild and run on qemu:
-
-```bash
-cd distributions/rticx-cortex-m/example-apps/armv7m-app && cargo run --example hello_rtic
-cd distributions/rticx-cortex-m/example-apps/armv6m-app && cargo run --example hello_rtic
-```
+The examples are located in `distributions/rticx-cortex-m/example-apps`. You can modify them, rebuild and run on qemu:
 
 ## Examples
 
-- [QEMU-runnable RTICX playground: SysTick hw task + spawned sw task + SRP lock + `debug::exit`](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/hello_rtic.rs)
-- [Single-core RTICX application with software tasks](distributions/rticx-rp2040/examples/hello_rtic.rs)
+- [RTICX ARM Cortex-m playground: SysTick hw task + spawned sw task + SRP lock ](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/hello_rtic.rs)
+- [RTICX ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_ping_pong.rs)
+- [RTICX ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_prio0.rs)
+- [RTICX RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
 - [Multicore ping-pong with cross-core communication](distributions/rticx-rp2040/examples/ping_pong.rs)
 
 ## Documentation

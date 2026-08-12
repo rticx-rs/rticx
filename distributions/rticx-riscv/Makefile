@@ -17,7 +17,11 @@ clippy:
 	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c3"
 	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c6"
 
-examples:
+examples: examples-slic examples-esp
+
+examples-slic:
 	make -C examples/slic-examples
+
+examples-esp:
 	make -C examples/esp32c3-examples
 

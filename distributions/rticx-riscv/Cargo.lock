@@ -88,10 +88,11 @@ checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
 
 [[package]]
 name = "esp32c3"
-version = "0.32.2"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21e89ed62cf6c043a6d29c520b02a13b359ec8a75d67b65d4330ed717d15fe97"
+checksum = "356af3771d0d6536c735bf71136594f4d1cbb506abf6e0c51a6639e9bf4e7988"
 dependencies = [
+ "critical-section",
  "vcell",
 ]
 
@@ -130,6 +131,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "heapless"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -158,6 +169,12 @@ name = "pastey"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "proc-macro2"
@@ -244,7 +261,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cab62a2a0c21946a4be5ba289b68da75bf9ec899fbfb211fc400e5d21b1f94a"
 dependencies = [
  "critical-section",
- "heapless",
+ "heapless 0.8.0",
  "riscv 0.12.1",
  "riscv-slic-macros",
 ]
@@ -265,6 +282,26 @@ name = "riscv-types"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3f2ad9f15a07f4a0e1677124f9120ce7e83ab7e1ca7186af0ca9da529b62e80"
+
+[[package]]
+name = "rticx-async"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "heapless 0.9.3",
+ "portable-atomic",
+]
+
+[[package]]
+name = "rticx-async-pass"
+version = "0.1.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "syn",
+]
 
 [[package]]
 name = "rticx-core"
@@ -288,6 +325,7 @@ dependencies = [
  "esp32c6",
  "riscv 0.16.1",
  "riscv-slic",
+ "rticx-async",
  "rticx-riscv-macro",
  "rticx-sw-pass",
 ]
@@ -298,6 +336,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rticx-async-pass",
  "rticx-core",
  "rticx-sw-pass",
  "syn",

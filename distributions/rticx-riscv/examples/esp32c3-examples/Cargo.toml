@@ -8,9 +8,20 @@ publish = false
 name = "hello_rtic"
 path = "examples/hello_rtic.rs"
 
+[[example]]
+name = "async_ping_pong"
+path = "examples/async_ping_pong.rs"
+required-features = ["async"]
+
+[[example]]
+name = "async_monotonic"
+path = "examples/async_monotonic.rs"
+required-features = ["async"]
+
 [dependencies]
 
 rticx-riscv = { path = "../../", default-features = false, features = ["esp32c3", "swtasks"] }
+rticx-async = { path = "../../../../rticx-async", optional = true }
 esp-backtrace = { version = "0.19.0", features = [
     "esp32c3",
     "panic-handler",
@@ -19,8 +30,18 @@ esp-backtrace = { version = "0.19.0", features = [
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32c3"] } # TODO: update to 0.5.0
 esp-hal = { version = "=1.0.0-rc.0", features = ["esp32c3", "unstable"] } # TODO: udpate to 1.1.2
 esp-println = { version = "0.17.0", features = ["esp32c3"] }
-esp32c3 = { version = "0.32.2", features = ["critical-section"] }
+esp32c3 = { version = "0.31.0", features = ["critical-section"] }
 riscv-semihosting = "0.2.1"
+rtic-monotonics = { version = "2.2.1", optional = true, features = [
+    "esp32c3-systimer",
+] }
 
 [profile.release]
 opt-level = "s"
+
+[features]
+async = [
+    "rticx-riscv/async",
+    "dep:rticx-async",
+    "dep:rtic-monotonics",
+]

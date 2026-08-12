@@ -9,6 +9,10 @@
 // queues and task inputs by the software-tasks pass.
 pub use rticx_sw_pass::export::*;
 
+// Async runtime re-export (for async/await software tasks)
+#[cfg(feature = "async")]
+pub use rticx_async as async_rt;
+
 // ============================================================================
 // Generic SLIC exports
 // ============================================================================

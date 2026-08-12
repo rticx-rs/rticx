@@ -777,6 +777,16 @@ dependencies = [
 
 [[package]]
 name = "esp32c3"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "356af3771d0d6536c735bf71136594f4d1cbb506abf6e0c51a6639e9bf4e7988"
+dependencies = [
+ "critical-section",
+ "vcell",
+]
+
+[[package]]
+name = "esp32c3"
 version = "0.32.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21e89ed62cf6c043a6d29c520b02a13b359ec8a75d67b65d4330ed717d15fe97"
@@ -1259,6 +1269,64 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3f2ad9f15a07f4a0e1677124f9120ce7e83ab7e1ca7186af0ca9da529b62e80"
 
 [[package]]
+name = "rtic-common"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67caeecca87cb20e1101eb104b0f05604633b7ab1035cce777417c6fb7c8f9a0"
+dependencies = [
+ "critical-section",
+ "portable-atomic",
+]
+
+[[package]]
+name = "rtic-monotonics"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d12a5e827e4a491affc0296b7c33242f03c02ef70150f93912cc9c77bb071f65"
+dependencies = [
+ "cfg-if",
+ "esp32c3 0.31.0",
+ "fugit",
+ "portable-atomic",
+ "riscv 0.16.1",
+ "rtic-time",
+]
+
+[[package]]
+name = "rtic-time"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61485474f5a23247ae1d4875f2bfe860be9b3030dbf87c232e50799e021429a1"
+dependencies = [
+ "critical-section",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "fugit",
+ "futures-util",
+ "rtic-common",
+]
+
+[[package]]
+name = "rticx-async"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "heapless 0.9.3",
+ "portable-atomic",
+]
+
+[[package]]
+name = "rticx-async-pass"
+version = "0.1.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "rticx-core"
 version = "0.1.0"
 dependencies = [
@@ -1276,8 +1344,9 @@ name = "rticx-riscv"
 version = "0.1.0"
 dependencies = [
  "critical-section",
- "esp32c3 0.32.2",
+ "esp32c3 0.31.0",
  "riscv 0.16.1",
+ "rticx-async",
  "rticx-riscv-macro",
  "rticx-sw-pass",
 ]
@@ -1288,6 +1357,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rticx-async-pass",
  "rticx-core",
  "rticx-sw-pass",
  "syn 2.0.119",
@@ -1317,8 +1387,10 @@ dependencies = [
  "esp-bootloader-esp-idf",
  "esp-hal",
  "esp-println",
- "esp32c3 0.32.2",
+ "esp32c3 0.31.0",
  "riscv-semihosting",
+ "rtic-monotonics",
+ "rticx-async",
  "rticx-riscv",
 ]
 
