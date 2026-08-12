@@ -16,5 +16,5 @@ clippy:
 	cargo clippy --all-targets --all-features
 
 examples:
-	cargo build --examples
+	make -C example-apps all
 

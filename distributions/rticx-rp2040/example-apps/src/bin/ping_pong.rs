@@ -13,12 +13,12 @@ pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 pub mod my_app {
 
     use cortex_m::asm;
+    use cortex_m_rt as _;
     use defmt::assert_eq;
     use defmt::*;
     use defmt_rtt as _;
-    use panic_probe as _;
+    use panic_halt as _;
 
-    // use panic_halt as _;
     use rp2040_hal::pac;
 
     const PING_PONG_DELAY: u32 = 30000000;
@@ -131,6 +131,6 @@ pub mod my_app {
 
     /// Reads core number (0 or 1) from the rp2040 CPUID register
     fn get_core_id() -> u32 {
-        unsafe { (*pac::SIO::PTR).cpuid.read().bits() }
+        unsafe { (*pac::SIO::PTR).cpuid().read().bits() }
     }
 }

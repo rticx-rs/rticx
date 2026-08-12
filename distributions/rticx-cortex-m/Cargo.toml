@@ -16,7 +16,7 @@ test = false
 bench = false
 
 [dependencies]
-cortex-m = { version = "0.7.7", features = [] }
+cortex-m = "0.7.8"
 rticx-cortex-m-macro = { version = "0.1.0", path = "rticx-macro" }
 rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
 rticx-async = { version = "0.1.0", path = "../../rticx-async", optional = true }

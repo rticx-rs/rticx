@@ -274,7 +274,7 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
     fn generate_wake_pend_fn(&self, core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
         let core_lit = LitInt::new(&core.to_string(), proc_macro2::Span::call_site());
         let body: syn::Block = parse_quote!({
-            let current_core = unsafe { (*rp2040_hal::pac::SIO::PTR).cpuid.read().bits() };
+            let current_core = unsafe { (*rp2040_hal::pac::SIO::PTR).cpuid().read().bits() };
             if current_core == #core_lit {
                 rticx_rp2040::export::NVIC::pend(irq_nbr);
             } else {
@@ -319,11 +319,11 @@ fn configure_fifo(peripheral_crate: &syn::Path, core: u32) -> TokenStream2 {
         unsafe {
             let sio = unsafe { &(*rp2040_hal::pac::SIO::PTR) };
             // drain fifo
-            while sio.fifo_st.read().vld().bit() {
-                let _ = sio.fifo_rd.read();
+            while sio.fifo_st().read().vld().bit() {
+                let _ = sio.fifo_rd().read();
             }
             // clear status bits and unpend the FIFO interrupt
-            sio.fifo_st.write(|wr| wr.bits(0xff) );
+            sio.fifo_st().write(|wr| wr.bits(0xff) );
             #peripheral_crate::NVIC::unpend( #peripheral_crate::Interrupt::#SIO_IRQ_PROC);
             // Set FIFO0 interrupts priority to MAX priority
             #peripheral_crate::CorePeripherals::steal()

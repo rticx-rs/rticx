@@ -71,7 +71,7 @@ The examples are located in `distributions/rticx-cortex-m/example-apps`. You can
 - [RTICX ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_ping_pong.rs)
 - [RTICX ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_prio0.rs)
 - [RTICX RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
-- [Single binary multicore ping-pong](distributions/rticx-rp2040/examples/ping_pong.rs)
+- [Single binary multicore ping-pong](distributions/rticx-rp2040/example-apps/src/bin/ping_pong.rs)
 
 ## Academic Publications
 

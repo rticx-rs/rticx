@@ -16,31 +16,11 @@ test = false
 bench = false
 
 [dependencies]
-cortex-m = "0.7.7"
+cortex-m = "0.7.8"
 rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro" }
 rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
 rticx-async = { version = "0.1.0", path = "../../rticx-async", optional = true }
-log = "0.4.21"
-rp2040-hal = "0.9.1"
-
-[dev-dependencies]
-rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro", features = [
-    "autoassign",
-    "swtasks",
-    "async",
-] }
-
-cortex-m = "0.7.7"
-cortex-m-rt = "0.7.3"
-embedded-hal = "0.2.7"
-panic-halt = "0.2.0"
-rp-pico = { version = "0.8.0", features = ["boot2"] }
-rp2040-boot2 = "0.3.0"
-rp2040-hal = { version = "0.9.1", features = ["rt"] }
-
-defmt = "0.3"
-defmt-rtt = "0.4"
-panic-probe = { version = "0.3", features = ["print-defmt"] }
+rp2040-hal = "0.10.2" # TODO: features = ["critical-section-impl"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(have_basepri)'] }

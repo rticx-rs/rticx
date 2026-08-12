@@ -30,7 +30,7 @@ runner = "probe-rs run --chip RP2040 --protocol swd"
 # runner = "gdb-multiarch -q -x openocd.gdb"
 
 [build]
-target = "thumbv6m-none-eabi" # RP2040
+target = "thumbv6m-none-eabi"
 
 [env]
 DEFMT_LOG = "debug"

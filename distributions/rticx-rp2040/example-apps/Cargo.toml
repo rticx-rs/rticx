@@ -1,0 +1,63 @@
+[package]
+name = "rticx-rp2040-example-apps"
+version = "0.1.0"
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+
+[features]
+swtasks = ["rticx-rp2040/swtasks"]
+async = ["rticx-rp2040/async", "dep:rticx-async"]
+
+[[bin]]
+name = "async_multitasker"
+path = "src/bin/async_multitasker.rs"
+test = false
+bench = false
+required-features = ["async"]
+
+[[bin]]
+name = "led_toggler_mmrtic"
+path = "src/bin/led_toggler_mmrtic.rs"
+test = false
+bench = false
+required-features = ["swtasks"]
+
+[[bin]]
+name = "mmrtic_multitasker_external_tasks"
+path = "src/bin/mmrtic_multitasker_external_tasks/main.rs"
+test = false
+bench = false
+required-features = ["swtasks"]
+
+[[bin]]
+name = "hello_rtic"
+path = "src/bin/hello_rtic.rs"
+test = false
+bench = false
+required-features = ["swtasks"]
+
+[[bin]]
+name = "ping_pong"
+path = "src/bin/ping_pong.rs"
+test = false
+bench = false
+required-features = ["swtasks"]
+
+[dependencies]
+cortex-m = "0.7.8"
+cortex-m-rt = "0.7.3"
+defmt = "0.3"
+defmt-rtt = "0.4"
+embedded-hal = "0.2.7"
+fugit = "0.3.7"
+heapless = "0.8.0"
+panic-halt = "0.2.0"
+rp-pico = { version = "0.9.0", features = ["boot2"] }
+rp2040-boot2 = "0.3.0"
+rp2040-hal = "0.10.2" # TODO: features = ["critical-section-impl"]
+
+rticx-rp2040 = { path = "../" }
+rticx-async = { path = "../../../rticx-async", optional = true }
+
+itoa = "1.0.11"
+base64 = { version = "0.22.1", default-features = false }

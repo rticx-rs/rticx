@@ -5,11 +5,11 @@ use heapless::String;
 use rp2040_hal::timer::Alarm;
 
 use crate::{
-    app::{
-        CommandReceiverTask, Decryptor, Encryptor, Hasher, RticMutex, RticTask, UartRx,
-        TARGET_DURATION, TARGET_TICKS,
-    },
     Command,
+    app::{
+        CommandReceiverTask, Decryptor, Encryptor, Hasher, RticMutex, RticTask, TARGET_DURATION,
+        TARGET_TICKS, UartRx,
+    },
 };
 
 impl RticTask for CommandReceiverTask {

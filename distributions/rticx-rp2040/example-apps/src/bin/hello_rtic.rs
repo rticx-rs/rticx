@@ -10,7 +10,8 @@ pub mod my_app {
     use cortex_m::asm;
     use defmt::*;
     use defmt_rtt as _;
-    use panic_probe as _;
+    use panic_halt as _;
+    use cortex_m_rt as _;
 
     use rp2040_hal::fugit::MicrosDurationU32;
     use rp2040_hal::gpio::bank0::Gpio25;

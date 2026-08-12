@@ -3,8 +3,9 @@
 
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
-use panic_halt as _;
 use defmt_rtt as _;
+use panic_halt as _;
+use cortex_m_rt as _;
 
 mod external_cipher;
 mod external_hasher;
@@ -19,18 +20,18 @@ pub enum Command {
     Unknown,
 }
 
-#[rticx_rp2040::app(device = rp_pico::hal::pac,  dispatchers = [SW0_IRQ])]
+#[rticx_rp2040::app(device = rp2040_hal::pac,  dispatchers = [SW0_IRQ])]
 pub mod app {
 
     use core::sync::atomic::AtomicU32;
     use fugit::RateExtU32;
+    use rp2040_hal::Clock;
     use rp2040_hal::gpio::bank0::{Gpio0, Gpio1, Gpio25};
     use rp2040_hal::gpio::{FunctionSio, FunctionUart, Pin, PullDown, SioOutput};
     use rp2040_hal::timer::{Alarm, Alarm0};
     use rp2040_hal::uart::{
         DataBits, Reader as UartReader, StopBits, UartConfig, UartPeripheral, Writer,
     };
-    use rp2040_hal::Clock;
     // Alias for our PAC crate
     use rp2040_hal::pac::{self};
     // Some traits we need

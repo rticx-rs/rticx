@@ -12,11 +12,11 @@ pub use rticx_async as async_rt;
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 
 pub use cortex_m::{
-    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
+    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
+    Peripherals,
 };
 /// re-exports needed from the code generation in internal rticx-rp2040-macro crate
 pub use rp2040_hal::multicore::{Multicore, Stack};
@@ -226,9 +226,9 @@ pub mod cross_core {
     pub fn pend_irq(irq: u16) -> Result<(), FullFifoErr> {
         let sio = unsafe { &(*rp2040_hal::pac::SIO::PTR) };
         cortex_m::interrupt::free(|_| {
-            if sio.fifo_st.read().rdy().bit() {
+            if sio.fifo_st().read().rdy().bit() {
                 // TX fifo is not full
-                sio.fifo_wr.write(|wr| unsafe { wr.bits(irq as u32) });
+                sio.fifo_wr().write(|wr| unsafe { wr.bits(irq as u32) });
                 Ok(())
             } else {
                 Err(FullFifoErr)
@@ -238,9 +238,9 @@ pub mod cross_core {
 
     pub fn get_pended_irq() -> Option<rp2040_hal::pac::Interrupt> {
         let sio = unsafe { &(*rp2040_hal::pac::SIO::PTR) };
-        if sio.fifo_st.read().vld().bit() {
+        if sio.fifo_st().read().vld().bit() {
             // valid data on fifo
-            let irq = sio.fifo_rd.read().bits() as u16;
+            let irq = sio.fifo_rd().read().bits() as u16;
             // implementation must guarantee that the only messages passed in the fifo are of pac::Interrupt type.
             let irq = unsafe { core::mem::transmute::<u16, rp2040_hal::pac::Interrupt>(irq) };
             Some(irq)
