@@ -349,10 +349,6 @@ From the repository root:
 make qemu
 ```
 
-### Multi-binary builds
-
-WIP: unsupported at the moment
-
 ### Documentation
 
 If a documentation generation script exists in the root, run it with:
