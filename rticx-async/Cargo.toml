@@ -12,10 +12,12 @@ categories = ["no-std", "embedded", "asynchronous"]
 [dependencies]
 heapless = "0.9"
 critical-section = "1"
-portable-atomic = { version = "1", default-features = false }
+portable-atomic = { version = "1.15.0", default-features = false }
 
 [dev-dependencies]
 critical-section = { version = "1", features = ["std"] }
 
 [features]
 default = []
+# if the target doesn't support critical sections
+atomic-critical-section = ["portable-atomic/critical-section"]

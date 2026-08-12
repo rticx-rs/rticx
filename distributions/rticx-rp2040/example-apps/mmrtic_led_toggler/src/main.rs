@@ -4,6 +4,7 @@
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
 use panic_halt as _;
+use defmt_rtt as _;
 
 #[rticx_rp2040::app(device = rp_pico::hal::pac)]
 mod app {

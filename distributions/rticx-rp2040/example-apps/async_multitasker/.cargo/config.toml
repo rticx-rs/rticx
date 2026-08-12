@@ -13,8 +13,8 @@
 rustflags = [
     "-C",
     "link-arg=--nmagic",
-    "-C",
-    "link-arg=-Tlink.x",
+    # "-C",
+    # "link-arg=-Tlink.x",
     "-C",
     "llvm-args=--inline-threshold=5",
     "-C",

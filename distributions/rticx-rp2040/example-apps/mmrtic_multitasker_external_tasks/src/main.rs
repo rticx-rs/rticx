@@ -4,6 +4,7 @@
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
 use panic_halt as _;
+use defmt_rtt as _;
 
 mod external_cipher;
 mod external_hasher;

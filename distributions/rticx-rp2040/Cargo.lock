@@ -30,6 +30,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
 name = "cortex-m"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -276,6 +282,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d758ba1b47b00caf47f24925c0074ecb20d6dfcffe7f6d53395c0465674841a"
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
+name = "heapless"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -374,6 +399,15 @@ dependencies = [
  "arrayvec",
  "num_enum",
  "paste",
+]
+
+[[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
+dependencies = [
+ "critical-section",
 ]
 
 [[package]]
@@ -501,6 +535,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rticx-async"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "heapless",
+ "portable-atomic",
+]
+
+[[package]]
+name = "rticx-async-pass"
+version = "0.1.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "syn 2.0.53",
+]
+
+[[package]]
 name = "rticx-auto-assign"
 version = "0.1.0"
 dependencies = [
@@ -540,6 +594,7 @@ dependencies = [
  "rp-pico",
  "rp2040-boot2",
  "rp2040-hal",
+ "rticx-async",
  "rticx-rp2040-macro",
  "rticx-sw-pass",
 ]
@@ -550,6 +605,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rticx-async-pass",
  "rticx-auto-assign",
  "rticx-core",
  "rticx-sw-pass",

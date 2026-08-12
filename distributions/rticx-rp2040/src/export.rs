@@ -4,6 +4,10 @@
 /// Distribution crate must re-export the `export` module from all the used compilation passes
 pub use rticx_sw_pass::export::*;
 
+// Async runtime re-export
+#[cfg(feature = "async")]
+pub use rticx_async as async_rt;
+
 /// Exports required by core-pass
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 

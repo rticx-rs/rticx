@@ -19,6 +19,7 @@ bench = false
 cortex-m = "0.7.7"
 rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro" }
 rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
+rticx-async = { version = "0.1.0", path = "../../rticx-async", optional = true }
 log = "0.4.21"
 rp2040-hal = "0.9.1"
 
@@ -26,6 +27,7 @@ rp2040-hal = "0.9.1"
 rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro", features = [
     "autoassign",
     "swtasks",
+    "async",
 ] }
 
 cortex-m = "0.7.7"
@@ -46,3 +48,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(have_basepri)'] }
 [features]
 autoassign = ["rticx-rp2040-macro/autoassign"]
 swtasks = ["rticx-rp2040-macro/swtasks"]
+async = [
+    "rticx-rp2040-macro/async",
+    "dep:rticx-async",
+    "rticx-async/atomic-critical-section",
+]

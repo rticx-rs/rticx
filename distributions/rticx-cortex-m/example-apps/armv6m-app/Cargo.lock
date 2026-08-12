@@ -288,7 +288,6 @@ name = "rticx-cortex-m"
 version = "0.1.0"
 dependencies = [
  "cortex-m",
- "portable-atomic",
  "rticx-async",
  "rticx-cortex-m-macro",
  "rticx-sw-pass",

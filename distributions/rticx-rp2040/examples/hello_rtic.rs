@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-
 #[unsafe(link_section = ".boot2")]
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
@@ -21,20 +20,16 @@ pub mod my_app {
     // be linked)
 
     use embedded_hal::digital::v2::OutputPin;
-    // use panic_halt as _;
     use rp2040_hal::pac::{self};
 
     type LedOutPin = Pin<Gpio25, FunctionSio<SioOutput>, PullDown>;
     static DELAY: u32 = 1000;
 
     #[shared]
-    struct SharedResources {
-        alarm: Alarm0,
-        led: LedOutPin,
-    }
+    struct SharedResources;
 
     #[init]
-    fn system_init() -> SharedResources {
+    fn system_init() -> (SharedResources, TaskInits) {
         let mut device = pac::Peripherals::take().unwrap();
 
         // Initialization of the system clock.
@@ -73,37 +68,42 @@ pub mod my_app {
         alarm0.schedule(MicrosDurationU32::millis(DELAY)).unwrap();
         alarm0.enable_interrupt();
 
-        SharedResources {
-            alarm: alarm0,
-            led: led_pin,
-        }
+        (
+            SharedResources,
+            TaskInits {
+                blinker: Blinker::init((led_pin, alarm0)),
+            },
+        )
     }
 
-    #[task(binds = TIMER_IRQ_0 , priority = 3, shared = [alarm, led])]
-    struct MyTask {
+    #[task(binds = TIMER_IRQ_0 , priority = 3)]
+    struct Blinker {
         /* local resources */
         is_high: bool,
         counter: u16,
+        led: LedOutPin,
+        alarm: Alarm0,
     }
 
-    impl RticTask for MyTask {
-        fn init() -> Self {
+    impl RticTask for Blinker {
+        type InitArgs = (LedOutPin, Alarm0);
+        fn init((led, alarm): (LedOutPin, Alarm0)) -> Self {
             Self {
                 is_high: false,
                 counter: 0,
+                led,
+                alarm,
             }
         }
 
         fn exec(&mut self) {
-            self.shared().led.lock(|led_pin| {
-                if self.is_high {
-                    let _ = led_pin.set_low();
-                    self.is_high = false;
-                } else {
-                    let _ = led_pin.set_high();
-                    self.is_high = true;
-                }
-            });
+            if self.is_high {
+                let _ = self.led.set_low();
+                self.is_high = false;
+            } else {
+                let _ = self.led.set_high();
+                self.is_high = true;
+            }
 
             self.counter += 1;
             let message = self.counter;
@@ -114,51 +114,22 @@ pub mod my_app {
                 error!("couldn't spawn task 2 again")
             }
 
-            self.shared().alarm.lock(|alarm0| {
-                let _ = alarm0.schedule(MicrosDurationU32::millis(DELAY));
-                alarm0.clear_interrupt();
-            });
+            let _ = self.alarm.schedule(MicrosDurationU32::millis(DELAY));
+            self.alarm.clear_interrupt();
         }
     }
 
-    #[sw_task(priority = 2, shared = [led])]
+    #[sw_task(priority = 2)]
     struct MyTask2;
     impl RticSwTask for MyTask2 {
-        type SpawnInput = u16;
         fn init() -> Self {
             Self
         }
 
+        type SpawnInput = u16;
         fn exec(&mut self, input: u16) {
             info!("task2 spawned with input {}", input);
-
-            if let Err(_e) = MyTask7::spawn(input + 10) {
-                error!("couldn't spawn task 7")
-            }
         }
-    }
-
-    #[sw_task(priority = 2, shared = [led])]
-    struct MyTask7;
-    impl RticSwTask for MyTask7 {
-        type SpawnInput = u16;
-        fn init() -> Self {
-            Self
-        }
-
-        fn exec(&mut self, input: u16) {
-            info!("task7 spawned with input {}", input);
-        }
-    }
-
-    #[task(binds = TIMER_IRQ_2 , priority = 1, shared = [alarm])]
-    struct MyTask3;
-    impl RticTask for MyTask3 {
-        fn init() -> Self {
-            Self
-        }
-
-        fn exec(&mut self) {}
     }
 
     #[idle]
@@ -174,9 +145,8 @@ pub mod my_app {
         fn exec(&mut self) -> ! {
             loop {
                 self.count += 1;
-                // info!("looping in idle... {}", self.count);
+                info!("looping in idle... {}", self.count);
                 asm::delay(12000000);
-                // asm::delay(120000000);
             }
         }
     }

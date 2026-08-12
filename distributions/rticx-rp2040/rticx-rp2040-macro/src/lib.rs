@@ -1,19 +1,17 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
+#[cfg(feature = "async")]
+use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 #[cfg(feature = "autoassign")]
 use rticx_auto_assign::AutoAssignPass;
 use rticx_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
-use syn::Path;
-use syn::{ItemFn, parse_quote};
+use rticx_sw_pass::{SoftwarePass, SwPassBackend};
+#[allow(unused)]
+use syn::{parse_quote, ItemFn, LitInt, Path};
 
 extern crate proc_macro;
-
-struct Rp2040Rtic;
-
-#[cfg(feature = "swtasks")]
-use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 
 const MIN_TASK_PRIORITY: u16 = 3;
 const MAX_TASK_PRIORITY: u16 = 0;
@@ -24,14 +22,21 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     #[cfg(feature = "swtasks")]
     let sw_pass = SoftwarePass::new(SwPassBackendImpl);
 
+    #[cfg(feature = "async")]
+    let async_pass = AsyncPass::new(AsyncPassBackendImpl);
+
     #[allow(unused_mut)]
     let mut builder = RticMacroBuilder::new(Rp2040Rtic);
     #[cfg(feature = "autoassign")]
     builder.bind_pre_core_pass(AutoAssignPass); // run auto-assign pass first
     #[cfg(feature = "swtasks")]
     builder.bind_pre_core_pass(sw_pass); // run software-pass second
+    #[cfg(feature = "async")]
+    builder.bind_pre_core_pass(async_pass); // run async-pass third
     builder.build_rtic_macro(args, input)
 }
+
+struct Rp2040Rtic;
 
 // =========================================== Trait implementations ===================================================
 impl CorePassBackend for Rp2040Rtic {
@@ -234,6 +239,51 @@ impl SwPassBackend for SwPassBackendImpl {
         // }
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)
+    }
+}
+
+#[cfg(feature = "async")]
+struct AsyncPassBackendImpl;
+#[cfg(feature = "async")]
+impl AsyncPassBackend for AsyncPassBackendImpl {
+    fn queue_path(&self) -> Path {
+        parse_quote!(rticx_rp2040::export::Queue)
+    }
+
+    fn async_runtime_path(&self) -> Path {
+        parse_quote!(rticx_rp2040::export::async_rt)
+    }
+
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
+        let body = parse_quote!({
+            rticx_rp2040::export::NVIC::pend(irq_nbr);
+        });
+        empty_body_fn.block = Box::new(body);
+        empty_body_fn
+    }
+
+    fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
+        let body = parse_quote!({
+            use rticx_rp2040::export::InterruptNumber;
+            let _ = rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number());
+        });
+        empty_body_fn.block = Box::new(body);
+        Some(empty_body_fn)
+    }
+
+    fn generate_wake_pend_fn(&self, core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
+        let core_lit = LitInt::new(&core.to_string(), proc_macro2::Span::call_site());
+        let body: syn::Block = parse_quote!({
+            let current_core = unsafe { (*rp2040_hal::pac::SIO::PTR).cpuid.read().bits() };
+            if current_core == #core_lit {
+                rticx_rp2040::export::NVIC::pend(irq_nbr);
+            } else {
+                use rticx_rp2040::export::InterruptNumber;
+                let _ = rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number());
+            }
+        });
+        empty_body_fn.block = Box::new(body);
+        empty_body_fn
     }
 }
 
