@@ -1,11 +1,14 @@
 #![no_std]
 #![no_main]
 
+#[unsafe(link_section = ".boot2")]
+#[used]
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
+
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
 use defmt_rtt as _;
 use panic_halt as _;
-use cortex_m_rt as _;
 
 mod external_cipher;
 mod external_hasher;
@@ -73,7 +76,7 @@ pub mod app {
     /// see [crate::external_uart_rx] for task implementation
     #[task(
         binds = UART0_IRQ,
-        priority = 1,
+        priority = 3,
         shared = [uart_tx, alarm],
     )]
     pub struct CommandReceiverTask {
@@ -97,7 +100,7 @@ pub mod app {
     /// Software task that encrypts the input text and  and prints the result in base64 format to uart_tx
     /// see [crate::external_cipher] for task implementation
     #[sw_task(
-        priority = 3,
+        priority = 1,
         shared = [uart_tx],
     )]
     pub struct Encryptor;
@@ -105,14 +108,14 @@ pub mod app {
     /// Software task that decrypts the base64 input provided to it and prints the result to uart_tx
     /// see [crate::external_cipher] for task implementation
     #[sw_task(
-        priority = 3,
+        priority = 1,
         shared = [uart_tx],
     )]
     pub struct Decryptor;
 
     /// Software task that hashes the input provided to it and prints it to the uart_tx
     #[sw_task(
-        priority = 3,
+        priority = 1,
         shared = [uart_tx],
     )]
     pub struct Hasher;

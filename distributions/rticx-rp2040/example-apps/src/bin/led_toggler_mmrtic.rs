@@ -1,6 +1,10 @@
 #![no_std]
 #![no_main]
 
+#[unsafe(link_section = ".boot2")]
+#[used]
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
+
 // Program outout in UART:
 // Welcome to LedCommander Example
 // Enter the command and its arguments: <cmd> <arg1 arg2 ... arg_n>. Possible commands are:
@@ -10,12 +14,12 @@
 // be linked)
 use defmt_rtt as _;
 use panic_halt as _;
-use cortex_m_rt as _;
 
 #[rticx_rp2040::app(device = rp2040_hal::pac)]
 mod app {
 
     use core::sync::atomic::{AtomicU32, Ordering};
+    use defmt::*;
     use fugit::{MicrosDurationU32, RateExtU32};
     use heapless::String;
     use rp2040_hal::Clock;
@@ -65,6 +69,7 @@ mod app {
     #[init]
     fn init() -> (Shared, TaskInits) {
         let mut device = pac::Peripherals::take().unwrap();
+        println!("started");
 
         // Initialization of the system clock.
         let mut watchdog = rp2040_hal::watchdog::Watchdog::new(device.WATCHDOG);
@@ -105,21 +110,20 @@ mod app {
         let (mut uart_rx, mut uart_tx) = uart.split();
         uart_rx.enable_rx_interrupt(); // enable receiving interrupts
         uart_tx.disable_tx_interrupt(); // make sure tx interrupts are disabled
-        unsafe { pac::NVIC::unmask(pac::Interrupt::UART0_IRQ) };
-
-        // Configure GPIO25 as an output for driving the LED
-        let led_pin = pins.gpio25.into_push_pull_output();
-
-        let mut timer = rp2040_hal::Timer::new(device.TIMER, &mut device.RESETS, &clocks);
-        let mut alarm0 = timer.alarm_0().unwrap();
-        alarm0.enable_interrupt();
-        unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0) };
+        // unsafe { pac::NVIC::unmask(pac::Interrupt::UART0_IRQ) };
 
         uart_tx.write_full_blocking(b"Welcome to LedCommander Example\r\n");
         uart_tx.write_full_blocking(
             b"Enter the command and its arguments: <cmd> <arg1 arg2 ... arg_n>. Possible commands are:\r\n",
         );
         uart_tx.write_full_blocking(b"b <count> <duration> # toggles an led <count> times with <duration> in milliseconds between each toggle.\r\n");
+        // Configure GPIO25 as an output for driving the LED
+        let led_pin = pins.gpio25.into_push_pull_output();
+
+        let mut timer = rp2040_hal::Timer::new(device.TIMER, &mut device.RESETS, &clocks);
+        let mut alarm0 = timer.alarm_0().unwrap();
+        alarm0.enable_interrupt();
+        // unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0) };
 
         (
             Shared {
@@ -142,7 +146,7 @@ mod app {
     /// Task the receives commands to blink the led
     #[task(
         binds = UART0_IRQ,
-        priority = 1,
+        priority = 3,
         shared = [uart_tx, alarm],
     )]
     struct CommandReceiverTask {
@@ -166,6 +170,7 @@ mod app {
         fn exec(&mut self) {
             let mut data = [0_u8; 48];
             let bytes = self.uart_rx.read_raw(&mut data).unwrap();
+            println!("read {:?}", bytes);
 
             // echo back the read data
             self.shared()

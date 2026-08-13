@@ -12,15 +12,21 @@ pub use rticx_async as async_rt;
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 
 pub use cortex_m::{
+    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
-    Peripherals,
+    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
 };
 /// re-exports needed from the code generation in internal rticx-rp2040-macro crate
 pub use rp2040_hal::multicore::{Multicore, Stack};
 pub use rp2040_hal::sio::Sio;
+
+#[inline]
+#[must_use]
+pub const fn cortex_logical2hw(logical: u8, nvic_prio_bits: u8) -> u8 {
+    ((1 << nvic_prio_bits) - logical) << (8 - nvic_prio_bits)
+}
 
 /// Mask is used to store interrupt masks on systems without a BASEPRI register (M0, M0+, M23).
 /// It needs to be large enough to cover all the relevant interrupts in use.
@@ -112,16 +118,6 @@ pub const fn have_basepri() -> bool {
 ///     - CS exit, single write of the 32 bit `mask` to the `iser` register
 /// - priority.set/get optimized out (their effect not)
 /// - On par or better than any hand written implementation of SRP
-///
-/// Limitations:
-/// Current implementation does not allow for tasks with shared resources
-/// to be bound to exception handlers, as these cannot be masked in HW.
-///
-/// Possible solutions:
-/// - Mask exceptions by global critical sections (interrupt::free)
-/// - Temporary lower exception priority
-///
-/// These possible solutions are set goals for future work
 #[cfg(not(have_basepri))]
 #[inline(always)]
 pub unsafe fn lock<T, R, const M: usize>(
@@ -132,22 +128,28 @@ pub unsafe fn lock<T, R, const M: usize>(
     masks: &[Mask<M>; 3],
     f: impl FnOnce(&mut T) -> R,
 ) -> R {
-    let current = priority;
-    if current < ceiling {
-        if ceiling >= 4 {
-            // execute closure under protection of raised system ceiling
-            interrupt::free(|_| f(unsafe { &mut *ptr }))
+    unsafe {
+        let current = priority;
+        if current < ceiling {
+            if ceiling >= 4 {
+                // execute closure under protection of a core-local critical section
+                // cortex_m::interrupt::free() is not used because underlying critical section impl uses multicore spinlocks
+                core::arch::asm!("cpsid i"); // critical section begin
+                let r = f(&mut *ptr);
+                core::arch::asm!("cpsie i"); // critical section end
+                r
+            } else {
+                let mask = compute_mask(current as u8, ceiling as u8, masks);
+                clear_enable_mask(mask);
+                // execute closure under protection of raised system ceiling
+                let r = f(&mut *ptr);
+                set_enable_mask(mask);
+                r
+            }
         } else {
-            let mask = compute_mask(current as u8, ceiling as u8, masks);
-            unsafe { clear_enable_mask(mask) };
-            // execute closure under protection of raised system ceiling
-            let r = f(unsafe { &mut *ptr });
-            unsafe { set_enable_mask(mask) };
-            r
+            // execute closure without raising system ceiling
+            f(&mut *ptr)
         }
-    } else {
-        // execute closure without raising system ceiling
-        f(unsafe { &mut *ptr })
     }
 }
 
@@ -224,18 +226,29 @@ pub mod cross_core {
 
     #[inline]
     pub fn pend_irq(irq: u16) -> Result<(), FullFifoErr> {
-        let sio = unsafe { &(*rp2040_hal::pac::SIO::PTR) };
-        cortex_m::interrupt::free(|_| {
-            if sio.fifo_st().read().rdy().bit() {
+        unsafe {
+            let sio = &(*rp2040_hal::pac::SIO::PTR);
+            // use a core-local critical section to prevent race conditions from occuring between the time
+            // of checking that fifo is empty and the time of writing to it. Especially that this function can be called from
+            // any core-local context.
+            // cortex_m::interrupt::free() is not used because underlying critical section impl uses multicore spinlocks
+            core::arch::asm!("cpsid i"); // critical section begin
+            let r = if sio.fifo_st().read().rdy().bit() {
                 // TX fifo is not full
-                sio.fifo_wr().write(|wr| unsafe { wr.bits(irq as u32) });
+                sio.fifo_wr().write(|wr| wr.bits(irq as u32));
                 Ok(())
             } else {
                 Err(FullFifoErr)
-            }
-        })
+            };
+            core::arch::asm!("cpsie i"); // critical section end
+            r
+        }
     }
 
+    /// Utility function to be called from inside the FIFO interrupts to read any received interrupt number
+    /// ## Note:
+    /// This function does not need to be protected by a core-local critical section as the FIFO interrupt
+    /// are configured by this distribution to run at the highest priority
     pub fn get_pended_irq() -> Option<rp2040_hal::pac::Interrupt> {
         let sio = unsafe { &(*rp2040_hal::pac::SIO::PTR) };
         if sio.fifo_st().read().vld().bit() {
@@ -248,10 +261,36 @@ pub mod cross_core {
             None
         }
     }
+
+    pub fn configure_fifo(core: u8) {
+        const MAX_INTERRUPT_PRIORITY: u8 = 0;
+        let interrupt = if core == 0 {
+            rp2040_hal::pac::Interrupt::SIO_IRQ_PROC0
+        } else {
+            rp2040_hal::pac::Interrupt::SIO_IRQ_PROC1
+        };
+        unsafe {
+            let sio = &(*rp2040_hal::pac::SIO::PTR);
+            // drain fifo
+            while sio.fifo_st().read().vld().bit() {
+                let _ = sio.fifo_rd().read();
+            }
+            // clear status bits and unpend the FIFO interrupt
+            sio.fifo_st().write(|wr| wr.bits(0xff));
+            rp2040_hal::pac::NVIC::unpend(interrupt);
+            // Set FIFO0 interrupts priority to MAX priority
+            rp2040_hal::pac::CorePeripherals::steal()
+                .NVIC
+                .set_priority(interrupt, MAX_INTERRUPT_PRIORITY);
+            // unmask FIFO irq
+            rp2040_hal::pac::NVIC::unmask(interrupt);
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+#[cfg(any(feature = "async", feature = "swtasks"))]
 fn SIO_IRQ_PROC0() {
     if let Some(signal) = cross_core::get_pended_irq() {
         // info!("SIO_IRQ_PROC0: forwarding irq {}", signal as u16);
@@ -261,6 +300,7 @@ fn SIO_IRQ_PROC0() {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+#[cfg(any(feature = "async", feature = "swtasks"))]
 fn SIO_IRQ_PROC1() {
     if let Some(signal) = cross_core::get_pended_irq() {
         // info!("SIO_IRQ_PROC1: forwarding irq {}", signal as u16);

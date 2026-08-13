@@ -11,7 +11,6 @@ pub mod my_app {
     use defmt::*;
     use defmt_rtt as _;
     use panic_halt as _;
-    use cortex_m_rt as _;
 
     use rp2040_hal::fugit::MicrosDurationU32;
     use rp2040_hal::gpio::bank0::Gpio25;
@@ -31,6 +30,8 @@ pub mod my_app {
 
     #[init]
     fn system_init() -> (SharedResources, TaskInits) {
+        println!("started");
+
         let mut device = pac::Peripherals::take().unwrap();
 
         // Initialization of the system clock.
@@ -77,7 +78,7 @@ pub mod my_app {
         )
     }
 
-    #[task(binds = TIMER_IRQ_0 , priority = 3)]
+    #[task(binds = TIMER_IRQ_0 , priority = 2)]
     struct Blinker {
         /* local resources */
         is_high: bool,
@@ -120,7 +121,7 @@ pub mod my_app {
         }
     }
 
-    #[sw_task(priority = 2)]
+    #[sw_task(priority = 1)]
     struct MyTask2;
     impl RticSwTask for MyTask2 {
         fn init() -> Self {

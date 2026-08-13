@@ -13,7 +13,6 @@ pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 pub mod my_app {
 
     use cortex_m::asm;
-    use cortex_m_rt as _;
     use defmt::assert_eq;
     use defmt::*;
     use defmt_rtt as _;
@@ -72,7 +71,7 @@ pub mod my_app {
     }
 
     /// a Core0 task to be spawned by a task on Core1
-    #[sw_task(priority = 1, spawn_by = 1, core = 0)]
+    #[sw_task(priority = 2, spawn_by = 1, core = 0)]
     struct Core0Task;
     impl RticSwTask for Core0Task {
         type SpawnInput = u32;

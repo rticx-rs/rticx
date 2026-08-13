@@ -3,7 +3,10 @@
 
 use defmt_rtt as _;
 use panic_halt as _;
-use cortex_m_rt as _;
+
+#[unsafe(link_section = ".boot2")]
+#[used]
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
 #[rticx_rp2040::app(device = rp2040_hal::pac, dispatchers = [SW0_IRQ])]
 mod app {
@@ -132,7 +135,7 @@ mod app {
 
     #[task(
         binds = UART0_IRQ,
-        priority = 1,
+        priority = 3,
         shared = [uart_tx, alarm],
     )]
     struct CommandReceiverTask {
@@ -255,7 +258,7 @@ mod app {
     }
 
     #[async_task(
-        priority = 3,
+        priority = 1,
         shared = [uart_tx],
     )]
     struct AsyncProcessor {

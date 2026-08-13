@@ -9,12 +9,35 @@ use rticx_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp
 #[cfg(feature = "swtasks")]
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 #[allow(unused)]
-use syn::{parse_quote, ItemFn, LitInt, Path};
+use syn::{ItemFn, LitInt, Path, parse_quote};
 
 extern crate proc_macro;
 
-const MIN_TASK_PRIORITY: u16 = 3;
-const MAX_TASK_PRIORITY: u16 = 0;
+/// Lowest logical priority (This corresponds to HW priority 3 or armv6m and 255 for armv7m)
+const MIN_TASK_PRIORITY: u16 = 1;
+/// Cortex-M exceptions that have a *configurable* priority. These may be bound
+/// to hardware tasks (their priority is set via `SCB`), but must not be used as
+/// dispatcher interrupts.
+const CONFIGURABLE_EXCEPTIONS: &[&str] = &[
+    "MemoryManagement",
+    "BusFault",
+    "UsageFault",
+    "SecureFault",
+    "SVCall",
+    "DebugMonitor",
+    "PendSV",
+    "SysTick",
+];
+
+/// Exceptions whose priority is *not* configurable. They may never be bound to a
+/// task (neither a dispatcher nor a user hardware task).
+const NON_CONFIGURABLE_EXCEPTIONS: &[&str] = &["NonMaskableInt", "HardFault"];
+const FIFO_INTERRUPTS: &[&str] = &["SIO_IRQ_PROC1", "SIO_IRQ_PROC0"];
+
+fn is_exception(name: &Ident) -> bool {
+    let s = name.to_string();
+    CONFIGURABLE_EXCEPTIONS.iter().any(|e| s == *e)
+}
 
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -43,42 +66,74 @@ impl CorePassBackend for Rp2040Rtic {
     fn default_task_priority(&self) -> u16 {
         MIN_TASK_PRIORITY
     }
+
     fn post_init(
         &self,
         app_args: &AppArgs,
         sub_app: &SubApp,
         app_analysis: &SubAnalysis,
     ) -> Option<TokenStream2> {
-        let peripheral_crate = &app_args.pacs[sub_app.core as usize];
-        let initialize_dispatcher_interrupts =
-            app_analysis.used_irqs.iter().map(|(irq_name, priority)| {
-                let priority = priority.min(&MIN_TASK_PRIORITY); // limit piority to minmum
-                quote! {
-                    //set interrupt priority
-                    #peripheral_crate::CorePeripherals::steal()
-                        .NVIC
-                        .set_priority(#peripheral_crate::Interrupt::#irq_name, #priority as u8);
-                    //unmask interrupt
-                    #peripheral_crate::NVIC::unmask(#peripheral_crate::Interrupt::#irq_name);
-                }
-            });
+        let pac = &app_args.pacs[sub_app.core as usize];
+        let nvic_prio_bits = quote!(#pac::NVIC_PRIO_BITS);
+
+        let mut interrupt_init_stmts = Vec::new();
+        interrupt_init_stmts
+            .push(quote!(let mut core = unsafe { rticx_rp2040::export::Peripherals::steal() };));
+
+        // Configure priority + enable for every interrupt bound in this application
+        // (this covers both user hardware tasks and dispatcher interrupts generated
+        // by the software tasks pass, since both end up as `#[task(binds = ..)]`).
+        for (irq_name, priority) in &app_analysis.used_irqs {
+            let es = format!(
+                "Maximum priority used by interrupt vector '{irq_name}' is more than supported by hardware"
+            );
+            // Compile-time assert that this priority is supported by the device
+            interrupt_init_stmts.push(quote!(
+                const _: () = if (1usize << #nvic_prio_bits) < #priority as usize {
+                    ::core::panic!(#es);
+                };
+            ));
+
+            if is_exception(irq_name) {
+                // Exceptions use the SCB and are never unmasked
+                interrupt_init_stmts.push(quote!(
+                    core.SCB.set_priority(
+                        rticx_rp2040::export::SystemHandler::#irq_name,
+                        rticx_rp2040::export::cortex_logical2hw(#priority as u8, #nvic_prio_bits),
+                    );
+                ));
+            } else {
+                // External interrupts use the NVIC and must be unmasked after their
+                // priority is set (changing the priority of a pended interrupt is
+                // implementation-defined).
+                interrupt_init_stmts.push(quote!(
+                    core.NVIC.set_priority(
+                        #pac::Interrupt::#irq_name,
+                        rticx_rp2040::export::cortex_logical2hw(#priority as u8, #nvic_prio_bits),
+                    );
+                    rticx_rp2040::export::NVIC::unmask(#pac::Interrupt::#irq_name);
+                ));
+            }
+        }
 
         // initialize core 1 from core 0 if the application is for multicore (cores > 1)
         let init_and_spawn_core1 = if sub_app.core == 0 && app_args.cores > 1 {
-            Some(init_core1(peripheral_crate))
+            Some(init_core1(pac))
         } else {
             None
         };
 
-        let configure_fifo = if app_args.cores > 1 {
-            Some(configure_fifo(peripheral_crate, sub_app.core))
-        } else {
-            None
-        };
+        let configure_fifo =
+            if app_args.cores > 1 && cfg!(any(feature = "async", feature = "swtasks")) {
+                let core = sub_app.core;
+                Some(quote!(rticx_rp2040::export::cross_core::configure_fifo(#core as u8)))
+            } else {
+                None
+            };
 
         Some(quote! {
             unsafe {
-                #(#initialize_dispatcher_interrupts)*
+                #(#interrupt_init_stmts)*
             }
             // init and spawn core 1 (if app.core == 0 and app_args.cores == 2 )
             #init_and_spawn_core1
@@ -98,6 +153,9 @@ impl CorePassBackend for Rp2040Rtic {
         // eprintln!("{}", empty_body_fn.to_token_stream().to_string()); // enable comment to see the function signature
         let fn_body = parse_quote! {
             {
+                // RTICX multicore model prevents shared resources between multiple cores. As such
+                // We do not need to use multicore aware critical section (cortex_m::interrupt::free() with underlying critical section impl provided by rp2040-hal using spinlocks)
+                // so we only need a core-local critical section.
                 unsafe { core::arch::asm!("cpsid i"); } // critical section begin
                 let r = f();
                 unsafe { core::arch::asm!("cpsie i"); } // critical section end
@@ -116,14 +174,19 @@ impl CorePassBackend for Rp2040Rtic {
     ) -> Option<TokenStream2> {
         let peripheral_crate = &app_args.pacs[app_info.core as usize];
 
-        // irq names from hadware tasks
-        let irq_list_as_u32 = app_info.tasks.iter().filter_map(|t| {
+        let nvic_tasks: Vec<_> = app_info
+            .tasks
+            .iter()
+            .filter(|t| t.args.binds.as_ref().is_some_and(|n| !is_exception(n)))
+            .collect();
+        let irq_list_as_u32 = nvic_tasks.iter().filter_map(|t| {
             let irq_name = t.args.binds.as_ref()?;
             Some(quote! { #peripheral_crate::Interrupt::#irq_name as u32, })
         });
 
+        // Group NVIC interrupts by priority level (1..=3) to build one mask per level
         let mut irq_prio_map = [Vec::new(), Vec::new(), Vec::new()];
-        for hw_task in app_info.tasks.iter() {
+        for hw_task in &nvic_tasks {
             let prio = hw_task.args.priority;
             if (1..=3).contains(&prio) {
                 let Some(irq_name) = hw_task.args.binds.as_ref() else {
@@ -198,9 +261,31 @@ impl CorePassBackend for Rp2040Rtic {
 
     fn pre_codegen_validation(
         &self,
-        _app: &rticx_core::App,
+        app: &rticx_core::App,
         _analysis: &rticx_core::Analysis,
     ) -> syn::Result<()> {
+        for sub_app in &app.sub_apps {
+            for task in &sub_app.tasks {
+                let Some(binds) = &task.args.binds else {
+                    continue;
+                };
+                let name = binds.to_string();
+                if NON_CONFIGURABLE_EXCEPTIONS.iter().any(|e| name == *e) {
+                    return Err(syn::Error::new(
+                        binds.span(),
+                        "only exceptions with configurable priority can be used as hardware tasks",
+                    ));
+                }
+                // Software tasks use FIFO for spawning tasks from one core to the other
+                #[cfg(any(feature = "async", feature = "swtasks"))]
+                if FIFO_INTERRUPTS.iter().any(|e| name == *e) {
+                    return Err(syn::Error::new(
+                        binds.span(),
+                        "FIFO interrupts are reserved by RTICX for cross-core tasks and cannot be for a hardware task",
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -309,27 +394,5 @@ fn init_core1(pac: &syn::Path) -> TokenStream2 {
         let cores = mc.cores();
         let core1 = &mut cores[1];
         let _ = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || core1_entry());
-    }
-}
-
-fn configure_fifo(peripheral_crate: &syn::Path, core: u32) -> TokenStream2 {
-    #[allow(non_snake_case)]
-    let SIO_IRQ_PROC = format_ident!("SIO_IRQ_PROC{core}");
-    quote! {
-        unsafe {
-            let sio = unsafe { &(*rp2040_hal::pac::SIO::PTR) };
-            // drain fifo
-            while sio.fifo_st().read().vld().bit() {
-                let _ = sio.fifo_rd().read();
-            }
-            // clear status bits and unpend the FIFO interrupt
-            sio.fifo_st().write(|wr| wr.bits(0xff) );
-            #peripheral_crate::NVIC::unpend( #peripheral_crate::Interrupt::#SIO_IRQ_PROC);
-            // Set FIFO0 interrupts priority to MAX priority
-            #peripheral_crate::CorePeripherals::steal()
-                .NVIC.set_priority( #peripheral_crate::Interrupt::#SIO_IRQ_PROC, #MAX_TASK_PRIORITY as u8);
-            // unmask FIFO irq
-            #peripheral_crate::NVIC::unmask( #peripheral_crate::Interrupt::#SIO_IRQ_PROC);
-        }
     }
 }

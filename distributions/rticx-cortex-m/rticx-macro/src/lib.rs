@@ -44,11 +44,8 @@ fn is_exception(name: &Ident) -> bool {
     CONFIGURABLE_EXCEPTIONS.iter().any(|e| s == *e)
 }
 
-/// Lowest logical priority
-#[cfg(not(feature = "armv6m"))]
-const MIN_TASK_PRIORITY: u16 = 0xff;
-#[cfg(feature = "armv6m")]
-const MIN_TASK_PRIORITY: u16 = 0b11;
+/// Lowest logical priority, higher values, higher urgency
+const MIN_TASK_PRIORITY: u16 = 1;
 
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -124,8 +121,6 @@ impl CorePassBackend for CortexMRtic {
             }
         }
 
-        let async_setup: Option<TokenStream2> = None;
-
         // `core::peripheral::Peripherals` handle for SCB/NVIC access at runtime.
         // `post_init` already runs inside a critical section, so stealing is safe.
         Some(quote! {
@@ -133,7 +128,6 @@ impl CorePassBackend for CortexMRtic {
             unsafe {
                 #(#stmts)*
             }
-            #async_setup
         })
     }
 
