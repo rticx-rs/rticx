@@ -117,6 +117,7 @@ fn codegen_expands_single_core_sw_app() {
                 rticx :: export :: Queue :: new () ;
             impl Foo {
                 pub fn spawn (input : < Foo as RticAsyncTask > :: SpawnInput) -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                    #[allow(static_mut_refs)]
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
@@ -172,6 +173,7 @@ fn codegen_expands_single_core_sw_app() {
                             )
                         } ;
                         if exec . try_allocate () {
+                            #[allow(static_mut_refs)]
                             let mut input_consumer = unsafe { __rticx_internal__Foo__INPUTS . split () . 1 } ;
                             let input = unsafe { input_consumer . dequeue_unchecked () } ;
                             let future = __rticx_async_Foo (unsafe { FOO . assume_init_mut () } , input ,) ;
@@ -566,6 +568,7 @@ fn codegen_expands_prio_0_executor() {
                 rticx :: export :: Queue :: new () ;
             impl Foo {
                 pub fn spawn (input : < Foo as RticAsyncTask > :: SpawnInput) -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                    #[allow(static_mut_refs)]
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio0Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {

@@ -414,6 +414,7 @@ fn generate_dispatcher_tasks(
                             )
                         };
                         if exec.try_allocate() {
+                            #[allow(static_mut_refs)]
                             let mut input_consumer = unsafe { #task_inputs_queue.split().1 };
                             let input = unsafe { input_consumer.dequeue_unchecked() };
                             let future = #wrapper_fn(
@@ -703,6 +704,7 @@ impl AsyncTask {
 
             impl #task_name {
                 pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
+                    #[allow(static_mut_refs)]
                     let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                     let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                     #critical_section_fn(|| -> Result<(), #inputs_ty> {
@@ -750,6 +752,7 @@ impl AsyncTask {
 
                 impl #task_name {
                     pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
+                        #[allow(static_mut_refs)]
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {
@@ -775,6 +778,7 @@ impl AsyncTask {
                         _spawner: #spawner_ty,
                         input: #inputs_ty,
                     ) -> Result<(), #inputs_ty> {
+                        #[allow(static_mut_refs)]
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {

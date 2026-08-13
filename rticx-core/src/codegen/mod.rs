@@ -64,7 +64,6 @@ impl<'a> CodeGen<'a> {
 
         quote! {
             pub mod #app_mod {
-                #![allow(static_mut_refs)]
                 #![allow(non_upper_case_globals)]
                 #![allow(non_snake_case)]
                 /// Include peripheral crate(s) that defines the vector table
