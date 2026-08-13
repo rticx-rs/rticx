@@ -162,8 +162,7 @@ fn codegen_expands_single_core_app() {
         quote! {
             impl UartTask {
                 pub fn shared (& self) -> __uart_task_shared_resources {
-                    const TASK_PRIORITY : u16 = 2u16 ;
-                    __uart_task_shared_resources :: new (TASK_PRIORITY)
+                    __uart_task_shared_resources :: new ()
                 }
             }
         },
@@ -173,7 +172,7 @@ fn codegen_expands_single_core_app() {
         &generated,
         quote! {
             pub struct __uart_task_shared_resources {
-                pub counter : __counter_mutex ,
+                pub counter : __counter_mutex < 2u16 > ,
             }
         },
         "task shared resources struct",
@@ -182,13 +181,13 @@ fn codegen_expands_single_core_app() {
     // ---- resource proxy for `counter` ----
     assert_section_present(
         &generated,
-        quote! { pub struct __counter_mutex { # [doc (hidden)] task_priority : u16 , } },
+        quote! { pub struct __counter_mutex < const TASK_PRIORITY : u16 > ; },
         "resource proxy struct",
     );
     assert_section_present(
         &generated,
         quote! {
-            impl RticMutex for __counter_mutex {
+            impl < const TASK_PRIORITY : u16 > RticMutex for __counter_mutex < TASK_PRIORITY > {
                 type ResourceType = u32 ;
                 fn lock < R > (& mut self , f : impl FnOnce (& mut Self :: ResourceType) -> R) -> R {
                     f (unsafe { & mut * resource_ptr })
@@ -200,9 +199,9 @@ fn codegen_expands_single_core_app() {
     assert_section_present(
         &generated,
         quote! {
-            impl __counter_mutex {
+            impl < const TASK_PRIORITY : u16 > __counter_mutex < TASK_PRIORITY > {
                 # [inline (always)]
-                pub fn new (task_priority : u16) -> Self { Self { task_priority } }
+                pub fn new () -> Self { Self }
             }
         },
         "resource proxy constructor",
@@ -374,7 +373,7 @@ fn codegen_expands_multi_core_app() {
     );
     assert_section_present(
         &generated,
-        quote! { pub struct __counter_mutex { # [doc (hidden)] task_priority : u16 , } },
+        quote! { pub struct __counter_mutex < const TASK_PRIORITY : u16 > ; },
         "core0 resource proxy struct",
     );
     assert_section_present(

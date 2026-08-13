@@ -38,7 +38,7 @@ pub(crate) fn get_resource_proxy_lock_fn(
             // `self` refers to the resource proxy struct
 
             const CEILING: u16 = #ceiling; // resource priority ceiling
-            let task_priority = self.task_priority; // running task priority
+            let task_priority = TASK_PRIORITY; // running task priority
             let resource_ptr = unsafe { // get a mut pointer to the resource
                 &mut #static_mut_shared_resources.assume_init_mut().#resource_ident
             } as *mut _;

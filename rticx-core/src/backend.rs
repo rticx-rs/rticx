@@ -58,16 +58,13 @@ pub trait CorePassBackend {
     /// struct implementing the `RticMutex` internal trait:
     ///
     /// ```rust
-    /// struct __resource1_mutex {
-    ///     #[doc(hidden)]
-    ///     task_priority: u16,
-    /// }
-    /// impl RticMutex for __resource1_mutex {
+    /// struct __resource1_mutex<const TASK_PRIORITY: u16>;
+    /// impl<const TASK_PRIORITY: u16> RticMutex for __resource1_mutex<TASK_PRIORITY> {
     ///     type ResourceType = R1Type;
     ///     // this is what `incomplete_lock_fn` already contains
     ///     fn lock<R>(&mut self, f: impl FnOnce(&mut Self::ResourceType) -> R) -> R {
     ///         const CEILING: u16 = 3u16; // resource ceiling
-    ///         let task_priority = self.task_priority;
+    ///         let task_priority = TASK_PRIORITY;
     ///         let resource_ptr = unsafe { &mut SHARED.assume_init_mut().resource1 };
     ///         /* TODO: HARDWARE-SPECIFIC CODE COMES HERE */
     ///     }

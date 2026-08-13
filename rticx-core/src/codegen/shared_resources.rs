@@ -42,19 +42,16 @@ impl SharedResources {
 
             quote! {
                 // Resource proxy for `#element_name`
-                pub struct #proxy_name {
-                    #[doc(hidden)]
-                    task_priority: u16,
-                }
+                pub struct #proxy_name<const TASK_PRIORITY: u16>;
 
-                impl #proxy_name {
+                impl<const TASK_PRIORITY: u16> #proxy_name<TASK_PRIORITY> {
                     #[inline(always)]
-                    pub fn new(task_priority: u16) -> Self {
-                        Self { task_priority }
+                    pub fn new() -> Self {
+                        Self
                     }
                 }
 
-                impl #mutex_ty for #proxy_name {
+                impl<const TASK_PRIORITY: u16> #mutex_ty for #proxy_name<TASK_PRIORITY> {
                     type ResourceType = #element_ty;
                     #impl_lock_fn
                 }
@@ -71,31 +68,32 @@ impl SharedResources {
             return quote!();
         }
 
-        // generate `field_name : proxy_type` to use for populating struct body
-        let field_and_proxytype = task_resources_idents.iter().filter_map(|resource_ident| {
-            if let Some(resource) = self.get_field(resource_ident) {
-                let ident = &resource.ident;
-                let proxy_type = utils::get_proxy_name(ident);
-                Some(quote! {#ident: #proxy_type})
-            } else {
-                None
-            }
-        });
-        let field_and_proxytype2 = field_and_proxytype.clone();
-
-        // TODO: replace `shared(&self)` with individual `shared_resource_name(&self) -> proxy_type`
-        // to avoid constructing the whole shared structure only for one resource access.
-
         let task_ty = task.name();
         let task_prio = task.args.priority;
         let task_shared_resources_struct =
             format_ident!("__{}_shared_resources", task.name_snakecase());
+
+        // generate `field_name : proxy_type<priority>` to populate the struct body
+        let field_and_proxytype = task_resources_idents.iter().filter_map(|resource_ident| {
+            self.get_field(resource_ident).map(|resource| {
+                let ident = &resource.ident;
+                let proxy_type = utils::get_proxy_name(ident);
+                quote! {#ident: #proxy_type<#task_prio>}
+            })
+        });
+        let proxy_inits = task_resources_idents.iter().filter_map(|resource_ident| {
+            self.get_field(resource_ident).map(|resource| {
+                let ident = &resource.ident;
+                let proxy_type = utils::get_proxy_name(ident);
+                quote! {#ident: #proxy_type::new()}
+            })
+        });
+
         quote! {
             // Shared resources access through shared() API for `#task_ty`
             impl #task_ty {
                 pub fn shared(&self) -> #task_shared_resources_struct {
-                    const TASK_PRIORITY: u16 = #task_prio;
-                    #task_shared_resources_struct::new(TASK_PRIORITY)
+                    #task_shared_resources_struct::new()
                 }
             }
 
@@ -106,9 +104,9 @@ impl SharedResources {
 
             impl #task_shared_resources_struct {
                 #[inline(always)]
-                pub fn new(priority: u16) -> Self {
+                pub fn new() -> Self {
                     Self {
-                        #(#field_and_proxytype2::new(priority) ,)*
+                        #(#proxy_inits ,)*
                     }
                 }
             }
