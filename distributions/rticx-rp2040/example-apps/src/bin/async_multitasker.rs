@@ -115,9 +115,9 @@ mod app {
                 target_blinks: 0,
             },
             TaskInits {
-                command_receiver_task: CommandReceiverTask::init((uart_rx, tx)),
-                timed_led_toggler: TimedLedToggler::init(led_pin),
-                async_processor: AsyncProcessor::init(rx),
+                command_receiver_task: CommandReceiverTask::new((uart_rx, tx)),
+                timed_led_toggler: TimedLedToggler::new(led_pin),
+                async_processor: AsyncProcessor::new(rx),
             },
         )
     }
@@ -147,17 +147,6 @@ mod app {
     }
 
     impl RticTask for CommandReceiverTask {
-        type InitArgs = (UartRx, Sender<'static, String<30>, 4>);
-        fn init(args: Self::InitArgs) -> Self {
-            Self {
-                data: String::new(),
-                read_command: true,
-                command: Command::Unknown,
-                uart_rx: args.0,
-                tx: args.1,
-            }
-        }
-
         fn exec(&mut self) {
             let mut data = [0_u8; 48];
             let bytes = self.uart_rx.read_raw(&mut data).unwrap();
@@ -188,6 +177,16 @@ mod app {
     }
 
     impl CommandReceiverTask {
+        pub fn new((uart_rx, tx): (UartRx, Sender<'static, String<30>, 4>)) -> Self {
+            Self {
+                data: String::new(),
+                read_command: true,
+                command: Command::Unknown,
+                uart_rx,
+                tx,
+            }
+        }
+
         fn run_command(&mut self) {
             match self.command {
                 Command::Blink => {
@@ -228,12 +227,13 @@ mod app {
         led: LedPin,
     }
 
-    impl RticTask for TimedLedToggler {
-        type InitArgs = LedPin;
-        fn init(led: LedPin) -> Self {
+    impl TimedLedToggler {
+        pub fn new(led: LedPin) -> Self {
             Self { led }
         }
+    }
 
+    impl RticTask for TimedLedToggler {
         fn exec(&mut self) {
             let duration = TARGET_DURATION.load(Ordering::SeqCst);
             let blinks_left = TARGET_TICKS.load(Ordering::SeqCst);
@@ -265,13 +265,14 @@ mod app {
         rx: Receiver<'static, String<30>, 4>,
     }
 
-    impl RticAsyncTask for AsyncProcessor {
-        type InitArgs = Receiver<'static, String<30>, 4>;
-        type SpawnInput = ();
-
-        fn init(rx: Self::InitArgs) -> Self {
+    impl AsyncProcessor {
+        pub fn new(rx: Receiver<'static, String<30>, 4>) -> Self {
             Self { rx }
         }
+    }
+
+    impl RticAsyncTask for AsyncProcessor {
+        type SpawnInput = ();
 
         async fn exec(&mut self, _input: ()) {
             self.shared().uart_tx.lock(|uart| {

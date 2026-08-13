@@ -42,14 +42,10 @@ mod app {
         let _ = Background::spawn(());
     }
 
-    #[async_task(priority = 0)]
+    #[async_task(priority = 0, init = generated)]
     struct Background;
     impl RticAsyncTask for Background {
-        type InitArgs = ();
         type SpawnInput = ();
-        fn init(_: Self::InitArgs) -> Self {
-            Self
-        }
         async fn exec(&mut self, _input: ()) {
             loop {
                 hprintln!("running at priority 0 each second");
@@ -64,11 +60,7 @@ mod app {
         tx: Sender<'static, u32, 4>,
     }
     impl RticAsyncTask for Ping {
-        type InitArgs = Self;
         type SpawnInput = ();
-        fn init(s: Self::InitArgs) -> Self {
-            s
-        }
         async fn exec(&mut self, _input: ()) {
             hprintln!("ping: sending 1 to pong");
             self.tx.send(1).await.expect("ping send must succeed");
@@ -84,11 +76,7 @@ mod app {
         tx: Sender<'static, u32, 4>,
     }
     impl RticAsyncTask for Pong {
-        type InitArgs = Self;
         type SpawnInput = ();
-        fn init(s: Self::InitArgs) -> Self {
-            s
-        }
         async fn exec(&mut self, _input: ()) {
             hprintln!("pong: waiting for ping to send something...");
             let r = self.rx.recv().await.expect("pong recv must succeed");
@@ -98,14 +86,10 @@ mod app {
         }
     }
 
-    #[async_task(priority = 3)]
+    #[async_task(priority = 3, init = generated)]
     struct Periodic;
     impl RticAsyncTask for Periodic {
-        type InitArgs = ();
         type SpawnInput = u32;
-        fn init(_: Self::InitArgs) -> Self {
-            Self
-        }
         async fn exec(&mut self, count: u32) {
             hprintln!("periodic task started");
             for i in 1..=count {

@@ -17,8 +17,6 @@ use syn::{ItemFn, parse_quote};
 
 extern crate proc_macro;
 
-const MIN_TASK_PRIORITY: u16 = 1;
-
 // ============================================================================
 // Entry point – dispatches to the selected backend
 // ============================================================================
@@ -109,7 +107,7 @@ impl CorePassBackend for BackendImpl {
         let mut stmts: Vec<TokenStream2> = Vec::new();
 
         let max_prio: usize = 15;
-        let min_prio: usize = MIN_TASK_PRIORITY as usize;
+        let min_prio: usize = 1;
         let interrupt_start = if cfg!(feature = "esp32c6") { 20u8 } else { 16 };
         let mut external_interrupts_map = std::collections::HashMap::new();
 

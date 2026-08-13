@@ -40,64 +40,48 @@ pub fn three_core_sw_args() -> TokenStream {
 
 pub fn single_core_sw_app_module() -> syn::ItemMod {
     app_mod(quote! {
-        struct Bar;
+            struct Bar;
 
-        #[async_task(priority = 2)]
-        struct Foo;
+            #[async_task(priority = 2)]
+            struct Foo;
 
-        impl RticAsyncTask for Foo {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Foo
+            impl RticAsyncTask for Foo {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
             }
-            fn exec(&mut self, input: u32) {}
-        }
-    })
+        })
 }
 
 pub fn multi_core_sw_app_module() -> syn::ItemMod {
     app_mod(quote! {
-        #[async_task(priority = 2, core = 0)]
-        struct Task0;
+            #[async_task(priority = 2, core = 0)]
+            struct Task0;
 
-        impl RticAsyncTask for Task0 {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Task0
+            impl RticAsyncTask for Task0 {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
             }
-            fn exec(&mut self, input: u32) {}
-        }
 
-        #[async_task(priority = 3, core = 1, spawn_by = 0)]
-        struct Cross;
+            #[async_task(priority = 3, core = 1, spawn_by = 0)]
+            struct Cross;
 
-        impl RticAsyncTask for Cross {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Cross
+            impl RticAsyncTask for Cross {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
             }
-            fn exec(&mut self, input: u32) {}
-        }
-    })
+        })
 }
 
 pub fn single_core_prio_0_app_module() -> syn::ItemMod {
     app_mod(quote! {
-        #[async_task(priority = 0)]
-        struct Foo;
+            #[async_task(priority = 0)]
+            struct Foo;
 
-        impl RticAsyncTask for Foo {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Foo
+            impl RticAsyncTask for Foo {
+    type SpawnInput = u32;
+                fn exec(&mut self, _input: u32) {}
             }
-            fn exec(&mut self, _input: u32) {}
-        }
-    })
+        })
 }
 
 pub fn assert_err_contains<T>(result: syn::Result<T>, substr: &str) {

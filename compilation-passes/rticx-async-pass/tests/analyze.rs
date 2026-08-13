@@ -22,15 +22,13 @@ fn analyze(args: TokenStream, items: TokenStream) -> syn::Result<Analysis> {
 fn analysis_single_core_one_task_one_dispatcher() {
     let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0]);
     let items = quote! {
-        #[async_task(priority = 2)]
-        struct Foo;
-        impl RticAsyncTask for Foo {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Foo }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 2)]
+            struct Foo;
+            impl RticAsyncTask for Foo {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let analysis = analyze(args, items).expect("analysis succeeds");
     assert_eq!(analysis.sub_analysis.len(), 1);
     let sub = &analysis.sub_analysis[0];
@@ -54,23 +52,19 @@ fn analysis_single_core_one_task_one_dispatcher() {
 fn analysis_single_core_two_tasks_same_prio() {
     let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0]);
     let items = quote! {
-        #[async_task(priority = 2)]
-        struct Foo;
-        impl RticAsyncTask for Foo {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Foo }
-            fn exec(&mut self, input: u32) {}
-        }
-        #[async_task(priority = 2)]
-        struct Bar;
-        impl RticAsyncTask for Bar {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Bar }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 2)]
+            struct Foo;
+            impl RticAsyncTask for Foo {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 2)]
+            struct Bar;
+            impl RticAsyncTask for Bar {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let analysis = analyze(args, items).expect("analysis succeeds");
     let sub = &analysis.sub_analysis[0];
     assert_eq!(sub.tasks_priority_map.len(), 1);
@@ -86,23 +80,19 @@ fn analysis_single_core_two_tasks_same_prio() {
 fn analysis_single_core_two_tasks_diff_prio() {
     let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0, IRQ1]);
     let items = quote! {
-        #[async_task(priority = 2)]
-        struct Foo;
-        impl RticAsyncTask for Foo {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Foo }
-            fn exec(&mut self, input: u32) {}
-        }
-        #[async_task(priority = 3)]
-        struct Bar;
-        impl RticAsyncTask for Bar {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Bar }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 2)]
+            struct Foo;
+            impl RticAsyncTask for Foo {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 3)]
+            struct Bar;
+            impl RticAsyncTask for Bar {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let analysis = analyze(args, items).expect("analysis succeeds");
     let sub = &analysis.sub_analysis[0];
     assert_eq!(sub.tasks_priority_map.len(), 2);
@@ -122,23 +112,19 @@ fn analysis_single_core_two_tasks_diff_prio() {
 fn analysis_multi_core_local_tasks_each_core() {
     let args = common::multi_core_sw_args();
     let items = quote! {
-        #[async_task(priority = 2, core = 0)]
-        struct Task0;
-        impl RticAsyncTask for Task0 {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Task0 }
-            fn exec(&mut self, input: u32) {}
-        }
-        #[async_task(priority = 3, core = 1)]
-        struct Task1;
-        impl RticAsyncTask for Task1 {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Task1 }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 2, core = 0)]
+            struct Task0;
+            impl RticAsyncTask for Task0 {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 3, core = 1)]
+            struct Task1;
+            impl RticAsyncTask for Task1 {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let analysis = analyze(args, items).expect("analysis succeeds");
     assert_eq!(analysis.sub_analysis.len(), 2);
     let core0 = &analysis.sub_analysis[0];
@@ -159,23 +145,19 @@ fn analysis_multi_core_cross_core_disjoint_prio() {
         dispatchers = [[IRQ0], [IRQ1, IRQ2]]
     );
     let items = quote! {
-        #[async_task(priority = 2, core = 1)]
-        struct Local1;
-        impl RticAsyncTask for Local1 {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Local1 }
-            fn exec(&mut self, input: u32) {}
-        }
-        #[async_task(priority = 3, core = 1, spawn_by = 0)]
-        struct Cross;
-        impl RticAsyncTask for Cross {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Cross }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 2, core = 1)]
+            struct Local1;
+            impl RticAsyncTask for Local1 {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 3, core = 1, spawn_by = 0)]
+            struct Cross;
+            impl RticAsyncTask for Cross {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let analysis = analyze(args, items).expect("analysis succeeds");
     let core1 = &analysis.sub_analysis[1];
     assert_eq!(core1.core, 1);
@@ -207,23 +189,19 @@ fn analysis_no_tasks_no_dispatchers() {
 fn analysis_overlapping_local_vs_mc_priority() {
     let args = common::multi_core_sw_args();
     let items = quote! {
-        #[async_task(priority = 2, core = 0)]
-        struct Local;
-        impl RticAsyncTask for Local {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Local }
-            fn exec(&mut self, input: u32) {}
-        }
-        #[async_task(priority = 2, core = 0, spawn_by = 1)]
-        struct Cross;
-        impl RticAsyncTask for Cross {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Cross }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 2, core = 0)]
+            struct Local;
+            impl RticAsyncTask for Local {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 2, core = 0, spawn_by = 1)]
+            struct Cross;
+            impl RticAsyncTask for Cross {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let result = analyze(args, items);
     assert_err_contains(
         result,
@@ -235,23 +213,19 @@ fn analysis_overlapping_local_vs_mc_priority() {
 fn analysis_mc_same_prio_diff_spawn_by() {
     let args = common::three_core_sw_args();
     let items = quote! {
-        #[async_task(priority = 3, core = 0, spawn_by = 1)]
-        struct CrossA;
-        impl RticAsyncTask for CrossA {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { CrossA }
-            fn exec(&mut self, input: u32) {}
-        }
-        #[async_task(priority = 3, core = 0, spawn_by = 2)]
-        struct CrossB;
-        impl RticAsyncTask for CrossB {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { CrossB }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 3, core = 0, spawn_by = 1)]
+            struct CrossA;
+            impl RticAsyncTask for CrossA {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 3, core = 0, spawn_by = 2)]
+            struct CrossB;
+            impl RticAsyncTask for CrossB {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let result = analyze(args, items);
     assert_err_contains(
         result,
@@ -263,23 +237,19 @@ fn analysis_mc_same_prio_diff_spawn_by() {
 fn analysis_dispatchers_too_few() {
     let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0]);
     let items = quote! {
-        #[async_task(priority = 2)]
-        struct Foo;
-        impl RticAsyncTask for Foo {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Foo }
-            fn exec(&mut self, input: u32) {}
-        }
-        #[async_task(priority = 3)]
-        struct Bar;
-        impl RticAsyncTask for Bar {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self { Bar }
-            fn exec(&mut self, input: u32) {}
-        }
-    };
+            #[async_task(priority = 2)]
+            struct Foo;
+            impl RticAsyncTask for Foo {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 3)]
+            struct Bar;
+            impl RticAsyncTask for Bar {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
     let result = analyze(args, items);
     assert_err_contains(result, "Expected 2 dispatchers, but found 1.");
 }

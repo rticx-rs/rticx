@@ -6,11 +6,6 @@ use crate::app::{RticMutex, RticSwTask};
 use super::app::Hasher;
 
 impl RticSwTask for Hasher {
-    type InitArgs = ();
-    fn init(_: ()) -> Self {
-        Self
-    }
-
     type SpawnInput = String<30>;
     fn exec(&mut self, data: String<30>) {
         let hash = xor_hash(&data);

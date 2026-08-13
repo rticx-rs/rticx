@@ -37,14 +37,9 @@ pub mod app {
         )
     }
 
-    #[idle]
+    #[idle(init = generated)]
     struct IdleTask;
     impl RticIdleTask for IdleTask {
-        fn init() -> Self {
-            println!("idle init");
-            Self
-        }
-
         fn exec(&mut self) -> ! {
             println!("in idle task now about to spawn foo");
             Foo::spawn(()).unwrap();
@@ -67,26 +62,17 @@ pub mod app {
     }
 
     impl RticTask for GpioHandler {
-        type InitArgs = Self;
-        fn init(init: Self) -> Self {
-            init
-        }
-
         fn exec(&mut self) {
             self.button.clear_interrupt();
             println!("button");
         }
     }
 
-    #[sw_task(priority = 5)]
+    #[sw_task(priority = 5, init = generated)]
     struct Foo;
 
     impl RticSwTask for Foo {
         type SpawnInput = ();
-
-        fn init() -> Self {
-            Self
-        }
 
         fn exec(&mut self, _input: ()) {
             println!("Foo started, calling to Bar");
@@ -101,15 +87,11 @@ pub mod app {
         }
     }
 
-    #[sw_task(priority = 3)]
+    #[sw_task(priority = 3, init = generated)]
     struct Bar;
 
     impl RticSwTask for Bar {
         type SpawnInput = ();
-
-        fn init() -> Self {
-            Self
-        }
 
         fn exec(&mut self, _input: ()) {
             println!("Inside low prio task, press button now!");

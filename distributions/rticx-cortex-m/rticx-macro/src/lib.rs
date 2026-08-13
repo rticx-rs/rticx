@@ -7,7 +7,7 @@ use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 use rticx_core::{AppArgs, CorePassBackend, InfoBus, RticMacroBuilder, SubAnalysis, SubApp};
 #[cfg(feature = "swtasks")]
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use syn::{parse_quote, ItemFn, Path};
+use syn::{ItemFn, Path, parse_quote};
 
 extern crate proc_macro;
 

@@ -27,18 +27,14 @@ pub fn single_core_app_module() -> syn::ItemMod {
             }
 
             #[init]
-            fn init() -> Shared {
-                Shared { counter: 0 }
+            fn init() -> (Shared, TaskInits) {
+                (Shared { counter: 0 }, TaskInits { uart_task: UartTask, idle: Idle })
             }
 
             #[task(binds = UART, priority = 2, shared = [counter])]
             struct UartTask;
 
             impl RticTask for UartTask {
-                type InitArgs = ();
-                fn init(_: ()) -> Self {
-                    UartTask
-                }
                 fn exec(&mut self) {
                     // task body
                 }
@@ -48,10 +44,6 @@ pub fn single_core_app_module() -> syn::ItemMod {
             struct Idle;
 
             impl RticIdleTask for Idle {
-                type InitArgs = ();
-                fn init(_: ()) -> Self {
-                    Idle
-                }
                 fn exec(&mut self) -> ! {
                     loop {}
                 }
@@ -76,23 +68,25 @@ pub fn multi_core_app_module() -> syn::ItemMod {
             }
 
             #[init(core = 0)]
-            fn init0() -> Shared0 {
-                Shared0 { counter: 0 }
+            fn init0() -> (Shared0, TaskInitsCore0) {
+                (
+                    Shared0 { counter: 0 },
+                    TaskInitsCore0 { uart_task0: UartTask0, idle0: Idle0 },
+                )
             }
 
             #[init(core = 1)]
-            fn init1() -> Shared1 {
-                Shared1 { counter: 0 }
+            fn init1() -> (Shared1, TaskInitsCore1) {
+                (
+                    Shared1 { counter: 0 },
+                    TaskInitsCore1 { uart_task1: UartTask1, idle1: Idle1 },
+                )
             }
 
             #[task(binds = UART0, priority = 2, shared = [counter], core = 0)]
             struct UartTask0;
 
             impl RticTask for UartTask0 {
-                type InitArgs = ();
-                fn init(_: ()) -> Self {
-                    UartTask0
-                }
                 fn exec(&mut self) {}
             }
 
@@ -100,10 +94,6 @@ pub fn multi_core_app_module() -> syn::ItemMod {
             struct UartTask1;
 
             impl RticTask for UartTask1 {
-                type InitArgs = ();
-                fn init(_: ()) -> Self {
-                    UartTask1
-                }
                 fn exec(&mut self) {}
             }
 
@@ -111,10 +101,6 @@ pub fn multi_core_app_module() -> syn::ItemMod {
             struct Idle0;
 
             impl RticIdleTask for Idle0 {
-                type InitArgs = ();
-                fn init(_: ()) -> Self {
-                    Idle0
-                }
                 fn exec(&mut self) -> ! {
                     loop {}
                 }
@@ -124,10 +110,6 @@ pub fn multi_core_app_module() -> syn::ItemMod {
             struct Idle1;
 
             impl RticIdleTask for Idle1 {
-                type InitArgs = ();
-                fn init(_: ()) -> Self {
-                    Idle1
-                }
                 fn exec(&mut self) -> ! {
                     loop {}
                 }

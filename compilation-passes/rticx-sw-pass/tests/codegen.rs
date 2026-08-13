@@ -47,10 +47,7 @@ fn codegen_expands_single_core_sw_app() {
         &generated,
         quote! {
             pub trait RticSwTask {
-                type InitArgs : Sized ;
                 type SpawnInput ;
-                /// Task local variables initialization routine
-                fn init (args : Self :: InitArgs) -> Self ;
                 /// Function to be executing when the scheduled software task is dispatched
                 fn exec (& mut self , input : Self :: SpawnInput) ;
             }
@@ -82,9 +79,7 @@ fn codegen_expands_single_core_sw_app() {
         &generated,
         quote! {
             impl RticSwTask for Foo {
-                type InitArgs = () ;
                 type SpawnInput = u32 ;
-                fn init (_ : ()) -> Self { Foo }
                 fn exec (& mut self , input : u32) { }
             }
         },
@@ -127,11 +122,10 @@ fn codegen_expands_single_core_sw_app() {
             static mut __rticx_internal__Core0Prio2Tasks__RQ : rticx :: export :: Queue < Core0Prio2Tasks , 2usize > = rticx :: export :: Queue :: new () ;
 
             #[doc (hidden)]
-            #[task (binds = IRQ0 , priority = 2u16 , core = 0)]
+            #[task (binds = IRQ0 , priority = 2u16 , core = 0 , init = generated)]
             pub struct Core0Priority2Dispatcher ;
 
             impl RticTask for Core0Priority2Dispatcher {
-                fn init () -> Self { Self }
                 fn exec (& mut self) {
                     unsafe {
                         let mut ready_consumer = __rticx_internal__Core0Prio2Tasks__RQ . split () . 1 ;
@@ -164,11 +158,7 @@ fn capacity_app_module() -> syn::ItemMod {
         struct Big;
 
         impl RticSwTask for Big {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Big
-            }
+                        type SpawnInput = u32;
             fn exec(&mut self, input: u32) {}
         }
 
@@ -176,11 +166,7 @@ fn capacity_app_module() -> syn::ItemMod {
         struct Small;
 
         impl RticSwTask for Small {
-            type InitArgs = ();
-            type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Small
-            }
+                        type SpawnInput = u32;
             fn exec(&mut self, input: u32) {}
         }
     })
@@ -238,10 +224,7 @@ fn codegen_expands_multi_core_sw_app() {
         &generated,
         quote! {
             pub trait RticSwTask {
-                type InitArgs : Sized ;
                 type SpawnInput ;
-                /// Task local variables initialization routine
-                fn init (args : Self :: InitArgs) -> Self ;
                 /// Function to be executing when the scheduled software task is dispatched
                 fn exec (& mut self , input : Self :: SpawnInput) ;
             }
@@ -319,7 +302,7 @@ fn codegen_expands_multi_core_sw_app() {
             static mut __rticx_internal__Core0Prio2Tasks__RQ : rticx :: export :: Queue < Core0Prio2Tasks , 2usize > = rticx :: export :: Queue :: new () ;
 
             #[doc (hidden)]
-            #[task (binds = IRQ0 , priority = 2u16 , core = 0)]
+            #[task (binds = IRQ0 , priority = 2u16 , core = 0 , init = generated)]
             pub struct Core0Priority2Dispatcher ;
         },
         "core0 dispatcher decl",
@@ -328,7 +311,6 @@ fn codegen_expands_multi_core_sw_app() {
         &generated,
         quote! {
             impl RticTask for Core0Priority2Dispatcher {
-                fn init () -> Self { Self }
                 fn exec (& mut self) {
                     unsafe {
                         let mut ready_consumer = __rticx_internal__Core0Prio2Tasks__RQ . split () . 1 ;
@@ -393,7 +375,7 @@ fn codegen_expands_multi_core_sw_app() {
             static mut __rticx_internal__Core1Prio3Tasks__RQ : rticx :: export :: Queue < Core1Prio3Tasks , 2usize > = rticx :: export :: Queue :: new () ;
 
             #[doc (hidden)]
-            #[task (binds = IRQ1 , priority = 3u16 , core = 1)]
+            #[task (binds = IRQ1 , priority = 3u16 , core = 1 , init = generated)]
             pub struct Core1Priority3Dispatcher ;
         },
         "core1 dispatcher decl",
@@ -402,7 +384,6 @@ fn codegen_expands_multi_core_sw_app() {
         &generated,
         quote! {
             impl RticTask for Core1Priority3Dispatcher {
-                fn init () -> Self { Self }
                 fn exec (& mut self) {
                     unsafe {
                         let mut ready_consumer = __rticx_internal__Core1Prio3Tasks__RQ . split () . 1 ;

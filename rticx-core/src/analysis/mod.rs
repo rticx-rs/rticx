@@ -65,17 +65,21 @@ impl SubAnalysis {
             .filter_map(|t| Some((t.args.binds.clone()?, t.args.priority)))
             .collect();
 
+        // All user tasks must be initialized explicitly by the user through the
+        // `TaskInits` struct returned by `#[init]`. Only framework-generated
+        // tasks (marked with `init = generated`) are constructed by the
+        // framework itself.
         let user_initializable_tasks = app
             .tasks
             .iter()
             .chain(app.idle.iter()) // idle is also a task and we shouldn't forget it
             .filter_map(|t| {
-                if t.user_initializable {
+                if t.init_generated {
+                    None
+                } else {
                     Some(LateResourceTask {
                         task_name: t.task_struct.ident.clone(),
                     })
-                } else {
-                    None
                 }
             })
             .collect();

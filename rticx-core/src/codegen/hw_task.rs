@@ -1,6 +1,5 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{ImplItem, ImplItemFn, parse_quote};
 
 use crate::rticx_functions;
 use crate::{
@@ -35,13 +34,13 @@ impl RticTask {
     }
 
     pub fn task_init_call(&self) -> Option<TokenStream2> {
-        if self.user_initializable {
-            // it is user responsibility to initialize task, and this is enforced at compiler time
+        if !self.init_generated {
+            // user tasks are constructed by the user through `TaskInits`
             return None;
         }
         let task_ty = &self.name();
         let task_static_handle = &self.name_uppercase();
-        Some(quote! { #task_static_handle.write(#task_ty::init(())); })
+        Some(quote! { #task_static_handle.write(#task_ty); })
     }
 
     fn generate_priority_func(&self) -> TokenStream2 {
@@ -95,59 +94,5 @@ impl HardwareTask {
                 #task_dispatch_call
             }
         })
-    }
-
-    /// If the type InitArgs is not implement it generate a default implementation
-    /// If the type InitArgs is implemented, generate a custom initialization function for the task
-    pub fn adjust_task_impl_initialization(&mut self) -> syn::Result<()> {
-        let Some(task_impl) = &mut self.struct_impl else {
-            // if the trait implementation of the task is not found on the parsed module (external task implementation)
-            // the ask the user to provide explicit initialization.
-            self.user_initializable = true;
-            return Ok(());
-        };
-
-        let default_init_type_def: syn::ImplItemType = parse_quote!(
-            type InitArgs = ();
-        );
-        let init_args_type = task_impl.items.iter().find_map(|item| {
-            let ImplItem::Type(t) = item else { return None };
-            if t == &default_init_type_def {
-                Some((t, true))
-            } else if t.ident == "InitArgs" {
-                Some((t, false))
-            } else {
-                None
-            }
-        });
-
-        match init_args_type {
-            Some((_, false)) => {
-                // user implements custom type
-                self.user_initializable = true;
-
-                return Ok(());
-            }
-            None => {
-                // user ask rtic to implicitly generate default implementation
-                task_impl.items.push(ImplItem::Type(default_init_type_def))
-            }
-            Some((_, true)) => { // user implements unit type
-            }
-        }
-
-        // find the init function and correct its signature
-        task_impl.items.iter_mut().for_each(|item| {
-            if let ImplItem::Fn(f) = item
-                && f.sig.ident == "init"
-            {
-                let default_init: ImplItemFn = parse_quote!(
-                    fn init(_: ()) -> Self {}
-                );
-                f.sig = default_init.sig; // correct the signature
-            }
-        });
-
-        Ok(())
     }
 }

@@ -215,13 +215,12 @@ impl App {
                     });
 
             let tasks = out.entry(args.core).or_insert_with(Vec::new);
-            let mut task = RticTask {
+            let task = RticTask {
+                init_generated: args.init_generated,
                 args,
                 task_struct,
                 struct_impl: struct_impl.clone(),
-                user_initializable: false, //initially this is false.
             };
-            task.adjust_task_impl_initialization()?; // adjust the init method and args type of the task trait implementation
             tasks.push(task);
         }
         Ok(out)
@@ -253,13 +252,12 @@ impl App {
                 let mut args = TaskArgs::parse(attrs.meta)?;
                 args.task_trait = format_ident!("{IDLE_TRAIT_TY}"); // correct the trait type for idle
                 let core = args.core;
-                let mut task = IdleTask {
+                let task = IdleTask {
+                    init_generated: args.init_generated,
                     args,
                     task_struct: idle_struct,
                     struct_impl: struct_impl.clone(),
-                    user_initializable: false,
                 };
-                task.adjust_task_impl_initialization()?; // adjust the init method and args type of the task trait implementation
                 Ok((core, task))
             })
             .collect::<Result<HashMap<_, _>, syn::Error>>()

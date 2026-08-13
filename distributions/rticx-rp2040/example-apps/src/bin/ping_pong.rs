@@ -24,7 +24,7 @@ pub mod my_app {
 
     // ======================================= CORE 0 ==============================================
     #[init(core = 0)]
-    fn init_core0() {
+    fn init_core0() -> TaskInitsCore0 {
         assert_eq!(get_core_id(), 0);
         println!("staring RP2040 core 0 ...");
 
@@ -46,6 +46,10 @@ pub mod my_app {
         )
         .ok()
         .unwrap();
+
+        TaskInitsCore0 {
+            my_idle_task: MyIdleTask { count: 0 },
+        }
     }
 
     #[idle(core = 0)]
@@ -54,10 +58,6 @@ pub mod my_app {
         count: u32,
     }
     impl RticIdleTask for MyIdleTask {
-        fn init() -> Self {
-            Self { count: 0 }
-        }
-
         fn exec(&mut self) -> ! {
             loop {
                 self.count += 1;
@@ -68,13 +68,10 @@ pub mod my_app {
     }
 
     /// a Core0 task to be spawned by a task on Core1
-    #[sw_task(priority = 2, spawn_by = 1, core = 0)]
+    #[sw_task(priority = 2, spawn_by = 1, core = 0, init = generated)]
     struct Core0Task;
     impl RticSwTask for Core0Task {
         type SpawnInput = u32;
-        fn init() -> Self {
-            Self
-        }
         fn exec(&mut self, ping: Self::SpawnInput) {
             assert_eq!(get_core_id(), 0); // assert that this is executing on core 0
             asm::delay(PING_PONG_DELAY); // add some delay for visualization
@@ -93,9 +90,20 @@ pub mod my_app {
     // ======================================= CORE 1 ==============================================
 
     #[init(core = 1)]
-    fn init_core1() {
+    fn init_core1() -> TaskInitsCore1 {
         assert_eq!(get_core_id(), 1);
         println!("staring RP2040 core 1 ...");
+
+        TaskInitsCore1 {
+            core1_task: Core1Task,
+        }
+    }
+
+    /// Spawn the first ping-pong message from core 1. Spawning during `#[init]`
+    /// is rejected (tasks are not initialized yet), so this runs in post-init.
+    #[post_init(core = 1)]
+    fn start_ping_pong() {
+        Core0Task::spawn_from(Core1Task::current_core(), 1).expect("Couldn't start task on core 0");
     }
 
     /// a Core1 task to be spawned by a task on Core0
@@ -103,13 +111,6 @@ pub mod my_app {
     struct Core1Task;
     impl RticSwTask for Core1Task {
         type SpawnInput = u32;
-        fn init() -> Self {
-            // spawn task on core0 to begin ping pong
-            // this is the correct place to initiate the ping-pong process since at this point we
-            // know core 1 is awake and can start receiving interrupts
-            Core0Task::spawn_from(Self::current_core(), 1).expect("Couldn't start task on core 0"); // this will be called during initalization
-            Self
-        }
         fn exec(&mut self, pong: Self::SpawnInput) {
             assert_eq!(get_core_id(), 1); // assert that this is executing on core 0
             asm::delay(PING_PONG_DELAY); // add some delay for visualization

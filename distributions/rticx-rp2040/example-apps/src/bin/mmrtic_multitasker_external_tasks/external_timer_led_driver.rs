@@ -6,12 +6,13 @@ use rp2040_hal::timer::Alarm;
 
 use crate::app::{CommandExecutorTask, LedPin, RticMutex, RticTask, TARGET_DURATION, TARGET_TICKS};
 
-impl RticTask for CommandExecutorTask {
-    type InitArgs = LedPin;
-    fn init(led: LedPin) -> Self {
+impl CommandExecutorTask {
+    pub fn new(led: LedPin) -> Self {
         Self { led }
     }
+}
 
+impl RticTask for CommandExecutorTask {
     fn exec(&mut self) {
         let duration = TARGET_DURATION.load(Ordering::SeqCst);
         let blinks_left = TARGET_TICKS.load(Ordering::SeqCst);

@@ -128,8 +128,8 @@ mod app {
                 target_blinks: 0,
             },
             TaskInits {
-                command_receiver_task: CommandReceiverTask::init(uart_rx),
-                command_executor_task: CommandExecutorTask::init(led_pin),
+                command_receiver_task: CommandReceiverTask::new(uart_rx),
+                command_executor_task: CommandExecutorTask::new(led_pin),
             },
         )
     }
@@ -153,16 +153,6 @@ mod app {
     }
 
     impl RticTask for CommandReceiverTask {
-        type InitArgs = UartRx;
-        fn init(uart_rx: UartRx) -> Self {
-            Self {
-                data: String::new(),
-                read_command: true,
-                command: Command::Unknown,
-                uart_rx,
-            }
-        }
-
         fn exec(&mut self) {
             let mut data = [0_u8; 48];
             let bytes = self.uart_rx.read_raw(&mut data).unwrap();
@@ -199,6 +189,15 @@ mod app {
     }
 
     impl CommandReceiverTask {
+        pub fn new(uart_rx: UartRx) -> Self {
+            Self {
+                data: String::new(),
+                read_command: true,
+                command: Command::Unknown,
+                uart_rx,
+            }
+        }
+
         fn run_command(&mut self) {
             // command finished
             match self.command {
@@ -237,11 +236,6 @@ mod app {
     }
 
     impl RticTask for CommandExecutorTask {
-        type InitArgs = LedPin;
-        fn init(led: LedPin) -> Self {
-            Self { led }
-        }
-
         fn exec(&mut self) {
             let duration = TARGET_DURATION.load(Ordering::SeqCst);
             let blinks_left = TARGET_TICKS.load(Ordering::SeqCst);
@@ -264,6 +258,12 @@ mod app {
                 }
                 alarm0.clear_interrupt();
             });
+        }
+    }
+
+    impl CommandExecutorTask {
+        pub fn new(led: LedPin) -> Self {
+            Self { led }
         }
     }
 }

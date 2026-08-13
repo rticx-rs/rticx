@@ -40,17 +40,20 @@ mod app {
     }
 
     #[init]
-    fn system_init() -> Shared {
+    fn system_init() -> (Shared, TaskInits) {
         // Setup clocks
         let core = unsafe { cortex_m::Peripherals::steal() };
         Mono::start(core.SYST, 10_000_000); // 10MHz
 
-        Shared {
-            state: State {
-                next_expected: 0,
-                received: 0,
+        (
+            Shared {
+                state: State {
+                    next_expected: 0,
+                    received: 0,
+                },
             },
-        }
+            TaskInits {},
+        )
     }
 
     #[post_init]
@@ -59,14 +62,10 @@ mod app {
     }
 
     /// Spawns `Worker` `SPAWNS` times in one go and checks the queue boundary.
-    #[async_task(priority = 3)]
+    #[async_task(priority = 3, init = generated)]
     struct Spawner;
     impl RticAsyncTask for Spawner {
-        type InitArgs = ();
         type SpawnInput = ();
-        fn init(_: Self::InitArgs) -> Self {
-            Self
-        }
         async fn exec(&mut self, _input: ()) {
             for i in 0..SPAWNS {
                 if Worker::spawn(i).is_err() {
@@ -87,14 +86,10 @@ mod app {
 
     /// Async task with an input queue of capacity 4 (ring buffer of 5 slots).
     /// Each instance runs for 200 ms so that the queued spawns have to wait.
-    #[async_task(priority = 2, capacity = 4, shared = [state])]
+    #[async_task(priority = 2, capacity = 4, shared = [state], init = generated)]
     struct Worker;
     impl RticAsyncTask for Worker {
-        type InitArgs = ();
         type SpawnInput = u32;
-        fn init(_: Self::InitArgs) -> Self {
-            Self
-        }
         async fn exec(&mut self, input: u32) {
             hprintln!("worker: running input {}", input);
             // Keep this instance alive so subsequent spawns are deferred
@@ -119,7 +114,10 @@ mod app {
                     SPAWNS
                 );
                 if state.received == SPAWNS {
-                    hprintln!("SUCCESS: all {} queued spawns processed in FIFO order", SPAWNS);
+                    hprintln!(
+                        "SUCCESS: all {} queued spawns processed in FIFO order",
+                        SPAWNS
+                    );
                     // Terminate QEMU with exit code 0.
                     debug::exit(debug::EXIT_SUCCESS);
                 }

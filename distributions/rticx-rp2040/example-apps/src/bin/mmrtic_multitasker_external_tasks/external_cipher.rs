@@ -16,11 +16,6 @@ fn xor_cipher(data: &mut [u8]) {
 }
 
 impl RticSwTask for Encryptor {
-    type InitArgs = ();
-    fn init(_: ()) -> Self {
-        Self
-    }
-
     type SpawnInput = String<30>;
     fn exec(&mut self, mut data: String<30>) {
         xor_cipher(unsafe { data.as_bytes_mut() });
@@ -37,11 +32,6 @@ impl RticSwTask for Encryptor {
 }
 
 impl RticSwTask for Decryptor {
-    type InitArgs = ();
-    fn init(_: ()) -> Self {
-        Self
-    }
-
     type SpawnInput = String<30>;
     fn exec(&mut self, data: String<30>) {
         let mut out = [0; 100];

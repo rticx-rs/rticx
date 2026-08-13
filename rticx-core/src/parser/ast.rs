@@ -69,6 +69,10 @@ pub struct TaskArgs {
     pub core: u32,
     // tells whether a task is native to this compilation pass or if another compilation pass handles its trait implementation
     pub task_trait: Ident,
+    /// Whether the task is constructed by the framework at boot (internal
+    /// `init = generated` marker). Generated tasks are excluded from
+    /// `TaskInits` and are written into their static as a unit literal.
+    pub init_generated: bool,
 }
 
 impl TaskArgs {
@@ -80,6 +84,7 @@ impl TaskArgs {
                 shared: Default::default(),
                 core: 0,
                 task_trait: format_ident!("{HWT_TRAIT_TY}"),
+                init_generated: false,
             });
         };
 
@@ -88,6 +93,7 @@ impl TaskArgs {
         let mut priority: Option<LitInt> = None;
         let mut shared: Option<ExprArray> = None;
         let mut core: Option<LitInt> = None;
+        let mut init_generated: Option<bool> = None;
 
         syn::meta::parser(|meta| {
             if meta.path.is_ident("binds") {
@@ -100,6 +106,14 @@ impl TaskArgs {
                 core = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("task_trait") {
                 task_trait = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("init") {
+                let value: Expr = meta.value()?.parse()?;
+                match value {
+                    Expr::Path(p) if p.path.is_ident("generated") => init_generated = Some(true),
+                    other => {
+                        return Err(syn::Error::new(other.span(), "expected `init = generated`"));
+                    }
+                }
             } else {
                 // this is needed to advance the values iterator
                 let _: syn::Result<Expr> = meta
@@ -144,6 +158,7 @@ impl TaskArgs {
             shared,
             core,
             task_trait,
+            init_generated: init_generated.unwrap_or_default(),
         })
     }
 }
@@ -159,7 +174,9 @@ pub struct RticTask {
     pub args: TaskArgs,
     pub task_struct: ItemStruct,
     pub struct_impl: Option<ItemImpl>,
-    pub user_initializable: bool, // whether user should manually initialize this task during init
+    /// Whether the framework constructs this task at boot (`init = generated`).
+    /// User tasks are constructed by the user through `TaskInits`.
+    pub init_generated: bool,
 }
 
 impl RticTask {

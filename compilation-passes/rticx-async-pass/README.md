@@ -24,9 +24,7 @@ struct Ping {
 }
 
 impl RticAsyncTask for Ping {
-    type InitArgs = Self;           // late-init via TaskInits
     type SpawnInput = ();           // input type for exec
-    fn init(s: Self::InitArgs) -> Self { s }
     async fn exec(&mut self, _input: Self::SpawnInput) { … }
 }
 ```
@@ -62,7 +60,7 @@ Spawning:
 ```rust
 let _ = Ping::spawn(());                             // same core → Result<(), Input>
 let _ = Pong::spawn_from(Self::current_core(), input); // cross-core (spawn_by)
-// Ok(()) on success; Err(input) if the task is already running.
+// Ok(()) on success; Err(input) if the task's input queue is full.
 // No join handle is returned.
 ```
 
@@ -78,7 +76,7 @@ For each **`#[async_task]`** the pass emits:
 | Wrapper `async fn __rticx_async_<Task>(&mut T, input)` | Type witness: calls `T::exec(task, input).await`; used by the compiler to infer the concrete future type `F` |
 | `static __<Task>__PTR: ExecSlotPtr` | Opaque, non-generic pointer to the typed `ExecSlot<F>` |
 | `fn __<Task>__wake()` | Waker: recovers the slot via `recover_slot(wrapper, &PTR)`, sets `pending`, pends the dispatcher |
-| `impl Task { pub fn spawn(…) }` | Enqueues input + pends dispatcher; uses `recover_slot` + `try_allocate` (CAS on `running`), returns `Err(input)` if already occupied |
+| `impl Task { pub fn spawn(…) }` | Enqueues input + pends dispatcher; returns `Err(input)` when the input queue is full |
 | `impl Task { pub fn spawn_from(…) }` | Cross-core variant (only when `spawn_by ≠ core`) |
 
 The user's `impl RticAsyncTask { async fn exec(&mut self, input) { … } }`
@@ -146,11 +144,10 @@ For each **(core, priority)** group the pass emits an **executor dispatcher**
 — a hardware task bound to a dispatcher IRQ:
 
 ```rust
-#[task(binds = TIM6, priority = 2, core = 0)]
+#[task(binds = TIM6, priority = 2, core = 0, init = generated)]
 struct Core0Priority2Dispatcher;
 
 impl RticTask for Core0Priority2Dispatcher {
-    fn init() -> Self { Self }
     fn exec(&mut self) {
         // 1. Install newly-spawned futures
         //    dequeue task ident → dequeue input → spawn(future) into ExecSlot<F>

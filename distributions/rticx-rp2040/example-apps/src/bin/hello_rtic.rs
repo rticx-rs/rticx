@@ -75,7 +75,8 @@ pub mod my_app {
         (
             SharedResources,
             TaskInits {
-                blinker: Blinker::init((led_pin, alarm0)),
+                blinker: Blinker::new((led_pin, alarm0)),
+                my_idle_task: MyIdleTask { count: 0 },
             },
         )
     }
@@ -89,9 +90,8 @@ pub mod my_app {
         alarm: Alarm0,
     }
 
-    impl RticTask for Blinker {
-        type InitArgs = (LedOutPin, Alarm0);
-        fn init((led, alarm): (LedOutPin, Alarm0)) -> Self {
+    impl Blinker {
+        pub fn new((led, alarm): (LedOutPin, Alarm0)) -> Self {
             Self {
                 is_high: false,
                 counter: 0,
@@ -99,7 +99,9 @@ pub mod my_app {
                 alarm,
             }
         }
+    }
 
+    impl RticTask for Blinker {
         fn exec(&mut self) {
             if self.is_high {
                 let _ = self.led.set_low();
@@ -123,13 +125,9 @@ pub mod my_app {
         }
     }
 
-    #[sw_task(priority = 1)] // add capacity = 2 to stop errors
+    #[sw_task(priority = 1, init = generated)] // add capacity = 2 to stop errors
     struct MyTask2;
     impl RticSwTask for MyTask2 {
-        fn init() -> Self {
-            Self
-        }
-
         type SpawnInput = u16;
         fn exec(&mut self, input: u16) {
             info!("task2 spawned with input {}", input);
@@ -142,10 +140,6 @@ pub mod my_app {
         count: u32,
     }
     impl RticIdleTask for MyIdleTask {
-        fn init() -> Self {
-            Self { count: 0 }
-        }
-
         fn exec(&mut self) -> ! {
             loop {
                 self.count += 1;

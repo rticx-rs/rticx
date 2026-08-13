@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, format_ident, quote};
-use task_init::{generate_late_init_tasks_struct, generate_late_tasks_init_calls};
+use quote::{format_ident, quote};
+use task_init::{generate_task_inits_struct, generate_task_inits_write_calls};
 
 use crate::CorePassBackend;
 use crate::MainInjections;
@@ -103,7 +103,13 @@ impl<'a> CodeGen<'a> {
             // init
             let def_init_task = &app.init.body;
             let init_task = &app.init.ident;
-            let late_init_struct = generate_late_init_tasks_struct(&analysis.late_resource_tasks);
+            let task_inits_ident = if self.app.sub_apps.len() == 1 {
+                format_ident!("TaskInits")
+            } else {
+                format_ident!("TaskInitsCore{}", app.core)
+            };
+            let task_inits_struct =
+                generate_task_inits_struct(&task_inits_ident, &analysis.late_resource_tasks);
 
             // idle
             let def_idle_task = app.idle.as_ref().map(|idle| {
@@ -131,7 +137,16 @@ impl<'a> CodeGen<'a> {
                 .tasks
                 .iter()
                 .map(|task| task.generate_task_def(app.shared.as_ref()));
-            let task_init_calls = app.tasks.iter().filter_map(RticTask::task_init_call);
+            let task_init_calls: Vec<_> = app
+                .tasks
+                .iter()
+                .filter_map(RticTask::task_init_call)
+                .collect();
+            let generated_task_inits = if task_init_calls.is_empty() {
+                quote! {}
+            } else {
+                quote! { unsafe {#(#task_init_calls)*} }
+            };
 
             let hw_tasks_binds = app
                 .tasks
@@ -142,32 +157,31 @@ impl<'a> CodeGen<'a> {
             let shared = app.shared.as_ref();
             let def_shared = shared.map(|shared| shared.generate_shared_resources_def());
             let shared_resources_handle = shared.map(SharedResources::name_uppercase);
-            let shared_resources_handle = shared_resources_handle.iter();
+
             let resource_proxies = app
                 .shared
                 .as_ref()
                 .map(|shared| shared.generate_resource_proxies(implementation, args, app));
 
             // local and shared resources initialization
-            let init_system = if let Some(s) = late_init_struct.as_ref() {
-                let tasks_initializer = format_ident!("__late_task_inits");
-                let user_task_late_inits = generate_late_tasks_init_calls(
-                    &analysis.late_resource_tasks,
-                    &tasks_initializer,
-                );
-                let task_inits_ty = &s.ident;
-                let shared_resource_ty = shared
-                    .map(|s| s.strct.ident.to_token_stream())
-                    .unwrap_or(quote!("()"));
+            let tasks_initializer = format_ident!("__task_inits");
+            let user_task_inits_writes = if analysis.late_resource_tasks.is_empty() {
+                quote! {}
+            } else {
+                generate_task_inits_write_calls(&analysis.late_resource_tasks, &tasks_initializer)
+            };
+            let shared_resource_ty = shared.map(|s| &s.strct.ident);
+
+            let init_system = if let Some(shared_resource_ty) = shared_resource_ty {
                 quote! {
-                    let (__shared_resources, #tasks_initializer) : (#shared_resource_ty, #task_inits_ty) = #init_task(); // call to init and get shared and local resources inits
-                    #(unsafe {#shared_resources_handle.write(__shared_resources);})* // init shared resources
-                    #user_task_late_inits
+                    let (__shared_resources, #tasks_initializer) : (#shared_resource_ty, #task_inits_ident) = #init_task(); // call to init and get shared and local resources inits
+                    unsafe {#shared_resources_handle.write(__shared_resources);} // init shared resources
+                    #user_task_inits_writes
                 }
             } else {
                 quote! {
-                    let shared_resources = #init_task();  // call to init and get shared resources init
-                    #(unsafe {#shared_resources_handle.write(shared_resources);})* // init shared resources
+                    let #tasks_initializer : #task_inits_ident = #init_task(); // call to init and get shared and local resources inits
+                    #user_task_inits_writes
                 }
             };
 
@@ -214,8 +228,9 @@ impl<'a> CodeGen<'a> {
                 #def_core_type
                 // Computed priority Masks
                 #priority_masks
-                /// Type representing tasks that need explicit user initialization
-                #late_init_struct
+                /// Type holding one value per user task, returned from `#[init]`.
+                /// Tasks are constructed inline or via user-defined helpers.
+                #task_inits_struct
 
                 #[doc = #entry_of]
                 #(#entry_attrs)*
@@ -228,8 +243,8 @@ impl<'a> CodeGen<'a> {
                         // user init code
                         #init_system
 
-                        // init tasks
-                        unsafe {#(#task_init_calls)*}
+                        // init framework-generated tasks
+                        #generated_task_inits
 
                         // injections before post_init
                         #(#before_post_init)*
@@ -258,10 +273,10 @@ fn generate_idle_call(idle: Option<&IdleTask>, wfi: Option<TokenStream2>) -> Tok
     if let Some(idle) = idle {
         let idle_ty = &idle.name();
         let idle_instance_name = &idle.name_uppercase();
-        if !idle.user_initializable {
+        if idle.init_generated {
             quote! {
                 unsafe {
-                    #idle_instance_name.write(#idle_ty::init(()));
+                    #idle_instance_name.write(#idle_ty);
                     #idle_instance_name.assume_init_mut().exec();
                 }
 

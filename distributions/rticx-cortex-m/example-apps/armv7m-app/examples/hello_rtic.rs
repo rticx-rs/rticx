@@ -23,7 +23,7 @@ pub mod my_app {
     }
 
     #[init]
-    fn system_init() -> Shared {
+    fn system_init() -> (Shared, TaskInits) {
         let mut cp = unsafe { Peripherals::steal() };
         cp.SYST.set_clock_source(SystClkSource::Core);
         // Short reload so ticks arrive quickly enough for CI.
@@ -32,33 +32,25 @@ pub mod my_app {
         cp.SYST.enable_interrupt();
         cp.SYST.enable_counter();
 
-        Shared { counter: 0 }
+        (Shared { counter: 0 }, TaskInits {})
     }
 
     /// SysTick exception hardware task
-    #[task(binds = SysTick, priority = 1)]
+    #[task(binds = SysTick, priority = 1, init = generated)]
     struct Tick;
 
     impl RticTask for Tick {
-        fn init() -> Self {
-            Self
-        }
-
         fn exec(&mut self) {
             let _ = Worker::spawn(());
         }
     }
 
     /// Software task dispatched by the `TIM6` NVIC interrupt
-    #[sw_task(priority = 2, shared = [counter])]
+    #[sw_task(priority = 2, shared = [counter], init = generated)]
     struct Worker;
 
     impl RticSwTask for Worker {
         type SpawnInput = ();
-
-        fn init() -> Self {
-            Self
-        }
 
         fn exec(&mut self, _input: ()) {
             self.shared().counter.lock(|c| {

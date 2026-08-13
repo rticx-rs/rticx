@@ -34,16 +34,17 @@ fn analysis_computes_max_resource_priority() {
             }
 
             #[init]
-            fn init() -> Shared {
-                Shared { counter: 0 }
+            fn init() -> (Shared, TaskInits) {
+                (
+                    Shared { counter: 0 },
+                    TaskInits { uart_task: UartTask, timer_task: TimerTask },
+                )
             }
 
             #[task(binds = UART, priority = 2, shared = [counter])]
             struct UartTask;
 
             impl RticTask for UartTask {
-                type InitArgs = ();
-                fn init(_: ()) -> Self { UartTask }
                 fn exec(&mut self) {}
             }
 
@@ -51,8 +52,6 @@ fn analysis_computes_max_resource_priority() {
             struct TimerTask;
 
             impl RticTask for TimerTask {
-                type InitArgs = ();
-                fn init(_: ()) -> Self { TimerTask }
                 fn exec(&mut self) {}
             }
         }
@@ -77,16 +76,14 @@ fn analysis_detects_missing_resource() {
             }
 
             #[init]
-            fn init() -> Shared {
-                Shared { counter: 0 }
+            fn init() -> (Shared, TaskInits) {
+                (Shared { counter: 0 }, TaskInits { uart_task: UartTask })
             }
 
             #[task(binds = UART, priority = 2, shared = [missing])]
             struct UartTask;
 
             impl RticTask for UartTask {
-                type InitArgs = ();
-                fn init(_: ()) -> Self { UartTask }
                 fn exec(&mut self) {}
             }
         }
@@ -108,16 +105,17 @@ fn analysis_collects_late_resource_tasks() {
             }
 
             #[init]
-            fn init() -> Shared {
-                Shared { counter: 0 }
+            fn init() -> (Shared, TaskInits) {
+                (
+                    Shared { counter: 0 },
+                    TaskInits { uart_task: UartTask, timer_task: TimerTask },
+                )
             }
 
             #[task(binds = UART, priority = 2)]
             struct UartTask;
 
             impl RticTask for UartTask {
-                type InitArgs = ();
-                fn init(_: ()) -> Self { UartTask }
                 fn exec(&mut self) {}
             }
 
@@ -125,8 +123,14 @@ fn analysis_collects_late_resource_tasks() {
             struct TimerTask;
 
             impl RticTask for TimerTask {
-                type InitArgs = u32;
-                fn init(_: u32) -> Self { TimerTask }
+                fn exec(&mut self) {}
+            }
+
+            // framework-generated task: must NOT appear in TaskInits
+            #[task(binds = DMA, priority = 4, init = generated)]
+            struct GenTask;
+
+            impl RticTask for GenTask {
                 fn exec(&mut self) {}
             }
         }
@@ -136,9 +140,15 @@ fn analysis_collects_late_resource_tasks() {
     let analysis = Analysis::run(&mut app).expect("analysis succeeds");
 
     let late = &analysis.sub_analysis[0].late_resource_tasks;
-    assert_eq!(late.len(), 1);
-    assert_eq!(late[0].name_snakecase().to_string(), "timer_task");
-    assert_eq!(late[0].name_uppercase().to_string(), "TIMER_TASK");
+    // both user tasks are collected; the generated task is excluded
+    assert_eq!(late.len(), 2);
+    let names: Vec<String> = late
+        .iter()
+        .map(|t| t.name_snakecase().to_string())
+        .collect();
+    assert!(names.contains(&"uart_task".to_string()));
+    assert!(names.contains(&"timer_task".to_string()));
+    assert!(!names.contains(&"gen_task".to_string()));
 }
 
 #[test]
@@ -152,16 +162,14 @@ fn analysis_collects_task_traits() {
             }
 
             #[init]
-            fn init() -> Shared {
-                Shared { counter: 0 }
+            fn init() -> (Shared, TaskInits) {
+                (Shared { counter: 0 }, TaskInits { uart_task: UartTask })
             }
 
             #[task(binds = UART, priority = 2, task_trait = CustomTrait)]
             struct UartTask;
 
             impl CustomTrait for UartTask {
-                type InitArgs = ();
-                fn init(_: ()) -> Self { UartTask }
                 fn exec(&mut self) {}
             }
         }

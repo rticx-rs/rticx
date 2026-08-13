@@ -61,9 +61,7 @@ impl<'a> CodeGen<'a> {
         let software_task_trait = format_ident!("{ASYNC_TASK_TRAIT_TY}");
         let sw_task_trait_def = quote! {
             pub trait #software_task_trait {
-                type InitArgs: Sized;
                 type SpawnInput;
-                fn init(args: Self::InitArgs) -> Self;
                 fn exec(
                     &mut self,
                     input: Self::SpawnInput,
@@ -486,14 +484,10 @@ fn generate_dispatcher_tasks(
                 }
 
                 #[doc(hidden)]
-                #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr )]
+                #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr, init = generated)]
                 pub struct #dispatcher_task_ty;
 
                 impl RticTask for #dispatcher_task_ty {
-                    fn init() -> Self {
-                        Self
-                    }
-
                     fn exec(&mut self) {
                         unsafe {
                             let (mut ovf_producer, mut ovf_consumer) = #overflow_queue_name.split();
@@ -637,12 +631,10 @@ fn generate_idle_executor(
             }
         }
 
-        #[idle(core = #core_nbr)]
+        #[idle(core = #core_nbr, init = generated)]
         struct #idle_ident;
 
         impl RticIdleTask for #idle_ident {
-            type InitArgs = ();
-            fn init(_core: u32, _args: Self::InitArgs) -> Self { Self }
             fn exec(&mut self) -> ! {
                 loop {
                     unsafe {

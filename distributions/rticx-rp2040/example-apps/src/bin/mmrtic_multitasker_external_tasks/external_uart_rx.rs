@@ -13,16 +13,6 @@ use crate::{
 };
 
 impl RticTask for CommandReceiverTask {
-    type InitArgs = UartRx;
-    fn init(uart_rx: UartRx) -> Self {
-        Self {
-            data: String::new(),
-            read_command: true,
-            command: Command::Unknown,
-            uart_rx,
-        }
-    }
-
     fn exec(&mut self) {
         let mut data = [0_u8; 48];
         let bytes = self.uart_rx.read_raw(&mut data).unwrap();
@@ -59,6 +49,15 @@ impl RticTask for CommandReceiverTask {
 }
 
 impl CommandReceiverTask {
+    pub fn new(uart_rx: UartRx) -> Self {
+        Self {
+            data: String::new(),
+            read_command: true,
+            command: Command::Unknown,
+            uart_rx,
+        }
+    }
+
     fn run_command(&mut self) {
         // command finished
         match self.command {

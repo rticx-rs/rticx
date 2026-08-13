@@ -29,6 +29,52 @@ fn assert_section_present(generated: &str, expected: TokenStream, label: &str) {
 }
 
 #[test]
+fn codegen_writes_generated_task_as_unit_literal() {
+    let args = common::single_core_app_args();
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct Shared {
+                pub counter: u32,
+            }
+
+            #[init]
+            fn init() -> (Shared, TaskInits) {
+                (Shared { counter: 0 }, TaskInits {})
+            }
+
+            // framework-generated task: not in TaskInits, written as a literal
+            #[task(binds = UART, priority = 2, init = generated)]
+            struct GenTask;
+
+            impl RticTask for GenTask {
+                fn exec(&mut self) {}
+            }
+        }
+    };
+    let mut app = App::parse(args, module).expect("valid app");
+    let analysis = Analysis::run(&mut app).expect("analysis succeeds");
+    let tokens = CodeGen::new(&MockCoreBackend, &app, &analysis).run();
+    let generated = tokens.to_string();
+
+    // empty TaskInits struct (no user tasks on this core)
+    assert_section_present(
+        &generated,
+        quote! { pub struct TaskInits { } },
+        "empty TaskInits struct",
+    );
+
+    // the generated task is written as a unit literal inside the entry
+    assert_section_present(
+        &generated,
+        quote! {
+            unsafe { GEN_TASK . write (GenTask) ; }
+        },
+        "generated task literal write",
+    );
+}
+
+#[test]
 fn codegen_expands_single_core_app() {
     let args = common::single_core_app_args();
     let module = common::single_core_app_module();
@@ -193,6 +239,18 @@ fn codegen_expands_single_core_app() {
         "core type definition",
     );
 
+    // ---- TaskInits struct ----
+    assert_section_present(
+        &generated,
+        quote! {
+            pub struct TaskInits {
+                pub uart_task : UartTask ,
+                pub idle : Idle ,
+            }
+        },
+        "TaskInits struct",
+    );
+
     // ---- entry point ----
     assert_section_present(
         &generated,
@@ -200,12 +258,11 @@ fn codegen_expands_single_core_app() {
             # [unsafe (no_mangle)]
             fn main () -> ! {
                 __rticx_interrupt_free (|| {
-                    let shared_resources = init () ;
-                    unsafe { SHARED . write (shared_resources) ; }
-                    unsafe { UART_TASK . write (UartTask :: init (())) ; }
+                    let (__shared_resources , __task_inits) : (Shared , TaskInits) = init () ;
+                    unsafe { SHARED . write (__shared_resources) ; }
+                    unsafe { UART_TASK . write (__task_inits . uart_task) ; IDLE . write (__task_inits . idle) ; }
                 }) ;
                 unsafe {
-                    IDLE . write (Idle :: init (())) ;
                     IDLE . assume_init_mut () . exec () ;
                 }
             }
@@ -328,15 +385,24 @@ fn codegen_expands_multi_core_app() {
     assert_section_present(
         &generated,
         quote! {
+            pub struct TaskInitsCore0 {
+                pub uart_task0 : UartTask0 ,
+                pub idle0 : Idle0 ,
+            }
+        },
+        "core0 TaskInits struct",
+    );
+    assert_section_present(
+        &generated,
+        quote! {
             # [unsafe (no_mangle)]
             fn main () -> ! {
                 __rticx_interrupt_free (|| {
-                    let shared_resources = init0 () ;
-                    unsafe { SHARED0 . write (shared_resources) ; }
-                    unsafe { UART_TASK0 . write (UartTask0 :: init (())) ; }
+                    let (__shared_resources , __task_inits) : (Shared0 , TaskInitsCore0) = init0 () ;
+                    unsafe { SHARED0 . write (__shared_resources) ; }
+                    unsafe { UART_TASK0 . write (__task_inits . uart_task0) ; IDLE0 . write (__task_inits . idle0) ; }
                 }) ;
                 unsafe {
-                    IDLE0 . write (Idle0 :: init (())) ;
                     IDLE0 . assume_init_mut () . exec () ;
                 }
             }
@@ -396,15 +462,24 @@ fn codegen_expands_multi_core_app() {
     assert_section_present(
         &generated,
         quote! {
+            pub struct TaskInitsCore1 {
+                pub uart_task1 : UartTask1 ,
+                pub idle1 : Idle1 ,
+            }
+        },
+        "core1 TaskInits struct",
+    );
+    assert_section_present(
+        &generated,
+        quote! {
             # [unsafe (no_mangle)]
             fn main_1 () -> ! {
                 __rticx_interrupt_free (|| {
-                    let shared_resources = init1 () ;
-                    unsafe { SHARED1 . write (shared_resources) ; }
-                    unsafe { UART_TASK1 . write (UartTask1 :: init (())) ; }
+                    let (__shared_resources , __task_inits) : (Shared1 , TaskInitsCore1) = init1 () ;
+                    unsafe { SHARED1 . write (__shared_resources) ; }
+                    unsafe { UART_TASK1 . write (__task_inits . uart_task1) ; IDLE1 . write (__task_inits . idle1) ; }
                 }) ;
                 unsafe {
-                    IDLE1 . write (Idle1 :: init (())) ;
                     IDLE1 . assume_init_mut () . exec () ;
                 }
             }

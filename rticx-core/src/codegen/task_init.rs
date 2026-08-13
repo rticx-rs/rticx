@@ -1,26 +1,26 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{ItemStruct, parse_quote};
+use syn::{Ident, ItemStruct, parse_quote};
 
 use crate::analysis::LateResourceTask;
 
-pub fn generate_late_init_tasks_struct(tasks: &[LateResourceTask]) -> Option<ItemStruct> {
-    if tasks.is_empty() {
-        return None;
-    }
+/// Generates the `TaskInits` struct that the user must return (along with the
+/// shared resources) from `#[init]`. It contains one field per user task; the
+/// user constructs the tasks inline or through their own helper functions.
+pub fn generate_task_inits_struct(struct_name: &Ident, tasks: &[LateResourceTask]) -> ItemStruct {
     let struct_fields = tasks.iter().map(|t| {
         let field_name = t.name_snakecase();
         let field_ty = &t.task_name;
         quote! {pub #field_name: #field_ty,}
     });
-    Some(parse_quote! {
-        pub struct TaskInits {
+    parse_quote! {
+        pub struct #struct_name {
             #(#struct_fields)*
         }
-    })
+    }
 }
 
-pub fn generate_late_tasks_init_calls(
+pub fn generate_task_inits_write_calls(
     tasks: &[LateResourceTask],
     initializer_instance: &syn::Ident,
 ) -> TokenStream {

@@ -63,11 +63,7 @@ pub fn single_core_sw_app_module() -> syn::ItemMod {
         struct Foo;
 
         impl RticSwTask for Foo {
-            type InitArgs = ();
             type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Foo
-            }
             fn exec(&mut self, input: u32) {}
         }
     })
@@ -83,11 +79,7 @@ pub fn multi_core_sw_app_module() -> syn::ItemMod {
         struct Task0;
 
         impl RticSwTask for Task0 {
-            type InitArgs = ();
             type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Task0
-            }
             fn exec(&mut self, input: u32) {}
         }
 
@@ -95,11 +87,7 @@ pub fn multi_core_sw_app_module() -> syn::ItemMod {
         struct Cross;
 
         impl RticSwTask for Cross {
-            type InitArgs = ();
             type SpawnInput = u32;
-            fn init(_: ()) -> Self {
-                Cross
-            }
             fn exec(&mut self, input: u32) {}
         }
     })

@@ -32,9 +32,7 @@ fn codegen_expands_single_core_sw_app() {
         &generated,
         quote! {
             pub trait RticAsyncTask {
-                type InitArgs : Sized ;
                 type SpawnInput ;
-                fn init (args : Self :: InitArgs) -> Self ;
                 fn exec (
                     & mut self ,
                     input : Self :: SpawnInput ,
@@ -147,7 +145,7 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            #[task (binds = IRQ0 , priority = 2u16 , core = 0)]
+            #[task (binds = IRQ0 , priority = 2u16 , core = 0 , init = generated)]
             pub struct Core0Priority2Dispatcher ;
         },
         "dispatcher task struct",
@@ -241,30 +239,22 @@ fn codegen_sizes_queues_from_capacity() {
     let generated = run_pass(
         common::single_core_sw_args(),
         common::app_mod(quote! {
-            #[async_task(priority = 2, capacity = 3)]
-            struct Big;
+                    #[async_task(priority = 2, capacity = 3)]
+                    struct Big;
 
-            impl RticAsyncTask for Big {
-                type InitArgs = ();
-                type SpawnInput = u32;
-                fn init(_: ()) -> Self {
-                    Big
-                }
-                fn exec(&mut self, input: u32) {}
-            }
+                    impl RticAsyncTask for Big {
+        type SpawnInput = u32;
+                        fn exec(&mut self, input: u32) {}
+                    }
 
-            #[async_task(priority = 2)]
-            struct Small;
+                    #[async_task(priority = 2)]
+                    struct Small;
 
-            impl RticAsyncTask for Small {
-                type InitArgs = ();
-                type SpawnInput = u32;
-                fn init(_: ()) -> Self {
-                    Small
-                }
-                fn exec(&mut self, input: u32) {}
-            }
-        }),
+                    impl RticAsyncTask for Small {
+        type SpawnInput = u32;
+                        fn exec(&mut self, input: u32) {}
+                    }
+                }),
         false,
     );
 
@@ -330,9 +320,7 @@ fn codegen_expands_multi_core_sw_app() {
         &generated,
         quote! {
             pub trait RticAsyncTask {
-                type InitArgs : Sized ;
                 type SpawnInput ;
-                fn init (args : Self :: InitArgs) -> Self ;
                 fn exec (
                     & mut self ,
                     input : Self :: SpawnInput ,
@@ -419,7 +407,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            #[task (binds = IRQ0 , priority = 2u16 , core = 0)]
+            #[task (binds = IRQ0 , priority = 2u16 , core = 0 , init = generated)]
             pub struct Core0Priority2Dispatcher ;
         },
         "core0 dispatcher",
@@ -463,7 +451,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            #[task (binds = IRQ1 , priority = 3u16 , core = 1)]
+            #[task (binds = IRQ1 , priority = 3u16 , core = 1 , init = generated)]
             pub struct Core1Priority3Dispatcher ;
         },
         "core1 dispatcher",
@@ -514,9 +502,7 @@ fn codegen_expands_prio_0_executor() {
         &generated,
         quote! {
             pub trait RticAsyncTask {
-                type InitArgs : Sized ;
                 type SpawnInput ;
-                fn init (args : Self :: InitArgs) -> Self ;
                 fn exec (
                     & mut self ,
                     input : Self :: SpawnInput ,
@@ -657,7 +643,7 @@ fn codegen_expands_prio_0_executor() {
 
     assert_section_present(
         &generated,
-        quote! { #[idle (core = 0)] },
+        quote! { #[idle (core = 0 , init = generated)] },
         "idle executor struct attribute",
     );
 }

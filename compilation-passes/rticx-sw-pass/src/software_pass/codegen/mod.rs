@@ -48,10 +48,7 @@ impl<'a> CodeGen<'a> {
         let sw_task_trait_def = quote! {
             /// Trait for a software task
             pub trait #software_task_trait {
-                type InitArgs: Sized;
                 type SpawnInput;
-                /// Task local variables initialization routine
-                fn init(args: Self::InitArgs) -> Self;
                 /// Function to be executing when the scheduled software task is dispatched
                 fn exec(&mut self, input: Self::SpawnInput);
             }
@@ -268,15 +265,10 @@ fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis, queue_path: &Path) -> T
             static mut #ready_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
 
             #[doc(hidden)]
-            #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr )]
+            #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr, init = generated)]
             pub struct #dispatcher_task_ty;
 
             impl RticTask for #dispatcher_task_ty {
-                fn init() -> Self {
-                    // here you can generate initialization for task queues or any MaybeUnit thing related to software tasks
-                    Self
-                }
-
                 fn exec(&mut self) {
                     unsafe {
                         let mut ready_consumer = #ready_queue_name.split().1;

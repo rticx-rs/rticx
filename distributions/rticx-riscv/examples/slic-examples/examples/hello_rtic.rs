@@ -17,19 +17,15 @@ pub mod app {
     }
 
     #[init]
-    fn init() -> Shared {
+    fn init() -> (Shared, TaskInits) {
         println!("[Init]: Started");
-        Shared { counter: 0 }
+        (Shared { counter: 0 }, TaskInits {})
     }
 
-    #[idle]
+    #[idle(init = generated)]
     struct IdleTask;
 
     impl RticIdleTask for IdleTask {
-        fn init() -> Self {
-            Self
-        }
-
         fn exec(&mut self) -> ! {
             loop {
                 println!("[Idle]: loop start");
@@ -39,15 +35,11 @@ pub mod app {
         }
     }
 
-    #[sw_task(priority = 2, shared = [counter])]
+    #[sw_task(priority = 2, shared = [counter], init = generated)]
     struct Worker;
 
     impl RticSwTask for Worker {
         type SpawnInput = ();
-
-        fn init() -> Self {
-            Self
-        }
 
         fn exec(&mut self, _input: ()) {
             self.shared().counter.lock(|c| {

@@ -100,21 +100,24 @@ pub mod app {
     #[sw_task(
         priority = 1,
         shared = [uart_tx],
+        init = generated,
     )]
     pub struct Encryptor;
-
+    
     /// Software task that decrypts the base64 input provided to it and prints the result to uart_tx
     /// see [crate::external_cipher] for task implementation
     #[sw_task(
         priority = 1,
         shared = [uart_tx],
+        init = generated,
     )]
     pub struct Decryptor;
-
+    
     /// Software task that hashes the input provided to it and prints it to the uart_tx
     #[sw_task(
         priority = 1,
         shared = [uart_tx],
+        init = generated,
     )]
     pub struct Hasher;
 
@@ -181,11 +184,8 @@ pub mod app {
                 alarm: alarm0,
             },
             TaskInits {
-                command_receiver_task: CommandReceiverTask::init(uart_rx),
-                command_executor_task: CommandExecutorTask::init(led_pin),
-                hasher: Hasher::init(()),
-                encryptor: Encryptor::init(()),
-                decryptor: Decryptor::init(()),
+                command_receiver_task: CommandReceiverTask::new(uart_rx),
+                command_executor_task: CommandExecutorTask::new(led_pin),
             },
         )
     }
