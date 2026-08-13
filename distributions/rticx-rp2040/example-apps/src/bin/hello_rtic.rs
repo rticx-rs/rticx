@@ -1,5 +1,9 @@
 #![no_std]
 #![no_main]
+
+use defmt_rtt as _;
+use panic_halt as _;
+
 #[unsafe(link_section = ".boot2")]
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
@@ -9,8 +13,6 @@ pub mod my_app {
 
     use cortex_m::asm;
     use defmt::*;
-    use defmt_rtt as _;
-    use panic_halt as _;
 
     use rp2040_hal::fugit::MicrosDurationU32;
     use rp2040_hal::gpio::bank0::Gpio25;

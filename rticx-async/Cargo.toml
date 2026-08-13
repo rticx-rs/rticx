@@ -19,5 +19,5 @@ critical-section = { version = "1", features = ["std"] }
 
 [features]
 default = []
-# if the target doesn't support critical sections
+# if the target doesn't support atomics
 atomic-critical-section = ["portable-atomic/critical-section"]

@@ -283,6 +283,45 @@ The pass inherits the sw-pass multicore model unchanged:
 
 ---
 
+## Atomics and critical sections
+
+The generated runtime is not single-core-only: on multicore targets the waker
+can fire from any core. `rticx-async` uses (a) **atomics** via `portable-atomic`
+(executor `running`/`pending` flags, `ExecSlotPtr`) and (b) **critical sections**
+via `critical-section` (channel queues, wait queues, waker registration, the
+`make_channel!` guard). Distributions enabling this pass must back both
+correctly.
+
+### Targets without native atomics
+
+On Cortex-M0/M0+ (ARMv6-M) or RISC-V without the "A" extension, enable the
+`atomic-critical-section` feature so atomics are emulated in critical sections:
+
+```toml
+[features]
+async = ["dep:rticx-async", "rticx-async/atomic-critical-section"]
+```
+
+### Critical-section backend
+
+The `critical-section` crate needs exactly one backend linked in:
+
+- **Single-core**: interrupt-disable is sufficient (`cortex-m/critical-section-single-core`, `riscv/critical-section-single-hart`).
+- **Multicore**: interrupt-disable is **insufficient**; use a spinlock backend such as `rp2040-hal/critical-section-impl`.
+
+```toml
+[features]
+async = [
+    "dep:rticx-async",
+    "rticx-async/atomic-critical-section",
+    "rp2040-hal/critical-section-impl",
+]
+```
+
+The reference `rticx-rp2040` distribution ships exactly this configuration.
+
+---
+
 ## Limitations & future work
 
 - **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.

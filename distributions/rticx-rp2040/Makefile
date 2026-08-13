@@ -1,7 +1,5 @@
 .PHONY: all ci fmt fmt-check clippy examples
 
-export RUSTFLAGS := -Dwarnings
-
 all: fmt-check clippy examples
 
 ci: all

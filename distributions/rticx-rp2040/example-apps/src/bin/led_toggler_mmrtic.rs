@@ -1,19 +1,19 @@
+//! Program outout in UART:
+//! Welcome to LedCommander Example
+//! Enter the command and its arguments: <cmd> <arg1 arg2 ... arg_n>. Possible commands are:
+//! b <count> <duration> # toggles an led <count> times with <duration> in milliseconds between each toggle.
+
 #![no_std]
 #![no_main]
+
+use defmt_rtt as _;
+use panic_halt as _;
 
 #[unsafe(link_section = ".boot2")]
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
-// Program outout in UART:
-// Welcome to LedCommander Example
-// Enter the command and its arguments: <cmd> <arg1 arg2 ... arg_n>. Possible commands are:
-// b <count> <duration> # toggles an led <count> times with <duration> in milliseconds between each toggle.
 
-// Ensure we halt the program on panic (if we don't mention this crate it won't
-// be linked)
-use defmt_rtt as _;
-use panic_halt as _;
 
 #[rticx_rp2040::app(device = rp2040_hal::pac)]
 mod app {
@@ -110,7 +110,6 @@ mod app {
         let (mut uart_rx, mut uart_tx) = uart.split();
         uart_rx.enable_rx_interrupt(); // enable receiving interrupts
         uart_tx.disable_tx_interrupt(); // make sure tx interrupts are disabled
-        // unsafe { pac::NVIC::unmask(pac::Interrupt::UART0_IRQ) };
 
         uart_tx.write_full_blocking(b"Welcome to LedCommander Example\r\n");
         uart_tx.write_full_blocking(
@@ -123,7 +122,6 @@ mod app {
         let mut timer = rp2040_hal::Timer::new(device.TIMER, &mut device.RESETS, &clocks);
         let mut alarm0 = timer.alarm_0().unwrap();
         alarm0.enable_interrupt();
-        // unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0) };
 
         (
             Shared {

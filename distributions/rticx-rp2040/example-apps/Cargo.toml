@@ -53,9 +53,7 @@ heapless = "0.8.0"
 panic-halt = "0.2.0"
 rp2040-boot2 = "0.3.0"
 rp2040-hal = { version = "0.10.2", features = ["critical-section-impl", "defmt", "rt"] }
-
 rticx-rp2040 = { path = "../" }
 rticx-async = { path = "../../../rticx-async", optional = true }
-# rp-pico = { version = "0.9.0", features = ["boot2"] }
 itoa = "1.0.11"
 base64 = { version = "0.22.1", default-features = false }

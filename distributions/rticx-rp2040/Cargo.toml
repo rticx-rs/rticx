@@ -20,7 +20,7 @@ cortex-m = "0.7.8"
 rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro" }
 rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
 rticx-async = { version = "0.1.0", path = "../../rticx-async", optional = true }
-rp2040-hal = { version = "0.10.2", features = ["critical-section-impl"] } # use a critical section implementation that is multicore safe
+rp2040-hal = { version = "0.10.2" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(have_basepri)'] }
@@ -32,4 +32,5 @@ async = [
     "rticx-rp2040-macro/async",
     "dep:rticx-async",
     "rticx-async/atomic-critical-section",
+    "rp2040-hal/critical-section-impl",    # use a critical section implementation that is multicore safe. This is necessary for the atomics used by rticx-async to work correctly
 ]

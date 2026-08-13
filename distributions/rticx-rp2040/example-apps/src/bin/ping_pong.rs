@@ -5,6 +5,9 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
+use panic_halt as _;
+
 #[unsafe(link_section = ".boot2")]
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
@@ -15,9 +18,6 @@ pub mod my_app {
     use cortex_m::asm;
     use defmt::assert_eq;
     use defmt::*;
-    use defmt_rtt as _;
-    use panic_halt as _;
-
     use rp2040_hal::pac;
 
     const PING_PONG_DELAY: u32 = 30000000;
@@ -46,9 +46,6 @@ pub mod my_app {
         )
         .ok()
         .unwrap();
-
-        // #[init_task]
-        // let TASK.write(TaskName::init(a, b, c,d));
     }
 
     #[idle(core = 0)]

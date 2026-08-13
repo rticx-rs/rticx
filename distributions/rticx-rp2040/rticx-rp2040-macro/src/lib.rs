@@ -32,6 +32,7 @@ const CONFIGURABLE_EXCEPTIONS: &[&str] = &[
 /// Exceptions whose priority is *not* configurable. They may never be bound to a
 /// task (neither a dispatcher nor a user hardware task).
 const NON_CONFIGURABLE_EXCEPTIONS: &[&str] = &["NonMaskableInt", "HardFault"];
+#[cfg(any(feature = "async", feature = "swtasks"))]
 const FIFO_INTERRUPTS: &[&str] = &["SIO_IRQ_PROC1", "SIO_IRQ_PROC0"];
 
 fn is_exception(name: &Ident) -> bool {
@@ -118,7 +119,9 @@ impl CorePassBackend for Rp2040Rtic {
 
         // initialize core 1 from core 0 if the application is for multicore (cores > 1)
         let init_and_spawn_core1 = if sub_app.core == 0 && app_args.cores > 1 {
-            Some(init_core1(pac))
+            Some(quote!(rticx_rp2040::export::cross_core::init_core1(
+                move || core1_entry()
+            );))
         } else {
             None
         };
@@ -247,6 +250,7 @@ impl CorePassBackend for Rp2040Rtic {
     fn entry_name(&self, core: u32) -> Ident {
         match core {
             0 => format_ident!("main"),
+            1 => format_ident!("core1_entry"),
             _ => format_ident!("core{core}_entry"),
         }
     }
@@ -369,30 +373,5 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
         });
         empty_body_fn.block = Box::new(body);
         empty_body_fn
-    }
-}
-
-fn init_core1(pac: &syn::Path) -> TokenStream2 {
-    quote! {
-        /// Stack for core 1
-        ///
-        /// Core 0 gets its stack via the normal route - any memory not used by static values is
-        /// reserved for stack and initialised by cortex-m-rt.
-        /// To get the same for Core 1, we would need to compile everything seperately and
-        /// modify the linker file for both programs, and that's quite annoying.
-        /// So instead, core1.spawn takes a [usize] which gets used for the stack.
-        /// NOTE: We use the `Stack` struct here to ensure that it has 32-byte alignment, which allows
-        /// the stack guard to take up the least amount of usable RAM.
-        static mut CORE1_STACK: rticx_rp2040::export::Stack<4096> = rticx_rp2040::export::Stack::new();
-
-        let mut pac = unsafe { #pac::Peripherals::steal() };
-
-        // The single-cycle I/O block controls our GPIO pins
-        let mut sio = rticx_rp2040::export::Sio::new(pac.SIO);
-
-        let mut mc = rticx_rp2040::export::Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
-        let cores = mc.cores();
-        let core1 = &mut cores[1];
-        let _ = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || core1_entry());
     }
 }
