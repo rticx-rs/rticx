@@ -375,7 +375,7 @@ checksum = "d3f2ad9f15a07f4a0e1677124f9120ce7e83ab7e1ca7186af0ca9da529b62e80"
 
 [[package]]
 name = "rticx-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "derive_builder",
  "heck 0.4.1",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-riscv"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "riscv 0.16.1",
  "riscv-slic",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-riscv-macro"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -409,11 +409,11 @@ dependencies = [
 
 [[package]]
 name = "rticx-spsc"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rticx-sw-pass"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",

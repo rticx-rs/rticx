@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-async"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "critical-section",
  "heapless",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-async-pass"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "derive_builder",
  "heck 0.4.1",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-cortex-m"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cortex-m",
  "rticx-async",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-cortex-m-macro"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -326,11 +326,11 @@ dependencies = [
 
 [[package]]
 name = "rticx-spsc"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rticx-sw-pass"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",

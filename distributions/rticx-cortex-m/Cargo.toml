@@ -1,6 +1,6 @@
 [package]
 name = "rticx-cortex-m"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "RTICX distribution for single-core Cortex-M targets (armv6-m and armv7-m and above)"
@@ -17,9 +17,9 @@ bench = false
 
 [dependencies]
 cortex-m = "0.7.8"
-rticx-cortex-m-macro = { version = "0.1.0", path = "rticx-macro" }
-rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
-rticx-async = { version = "0.1.0", path = "../../rticx-async", optional = true }
+rticx-cortex-m-macro = { version = "0.2.0", path = "rticx-macro" }
+rticx-sw-pass = { version = "0.2.0", path = "../../compilation-passes/rticx-sw-pass" }
+rticx-async = { version = "0.2.0", path = "../../rticx-async", optional = true }
 
 [features]
 default = ["swtasks"]

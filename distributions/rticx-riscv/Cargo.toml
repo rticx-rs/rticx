@@ -1,6 +1,6 @@
 [package]
 name = "rticx-riscv"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "RTICX distribution for single-core RISC-V targets (generic SLIC, ESP32-C3, ESP32-C6)"
@@ -16,8 +16,8 @@ test = false
 bench = false
 
 [dependencies]
-rticx-riscv-macro = { version = "0.1.0", path = "rticx-macro" }
-rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
+rticx-riscv-macro = { version = "0.2.0", path = "rticx-macro" }
+rticx-sw-pass = { version = "0.2.0", path = "../../compilation-passes/rticx-sw-pass" }
 
 # Generic RISC-V SLIC backend (`slic` feature)
 riscv = { version = "0.16.1", optional = true }
@@ -37,7 +37,7 @@ esp32c6 = { version = "0.23.2", optional = true, default-features = false, featu
 critical-section = { version = "1.2", optional = true }
 
 # Async runtime, needed when `async` feature is enabled
-rticx-async = { version = "0.1.0", path = "../../rticx-async", optional = true }
+rticx-async = { version = "0.2.0", path = "../../rticx-async", optional = true }
 
 [features]
 default = ["swtasks"]

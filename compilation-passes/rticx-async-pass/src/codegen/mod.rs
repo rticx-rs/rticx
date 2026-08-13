@@ -567,6 +567,7 @@ fn generate_idle_executor(
                     )
                 };
                 if exec.try_allocate() {
+                    #[allow(static_mut_refs)]
                     let mut input_consumer = unsafe { #task_inputs_queue.split().1 };
                     let input = unsafe { input_consumer.dequeue_unchecked() };
                     let future = #wrapper_fn(

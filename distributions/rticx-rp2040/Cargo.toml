@@ -1,6 +1,6 @@
 [package]
 name = "rticx-rp2040"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "RTICX distribution for the Raspberry Pi Pico / RP2040 dual-core Cortex-M0+"
@@ -17,9 +17,9 @@ bench = false
 
 [dependencies]
 cortex-m = "0.7.8"
-rticx-rp2040-macro = { version = "0.1.0", path = "rticx-rp2040-macro" }
-rticx-sw-pass = { version = "0.1.0", path = "../../compilation-passes/rticx-sw-pass" }
-rticx-async = { version = "0.1.0", path = "../../rticx-async", optional = true }
+rticx-rp2040-macro = { version = "0.2.0", path = "rticx-rp2040-macro" }
+rticx-sw-pass = { version = "0.2.0", path = "../../compilation-passes/rticx-sw-pass" }
+rticx-async = { version = "0.2.0", path = "../../rticx-async", optional = true }
 rp2040-hal = { version = "0.10.2" }
 
 [lints.rust]

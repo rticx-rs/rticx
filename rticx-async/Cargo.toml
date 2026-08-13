@@ -1,6 +1,6 @@
 [package]
 name = "rticx-async"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "Async runtime primitives for RTICX: channels, executor slots, and waker infrastructure"

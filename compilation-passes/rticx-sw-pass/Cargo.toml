@@ -1,6 +1,6 @@
 [package]
 name = "rticx-sw-pass"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "Software tasks compilation pass for the RTICX framework: dispatchers, message queues, spawn, spawn_from"
@@ -19,8 +19,8 @@ syn = { version = "2.0.53", features = [
     "extra-traits",
     "full",
 ], optional = true }
-rticx-core = { version = "0.1.0", path = "../../rticx-core", optional = true }
-rticx-spsc = { version = "0.1.0", path = "../../rticx-spsc" }
+rticx-core = { version = "0.2.0", path = "../../rticx-core", optional = true }
+rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
 
 [dev-dependencies]
 proc-macro2 = "1.0"

@@ -1,6 +1,6 @@
 [package]
 name = "rticx-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "Core procedural macro logic for the RTICX real-time concurrency framework"

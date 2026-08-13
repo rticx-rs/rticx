@@ -25,15 +25,28 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "cortex-m"
-version = "0.7.7"
+version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ec610d8f49840a5b376c69663b6369e71f4b34484b9b2eb29fb918d92516cb9"
+checksum = "f985670a83ddb4c96174f696987458ae26fe3d801faf7263b56a2b2252c2f76f"
 dependencies = [
  "bare-metal",
  "bitfield",
+ "cortex-m-macros",
  "critical-section",
- "embedded-hal",
+ "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0",
  "volatile-register",
+]
+
+[[package]]
+name = "cortex-m-macros"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d1922be58519ad40368fc4ca595a2cefa51a7abf947be3b0c90586dc7dbd0e2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -119,6 +132,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-hal"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -178,9 +197,9 @@ checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
 name = "portable-atomic"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 dependencies = [
  "critical-section",
 ]
@@ -211,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-async"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "critical-section",
  "heapless",
@@ -220,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-async-pass"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -231,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "derive_builder",
  "heck 0.4.1",
@@ -244,10 +263,9 @@ dependencies = [
 
 [[package]]
 name = "rticx-cortex-m"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cortex-m",
- "portable-atomic",
  "rticx-async",
  "rticx-cortex-m-macro",
  "rticx-sw-pass",
@@ -255,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "rticx-cortex-m-macro"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -267,11 +285,11 @@ dependencies = [
 
 [[package]]
 name = "rticx-spsc"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rticx-sw-pass"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -374,3 +392,23 @@ checksum = "de437e2a6208b014ab52972a27e59b33fa2920d3e00fe05026167a1c509d19cc"
 dependencies = [
  "vcell",
 ]
+
+[[patch.unused]]
+name = "rticx-auto-assign"
+version = "0.2.0"
+
+[[patch.unused]]
+name = "rticx-riscv"
+version = "0.2.0"
+
+[[patch.unused]]
+name = "rticx-riscv-macro"
+version = "0.2.0"
+
+[[patch.unused]]
+name = "rticx-rp2040"
+version = "0.2.0"
+
+[[patch.unused]]
+name = "rticx-rp2040-macro"
+version = "0.2.0"

@@ -142,6 +142,17 @@ impl CorePassBackend for BackendImpl {
         Some(quote! { #(#stmts)* })
     }
 
+    /// No target selected: nothing to configure.
+    #[cfg(not(any(feature = "slic", feature = "esp32c3", feature = "esp32c6")))]
+    fn post_init(
+        &self,
+        _app_args: &AppArgs,
+        _app_info: &SubApp,
+        _app_analysis: &SubAnalysis,
+    ) -> Option<TokenStream2> {
+        None
+    }
+
     #[cfg(any(feature = "esp32c3", feature = "esp32c6"))]
     fn task_attrs(&self, interrupt: syn::Ident) -> Vec<syn::Attribute> {
         if let Some(map) = self.ext_intr_map.get()

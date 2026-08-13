@@ -9,7 +9,7 @@ pub use rticx_riscv_macro::app;
 compile_error!(
     "rticx-riscv: no target feature selected. \
      Enable exactly one of: `slic`, `esp32c3`, `esp32c6`. \
-     Example: `rticx-riscv = { version = \"0.1\", default-features = false, features = [\"esp32c3\"] }`"
+     Example: `rticx-riscv = { version = \"0.2\", default-features = false, features = [\"esp32c3\"] }`"
 );
 
 #[cfg(all(feature = "slic", feature = "esp32c3"))]

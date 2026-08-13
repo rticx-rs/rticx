@@ -1,6 +1,6 @@
 [package]
 name = "rticx-async-pass"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "Async tasks compilation pass for the RTICX real-time concurrency framework"
@@ -16,7 +16,7 @@ heck = { version = "0.5.0" }
 proc-macro2 = { version = "1.0.79" }
 quote = { version = "1.0.35" }
 syn = { version = "2.0.53", features = ["extra-traits", "full"] }
-rticx-core = { version = "0.1.0", path = "../../rticx-core" }
+rticx-core = { version = "0.2.0", path = "../../rticx-core" }
 
 [dev-dependencies]
 proc-macro2 = "1.0"

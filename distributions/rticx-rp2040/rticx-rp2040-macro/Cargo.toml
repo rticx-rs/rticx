@@ -1,6 +1,6 @@
 [package]
 name = "rticx-rp2040-macro"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "Proc-macro crate for the RTICX RP2040 distribution"
@@ -18,14 +18,14 @@ proc-macro = true
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
 syn = { version = "2.0.52", features = ["extra-traits", "full"] }
-rticx-core = { version = "0.1.0", path = "../../../rticx-core", features = [
+rticx-core = { version = "0.2.0", path = "../../../rticx-core", features = [
     # "debug_expand"
 ] }
-rticx-auto-assign = { version = "0.1.0", path = "../../../compilation-passes/rticx-auto-assign", optional = true }
-rticx-sw-pass = { version = "0.1.0", path = "../../../compilation-passes/rticx-sw-pass", features = [
+rticx-auto-assign = { version = "0.2.0", path = "../../../compilation-passes/rticx-auto-assign", optional = true }
+rticx-sw-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-sw-pass", features = [
     "proc-macro",
 ], optional = true }
-rticx-async-pass = { version = "0.1.0", path = "../../../compilation-passes/rticx-async-pass", optional = true }
+rticx-async-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-async-pass", optional = true }
 
 [features]
 autoassign = ["dep:rticx-auto-assign"]
