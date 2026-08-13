@@ -9,8 +9,17 @@ name = "hello_rtic"
 path = "examples/hello_rtic.rs"
 
 [[example]]
+name = "sw_queue_depth"
+path = "examples/sw_queue_depth.rs"
+
+[[example]]
 name = "async_ping_pong"
 path = "examples/async_ping_pong.rs"
+required-features = ["async"]
+
+[[example]]
+name = "async_queue_depth"
+path = "examples/async_queue_depth.rs"
 required-features = ["async"]
 
 [dependencies]

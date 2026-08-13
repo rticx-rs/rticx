@@ -70,7 +70,7 @@ impl App {
             let task_impl = sw_task_impls.remove(&task_struct.ident);
 
             let attrs = RticAttr::parse_from_attr(&task_struct.attrs[attr_idx])?;
-            let params = TaskParams::from_attr(&attrs);
+            let params = TaskParams::from_attr(&attrs)?;
             let task = AsyncTask {
                 params,
                 task_struct,

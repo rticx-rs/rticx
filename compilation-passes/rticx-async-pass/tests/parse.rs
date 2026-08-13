@@ -109,25 +109,40 @@ fn async_task_attr(args: TokenStream) -> RticAttr {
 #[test]
 fn task_params_defaults() {
     let attr = async_task_attr(quote!());
-    let params = TaskParams::from_attr(&attr);
+    let params = TaskParams::from_attr(&attr).expect("valid attr");
     assert_eq!(params.priority, 0);
     assert_eq!(params.core, 0);
     assert_eq!(params.spawn_by, 0);
+    assert_eq!(params.capacity, 1);
 }
 
 #[test]
 fn task_params_explicit_values() {
     let attr = async_task_attr(quote!(priority = 3, core = 1, spawn_by = 0));
-    let params = TaskParams::from_attr(&attr);
+    let params = TaskParams::from_attr(&attr).expect("valid attr");
     assert_eq!(params.priority, 3);
     assert_eq!(params.core, 1);
     assert_eq!(params.spawn_by, 0);
+    assert_eq!(params.capacity, 1);
+}
+
+#[test]
+fn task_params_explicit_capacity() {
+    let attr = async_task_attr(quote!(capacity = 4));
+    let params = TaskParams::from_attr(&attr).expect("valid attr");
+    assert_eq!(params.capacity, 4);
+}
+
+#[test]
+fn task_params_capacity_zero_errors() {
+    let attr = async_task_attr(quote!(capacity = 0));
+    assert_err_contains(TaskParams::from_attr(&attr), "at least 1");
 }
 
 #[test]
 fn task_params_spawn_by_defaults_to_core() {
     let attr = async_task_attr(quote!(core = 2));
-    let params = TaskParams::from_attr(&attr);
+    let params = TaskParams::from_attr(&attr).expect("valid attr");
     assert_eq!(params.core, 2);
     assert_eq!(params.spawn_by, 2);
 }

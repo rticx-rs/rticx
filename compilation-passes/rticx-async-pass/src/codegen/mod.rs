@@ -244,7 +244,7 @@ impl<'a> CodeGen<'a> {
                         let is_prio_0 = task.params.priority == 0;
 
                         let spawn_impl = if is_prio_0 {
-                            task.generate_spawn_api_prio_0(&async_runtime_path)
+                            task.generate_spawn_api_prio_0(&queue_path)
                         } else {
                             let dispatcher_irq = sub_analysis
                                 .dispatcher_priority_map
@@ -256,7 +256,6 @@ impl<'a> CodeGen<'a> {
                                 self.backend,
                                 num_cores,
                                 &queue_path,
-                                &async_runtime_path,
                             )
                         };
 
@@ -284,10 +283,19 @@ impl<'a> CodeGen<'a> {
                         },
                     );
 
-            let dispatcher_tasks =
-                generate_dispatcher_tasks(sub_analysis, &queue_path, &async_runtime_path);
-            let idle_executor =
-                generate_idle_executor(&sub_analysis.prio_0_tasks, &async_runtime_path, core);
+            let dispatcher_tasks = generate_dispatcher_tasks(
+                sub_analysis,
+                &queue_path,
+                &async_runtime_path,
+                num_cores,
+                &interrupt_ty,
+            );
+            let idle_executor = generate_idle_executor(
+                &sub_analysis.prio_0_tasks,
+                &queue_path,
+                &async_runtime_path,
+                core,
+            );
             let core_doc = format!(" Core {}", sub_app.core);
             quote! {
                 #[doc = " Async tasks of"]
@@ -380,6 +388,8 @@ fn generate_dispatcher_tasks(
     sub_analysis: &SubAnalysis,
     queue_path: &Path,
     async_runtime_path: &Path,
+    num_cores: usize,
+    interrupt_ty: &Path,
 ) -> TokenStream {
     let core = sub_analysis.core;
     let dispatchers = &sub_analysis.dispatcher_priority_map;
@@ -389,31 +399,39 @@ fn generate_dispatcher_tasks(
         .map(|(prio, tasks)| {
             let prio_ty = utils::priority_ty_ident(*prio, core);
 
-            let install_branches = tasks.iter().map(|(task_ident, _)| {
+            // Tries to install the next buffered spawn of a task into its exec
+            // slot. Returns true if a future was installed (the slot was free),
+            // false if the task is still running and the spawn must be deferred.
+            let install_arms = tasks.iter().map(|(task_ident, _, _)| {
                 let task_static_handle = utils::ident_uppercase(task_ident);
                 let task_inputs_queue = utils::sw_task_inputs_ident(task_ident);
                 let wrapper_fn = utils::async_wrapper_ident(task_ident);
                 let ptr_ident = utils::exec_ptr_ident(task_ident);
                 quote! {
                     #prio_ty::#task_ident => {
-                        let mut input_consumer = #task_inputs_queue.split().1;
-                        let input = input_consumer.dequeue_unchecked();
-                        let future = #wrapper_fn(
-                            #task_static_handle.assume_init_mut(),
-                            input,
-                        );
                         let exec = unsafe {
                             #async_runtime_path::executor::recover_slot(
                                 #wrapper_fn,
                                 &#ptr_ident,
                             )
                         };
-                        unsafe { exec.spawn(future); }
+                        if exec.try_allocate() {
+                            let mut input_consumer = unsafe { #task_inputs_queue.split().1 };
+                            let input = unsafe { input_consumer.dequeue_unchecked() };
+                            let future = #wrapper_fn(
+                                unsafe { #task_static_handle.assume_init_mut() },
+                                input,
+                            );
+                            unsafe { exec.spawn(future); }
+                            true
+                        } else {
+                            false
+                        }
                     }
-                }
+        }
             });
 
-            let poll_stmts = tasks.iter().map(|(task_ident, _)| {
+            let poll_stmts = tasks.iter().map(|(task_ident, _, _)| {
                 let wrapper_fn = utils::async_wrapper_ident(task_ident);
                 let ptr_ident = utils::exec_ptr_ident(task_ident);
                 let wake_fn = utils::exec_wake_ident(task_ident);
@@ -431,12 +449,19 @@ fn generate_dispatcher_tasks(
             });
 
             let ready_queue_name = utils::priority_queue_ident(&prio_ty);
-            let ready_queue_size = tasks.len() + 1;
+            let overflow_queue_name = utils::overflow_queue_ident(&prio_ty);
+            let install_fn = utils::install_fn_ident(&prio_ty);
+            // Each pending spawn occupies one ready-queue slot, and the number
+            // of pending spawns is bounded by the sum of the input-queue
+            // capacities of the group. The ring buffer needs one extra slot.
+            let ready_queue_size = tasks.iter().map(|(_, _, capacity)| capacity).sum::<usize>() + 1;
+            let sum_capacity = ready_queue_size - 1;
             let dispatcher_irq_name = dispatchers.get(prio).unwrap();
+            let wake_pend_fn = wake_pend_fn_ident(core, num_cores);
             let dispatcher_priority = prio;
             let dispatcher_task_ty = utils::dispatcher_ident(*prio, core);
             let core_nbr = LitInt::new(&core.to_string(), Span::call_site());
-            let tasks = tasks.iter().map(|(ident, _)| ident);
+            let tasks = tasks.iter().map(|(ident, _, _)| ident);
 
             quote! {
                 #[derive(Clone, Copy)]
@@ -450,6 +475,17 @@ fn generate_dispatcher_tasks(
                 static mut #ready_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
 
                 #[doc(hidden)]
+                #[allow(non_upper_case_globals)]
+                static mut #overflow_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
+
+                #[doc(hidden)]
+                fn #install_fn(task: #prio_ty) -> bool {
+                    match task {
+                        #(#install_arms)*
+                    }
+                }
+
+                #[doc(hidden)]
                 #[task( binds = #dispatcher_irq_name , priority = #dispatcher_priority, core = #core_nbr )]
                 pub struct #dispatcher_task_ty;
 
@@ -458,18 +494,47 @@ fn generate_dispatcher_tasks(
                         Self
                     }
 
-                fn exec(&mut self) {
-                    unsafe {
-                        let mut ready_consumer = #ready_queue_name.split().1;
-                        while let Some(task) = ready_consumer.dequeue() {
-                            match task {
-                                #(#install_branches)*
+                    fn exec(&mut self) {
+                        unsafe {
+                            let (mut ovf_producer, mut ovf_consumer) = #overflow_queue_name.split();
+                            let mut ready_consumer = #ready_queue_name.split().1;
+
+                            // Phase A: drain the ready queue. Spawns whose task
+                            // is still running are deferred to the overflow queue.
+                            while let Some(task) = ready_consumer.dequeue() {
+                                if !#install_fn(task) {
+                                    unsafe { ovf_producer.enqueue_unchecked(task) };
+                                }
+                            }
+
+                            // Poll the running futures.
+                            #(#poll_stmts)*
+
+                            // Phase B: futures may have completed during polling.
+                            // Install deferred spawns into the freed slots.
+                            let mut deferred: [Option<#prio_ty>; #sum_capacity] =
+                                [None; #sum_capacity];
+                            let mut deferred_len = 0usize;
+                            while let Some(task) = ovf_consumer.dequeue() {
+                                deferred[deferred_len] = Some(task);
+                                deferred_len += 1;
+                            }
+                            let mut installed = false;
+                            for i in 0..deferred_len {
+                                if let Some(task) = deferred[i] {
+                                    if #install_fn(task) {
+                                        installed = true;
+                                    } else {
+                                        unsafe { ovf_producer.enqueue_unchecked(task) };
+                                    }
+                                }
+                            }
+                            // Newly installed futures must be polled: run again.
+                            if installed {
+                                #wake_pend_fn(#interrupt_ty::#dispatcher_irq_name);
                             }
                         }
                     }
-
-                    #(#poll_stmts)*
-                }
                 }
             }
         });
@@ -480,7 +545,8 @@ fn generate_dispatcher_tasks(
 }
 
 fn generate_idle_executor(
-    prio_0_tasks: &[(Ident, u32)],
+    prio_0_tasks: &[(Ident, u32, usize)],
+    queue_path: &Path,
     async_runtime_path: &Path,
     core: u32,
 ) -> TokenStream {
@@ -488,10 +554,40 @@ fn generate_idle_executor(
         return quote! {};
     }
 
+    let prio_ty = utils::priority_ty_ident(0, core);
     let idle_ident = utils::idle_executor_ident(core);
     let core_nbr = LitInt::new(&core.to_string(), Span::call_site());
 
-    let poll_stmts = prio_0_tasks.iter().map(|(task_ident, _)| {
+    let install_arms = prio_0_tasks.iter().map(|(task_ident, _, _)| {
+        let task_static_handle = utils::ident_uppercase(task_ident);
+        let task_inputs_queue = utils::sw_task_inputs_ident(task_ident);
+        let wrapper_fn = utils::async_wrapper_ident(task_ident);
+        let ptr_ident = utils::exec_ptr_ident(task_ident);
+        quote! {
+            #prio_ty::#task_ident => {
+                let exec = unsafe {
+                    #async_runtime_path::executor::recover_slot(
+                        #wrapper_fn,
+                        &#ptr_ident,
+                    )
+                };
+                if exec.try_allocate() {
+                    let mut input_consumer = unsafe { #task_inputs_queue.split().1 };
+                    let input = unsafe { input_consumer.dequeue_unchecked() };
+                    let future = #wrapper_fn(
+                        unsafe { #task_static_handle.assume_init_mut() },
+                        input,
+                    );
+                    unsafe { exec.spawn(future); }
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    });
+
+    let poll_stmts = prio_0_tasks.iter().map(|(task_ident, _, _)| {
         let wrapper_fn = utils::async_wrapper_ident(task_ident);
         let ptr_ident = utils::exec_ptr_ident(task_ident);
         let wake_fn = utils::exec_wake_ident(task_ident);
@@ -508,7 +604,39 @@ fn generate_idle_executor(
         }
     });
 
+    let ready_queue_name = utils::priority_queue_ident(&prio_ty);
+    let overflow_queue_name = utils::overflow_queue_ident(&prio_ty);
+    let install_fn = utils::install_fn_ident(&prio_ty);
+    let ready_queue_size = prio_0_tasks
+        .iter()
+        .map(|(_, _, capacity)| capacity)
+        .sum::<usize>()
+        + 1;
+    let sum_capacity = ready_queue_size - 1;
+    let tasks = prio_0_tasks.iter().map(|(ident, _, _)| ident);
+
     quote! {
+        #[derive(Clone, Copy)]
+        #[doc(hidden)]
+        pub enum #prio_ty {
+            #(#tasks,)*
+        }
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        static mut #ready_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        static mut #overflow_queue_name: #queue_path<#prio_ty, #ready_queue_size> = #queue_path::new();
+
+        #[doc(hidden)]
+        fn #install_fn(task: #prio_ty) -> bool {
+            match task {
+                #(#install_arms)*
+            }
+        }
+
         #[idle(core = #core_nbr)]
         struct #idle_ident;
 
@@ -517,7 +645,43 @@ fn generate_idle_executor(
             fn init(_core: u32, _args: Self::InitArgs) -> Self { Self }
             fn exec(&mut self) -> ! {
                 loop {
+                    unsafe {
+                        let (mut ovf_producer, mut ovf_consumer) = #overflow_queue_name.split();
+                        let mut ready_consumer = #ready_queue_name.split().1;
+
+                        // Phase A: drain the ready queue. Spawns whose task is
+                        // still running are deferred to the overflow queue.
+                        while let Some(task) = ready_consumer.dequeue() {
+                            if !#install_fn(task) {
+                                unsafe { ovf_producer.enqueue_unchecked(task) };
+                            }
+                        }
+                    }
+
+                    // Poll the running futures.
                     #(#poll_stmts)*
+
+                    unsafe {
+                        // Phase B: futures may have completed during polling.
+                        // Install deferred spawns into the freed slots.
+                        let (mut ovf_producer, mut ovf_consumer) = #overflow_queue_name.split();
+                        let mut deferred: [Option<#prio_ty>; #sum_capacity] =
+                            [None; #sum_capacity];
+                        let mut deferred_len = 0usize;
+                        while let Some(task) = ovf_consumer.dequeue() {
+                            deferred[deferred_len] = Some(task);
+                            deferred_len += 1;
+                        }
+                        for i in 0..deferred_len {
+                            if let Some(task) = deferred[i] {
+                                if !#install_fn(task) {
+                                    unsafe { ovf_producer.enqueue_unchecked(task) };
+                                }
+                            }
+                        }
+                    }
+                    // The idle loop repeats forever: newly installed futures
+                    // are polled on the next iteration.
                 }
             }
         }
@@ -529,38 +693,34 @@ pub const MC_PEND_FN_NAME: &str = "__rticx_async_cross_irq_pend";
 pub const WAKE_PEND_FN_NAME: &str = "__rticx_async_wake_irq_pend";
 
 impl AsyncTask {
-    fn generate_spawn_api_prio_0(&self, async_runtime_path: &Path) -> TokenStream {
+    fn generate_spawn_api_prio_0(&self, queue_path: &Path) -> TokenStream {
         let task_name = self.name();
-        let ptr_ident = utils::exec_ptr_ident(task_name);
-        let wrapper_fn = utils::async_wrapper_ident(task_name);
+        let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
         let inputs_ty = quote!(<#task_name as #task_trait_name>::SpawnInput);
-        let task_handle = utils::ident_uppercase(task_name);
+        let prio_ty = utils::priority_ty_ident(0, self.params.core);
+        let ready_queue_name = utils::priority_queue_ident(&prio_ty);
 
         let critical_section_fn =
             format_ident!("{}", rticx_core::rticx_functions::INTERRUPT_FREE_FN);
+        // ring buffer holds one slot more than the queue capacity
+        let queue_buffer_size = self.params.capacity + 1;
 
         quote! {
+            static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
+
             impl #task_name {
                 pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
+                    let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
+                    let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                     #critical_section_fn(|| -> Result<(), #inputs_ty> {
                         if unsafe { !__rticx_async_system_initialized } {
                             return Err(input);
                         }
-                        let exec = unsafe {
-                            #async_runtime_path::executor::recover_slot(
-                                #wrapper_fn,
-                                &#ptr_ident,
-                            )
-                        };
-                        if !exec.try_allocate() {
-                            return Err(input);
-                        }
-                        let future = #wrapper_fn(
-                            unsafe { #task_handle.assume_init_mut() },
-                            input,
-                        );
-                        unsafe { exec.spawn(future); }
+                        inputs_producer.enqueue(input)?;
+                        unsafe { ready_producer.enqueue_unchecked(#prio_ty::#task_name) };
+                        // The priority-0 idle executor busy-polls its queues,
+                        // so no interrupt needs to be pended here.
                         Ok(())
                     })
                 }
@@ -575,12 +735,9 @@ impl AsyncTask {
         backend: &dyn AsyncPassBackend,
         num_cores: usize,
         queue_path: &Path,
-        async_runtime_path: &Path,
     ) -> TokenStream {
         let task_name = self.name();
         let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
-        let ptr_ident = utils::exec_ptr_ident(task_name);
-        let wrapper_fn = utils::async_wrapper_ident(task_name);
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
         let inputs_ty = quote!(<#task_name as #task_trait_name>::SpawnInput);
         let prio_ty = utils::priority_ty_ident(self.params.priority, self.params.core);
@@ -591,11 +748,13 @@ impl AsyncTask {
         let interrupt_ty = backend
             .custom_interrupt_path(self.params.core)
             .unwrap_or(parse_quote!(#peripheral_crate::Interrupt));
+        // ring buffer holds one slot more than the queue capacity
+        let queue_buffer_size = self.params.capacity + 1;
 
         if self.params.core == self.params.spawn_by {
             let pend_fn = local_pend_fn_ident(self.params.core, num_cores);
             quote! {
-                static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
+                static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
                     pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
@@ -603,15 +762,6 @@ impl AsyncTask {
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {
                             if unsafe { !__rticx_async_system_initialized } {
-                                return Err(input);
-                            }
-                            let exec = unsafe {
-                                #async_runtime_path::executor::recover_slot(
-                                    #wrapper_fn,
-                                    &#ptr_ident,
-                                )
-                            };
-                            if !exec.try_allocate() {
                                 return Err(input);
                             }
                             inputs_producer.enqueue(input)?;
@@ -626,7 +776,7 @@ impl AsyncTask {
             let spawner_ty = utils::core_type(self.params.spawn_by);
             let pend_fn = cross_pend_fn_ident(self.params.core);
             quote! {
-                static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
+                static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
                     pub fn spawn_from(
@@ -637,15 +787,6 @@ impl AsyncTask {
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
                         #critical_section_fn(|| -> Result<(), #inputs_ty> {
                             if unsafe { !__rticx_async_system_initialized } {
-                                return Err(input);
-                            }
-                            let exec = unsafe {
-                                #async_runtime_path::executor::recover_slot(
-                                    #wrapper_fn,
-                                    &#ptr_ident,
-                                )
-                            };
-                            if !exec.try_allocate() {
                                 return Err(input);
                             }
                             inputs_producer.enqueue(input)?;

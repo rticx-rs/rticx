@@ -232,7 +232,7 @@ fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis, queue_path: &Path) -> T
         let prio_ty = utils::priority_ty_ident(*prio, core);
 
         // generate the branches of the match statement for the dispatcher task
-        let dispatch_match_branches = tasks.iter().map(|(task_ident, _)| {
+        let dispatch_match_branches = tasks.iter().map(|(task_ident, _, _)| {
             let task_static_handle = utils::ident_uppercase(task_ident);
             let task_inputs_queue = utils::sw_task_inputs_ident(task_ident);
             let prio_ty = &prio_ty;
@@ -246,12 +246,15 @@ fn generate_dispatcher_tasks(sub_analysis: &SubAnalysis, queue_path: &Path) -> T
         });
 
         let ready_queue_name = utils::priority_queue_ident(&prio_ty);
-        let ready_queue_size = tasks.len() + 1; // queue size must always be one more than number of tasks
+        // Each pending spawn of a task occupies one ready-queue slot, and the
+        // number of pending spawns is bounded by the task's input-queue
+        // capacity. The ring buffer needs one extra unused slot.
+        let ready_queue_size = tasks.iter().map(|(_, _, capacity)| capacity).sum::<usize>() + 1;
         let dispatcher_irq_name = dispatchers.get(prio).unwrap(); // safe to unwrap due to guarantees from analysis
         let dispatcher_priority = prio;
         let dispatcher_task_ty = utils::dispatcher_ident(*prio, core);
         let core_nbr = LitInt::new(&core.to_string(), Span::call_site());
-        let tasks = tasks.iter().map(|(ident, _span_by)| ident);
+        let tasks = tasks.iter().map(|(ident, _, _)| ident);
 
         quote! {
             #[derive(Clone, Copy)]
@@ -319,12 +322,14 @@ impl SoftwareTask {
         let interrupt_ty = backend
             .custom_interrupt_path(self.params.core)
             .unwrap_or(parse_quote!(#peripheral_crate::Interrupt));
+        // ring buffer holds one slot more than the queue capacity
+        let queue_buffer_size = self.params.capacity + 1;
 
         // spawn for core-local tasks
         if self.params.core == self.params.spawn_by {
             let pend_fn = local_pend_fn_ident(self.params.core, num_cores);
             quote! {
-                static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
+                static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
                     pub fn spawn(input : #inputs_ty) -> Result<(), #inputs_ty> {
@@ -352,7 +357,7 @@ impl SoftwareTask {
             let spawner_ty = utils::core_type(self.params.spawn_by);
             let pend_fn = cross_pend_fn_ident(self.params.core);
             quote! {
-                static mut #task_inputs_queue: #queue_path<#inputs_ty, 2> = #queue_path::new();
+                static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
                     pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), #inputs_ty> {

@@ -120,10 +120,13 @@ pub struct TaskParams {
     pub priority: u16,
     pub core: u32,
     pub spawn_by: u32,
+    /// Number of pending spawns the task's input queue can hold.
+    /// Internally the queue is a ring buffer of `capacity + 1` slots.
+    pub capacity: usize,
 }
 
 impl TaskParams {
-    pub fn from_attr(attr: &RticAttr) -> Self {
+    pub fn from_attr(attr: &RticAttr) -> syn::Result<Self> {
         let mut priority = 0;
         if let Some(Expr::Lit(syn::ExprLit {
             lit: Lit::Int(int), ..
@@ -148,10 +151,35 @@ impl TaskParams {
             spawn_by = int.base10_parse().unwrap_or_default();
         }
 
-        Self {
+        let mut capacity = 1;
+        if let Some(Expr::Lit(syn::ExprLit {
+            lit: Lit::Int(int), ..
+        })) = attr.elements.get("capacity")
+        {
+            capacity = int.base10_parse().unwrap_or_default();
+        }
+        if capacity == 0 {
+            return Err(syn::Error::new(
+                int_span(attr, "capacity").unwrap_or_else(Span::call_site),
+                "The `capacity` argument must be at least 1.",
+            ));
+        }
+
+        Ok(Self {
             priority,
             core,
             spawn_by,
-        }
+            capacity,
+        })
+    }
+}
+
+/// Span of the `capacity` literal if present, for error reporting.
+fn int_span(attr: &RticAttr, key: &str) -> Option<Span> {
+    match attr.elements.get(key) {
+        Some(Expr::Lit(syn::ExprLit {
+            lit: Lit::Int(int), ..
+        })) => Some(int.span()),
+        _ => None,
     }
 }

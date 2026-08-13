@@ -18,6 +18,14 @@ pub fn priority_queue_ident(prio_ty: &Ident) -> Ident {
     format_ident!("__rticx_internal__{}__RQ", prio_ty)
 }
 
+pub fn overflow_queue_ident(prio_ty: &Ident) -> Ident {
+    format_ident!("__rticx_internal__{}__OQ", prio_ty)
+}
+
+pub fn install_fn_ident(prio_ty: &Ident) -> Ident {
+    format_ident!("__rticx_internal__{}__try_install", prio_ty)
+}
+
 pub fn sw_task_inputs_ident(task_ident: &Ident) -> Ident {
     format_ident!("__rticx_internal__{}__INPUTS", task_ident)
 }

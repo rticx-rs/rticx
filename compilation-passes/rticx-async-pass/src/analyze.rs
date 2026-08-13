@@ -26,11 +26,13 @@ pub struct SubAnalysis {
     pub core: u32,
     /// Maps every group of software tasks to some priority level
     /// Tasks are identified by their `Ident` (the name of the task struct)
-    pub tasks_priority_map: HashMap<u16, Vec<(syn::Ident, u32)>>,
+    /// The `u32` is the core allowed to spawn the task, and the `usize` is
+    /// the capacity of the task's input queue.
+    pub tasks_priority_map: HashMap<u16, Vec<(syn::Ident, u32, usize)>>,
     /// Maps every dispatcher to a priority level
     pub dispatcher_priority_map: HashMap<u16, syn::Path>,
     /// Priority-0 tasks that run on the idle executor (no dispatcher needed)
-    pub prio_0_tasks: Vec<(syn::Ident, u32)>,
+    pub prio_0_tasks: Vec<(syn::Ident, u32, usize)>,
 }
 
 impl SubAnalysis {
@@ -42,12 +44,13 @@ impl SubAnalysis {
         for task in sub_app.sw_tasks.iter() {
             let task_prio = task.params.priority;
             if task_prio == 0 {
-                prio_0_tasks.push((task.name().clone(), sub_app.core));
+                prio_0_tasks.push((task.name().clone(), sub_app.core, task.params.capacity));
             } else {
-                sw_tasks_pgroups
-                    .entry(task_prio)
-                    .or_default()
-                    .push((task.name().clone(), sub_app.core /* core local tasks*/));
+                sw_tasks_pgroups.entry(task_prio).or_default().push((
+                    task.name().clone(),
+                    sub_app.core, /* core local tasks*/
+                    task.params.capacity,
+                ));
             }
         }
 
@@ -65,10 +68,11 @@ impl SubAnalysis {
                     ),
                 ));
             }
-            mc_tasks_pgroups
-                .entry(task_prio)
-                .or_default()
-                .push((task.name().clone(), task.params.spawn_by));
+            mc_tasks_pgroups.entry(task_prio).or_default().push((
+                task.name().clone(),
+                task.params.spawn_by,
+                task.params.capacity,
+            ));
         }
 
         // ensure that the multi-core tasks do not have overlapping priorities with core local software tasks
@@ -88,8 +92,8 @@ impl SubAnalysis {
         // need to further check that multi core tasks in the same priority group must all have the spawn_by index.
         for priority_group in mc_tasks_pgroups.values() {
             if priority_group.len() > 1 {
-                let (task_1, spawn_by1) = &priority_group[0];
-                for (task_x, spawn_byx) in priority_group.iter() {
+                let (task_1, spawn_by1, _) = &priority_group[0];
+                for (task_x, spawn_byx, _) in priority_group.iter() {
                     if spawn_by1 != spawn_byx {
                         return Err(syn::Error::new(
                             Span::call_site(),

@@ -95,7 +95,7 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticSwTask > :: SpawnInput , 2 > = rticx :: export :: Queue :: new () ;
+            static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
             impl Foo {
                 pub fn spawn (input : < Foo as RticSwTask > :: SpawnInput) -> Result < () , < Foo as RticSwTask > :: SpawnInput > {
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
@@ -149,6 +149,72 @@ fn codegen_expands_single_core_sw_app() {
             }
         },
         "dispatcher block",
+    );
+}
+
+// ===========================================================================
+// Queue capacity expansion
+// ===========================================================================
+
+/// App module with two tasks at the same priority: `Big` has `capacity = 3`
+/// while `Small` uses the default capacity of 1.
+fn capacity_app_module() -> syn::ItemMod {
+    common::app_mod(quote! {
+        #[sw_task(priority = 2, capacity = 3)]
+        struct Big;
+
+        impl RticSwTask for Big {
+            type InitArgs = ();
+            type SpawnInput = u32;
+            fn init(_: ()) -> Self {
+                Big
+            }
+            fn exec(&mut self, input: u32) {}
+        }
+
+        #[sw_task(priority = 2)]
+        struct Small;
+
+        impl RticSwTask for Small {
+            type InitArgs = ();
+            type SpawnInput = u32;
+            fn init(_: ()) -> Self {
+                Small
+            }
+            fn exec(&mut self, input: u32) {}
+        }
+    })
+}
+
+#[test]
+fn codegen_sizes_input_and_ready_queues_from_capacity() {
+    let generated = run_pass(common::single_core_sw_args(), capacity_app_module(), false);
+
+    // Input queue of `Big`: ring buffer of capacity + 1 = 4 slots.
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Big__INPUTS : rticx :: export :: Queue < < Big as RticSwTask > :: SpawnInput , 4usize > = rticx :: export :: Queue :: new () ;
+        },
+        "capacity-3 input queue",
+    );
+
+    // Input queue of `Small`: default capacity 1 -> 2 slots.
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Small__INPUTS : rticx :: export :: Queue < < Small as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
+        },
+        "default-capacity input queue",
+    );
+
+    // Ready queue of the priority group: sum of capacities (3 + 1) + 1 = 5.
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Core0Prio2Tasks__RQ : rticx :: export :: Queue < Core0Prio2Tasks , 5usize > = rticx :: export :: Queue :: new () ;
+        },
+        "ready queue sized by capacity sum",
     );
 }
 
@@ -222,7 +288,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Task0__INPUTS : rticx :: export :: Queue < < Task0 as RticSwTask > :: SpawnInput , 2 > = rticx :: export :: Queue :: new () ;
+            static mut __rticx_internal__Task0__INPUTS : rticx :: export :: Queue < < Task0 as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
             impl Task0 {
                 pub fn spawn (input : < Task0 as RticSwTask > :: SpawnInput) -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
                     let mut inputs_producer = unsafe { __rticx_internal__Task0__INPUTS . split () . 0 } ;
@@ -296,7 +362,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Cross__INPUTS : rticx :: export :: Queue < < Cross as RticSwTask > :: SpawnInput , 2 > = rticx :: export :: Queue :: new () ;
+            static mut __rticx_internal__Cross__INPUTS : rticx :: export :: Queue < < Cross as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
             impl Cross {
                 pub fn spawn_from (_spawner : __rticx__internal__Core0 , input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , < Cross as RticSwTask > :: SpawnInput > {
                     let mut inputs_producer = unsafe { __rticx_internal__Cross__INPUTS . split () . 0 } ;

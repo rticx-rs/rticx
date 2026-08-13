@@ -40,6 +40,7 @@ fn analysis_single_core_one_task_one_dispatcher() {
     assert_eq!(group.len(), 1);
     assert_eq!(group[0].0.to_string(), "Foo");
     assert_eq!(group[0].1, 0);
+    assert_eq!(group[0].2, 1); // default capacity
     assert_eq!(sub.dispatcher_priority_map.len(), 1);
     assert_eq!(
         sub.dispatcher_priority_map[&2]
@@ -75,7 +76,7 @@ fn analysis_single_core_two_tasks_same_prio() {
     assert_eq!(sub.tasks_priority_map.len(), 1);
     let group = &sub.tasks_priority_map[&2];
     assert_eq!(group.len(), 2);
-    let names: Vec<String> = group.iter().map(|(i, _)| i.to_string()).collect();
+    let names: Vec<String> = group.iter().map(|(i, _, _)| i.to_string()).collect();
     assert!(names.contains(&"Foo".to_string()));
     assert!(names.contains(&"Bar".to_string()));
     assert_eq!(sub.dispatcher_priority_map.len(), 1);

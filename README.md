@@ -6,7 +6,7 @@
 [![QEMU](https://github.com/rticx-rs/rticx/actions/workflows/qemu.yml/badge.svg)](https://github.com/rticx-rs/rticx/actions/workflows/qemu.yml)
 
 
-This repository contains a from scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic). The goal make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore) in order to to reduce the barrier of entry for contributing to with newer syntax features and hardware ports.
+This is a from scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic). The goal is to make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore) in order to to reduce the barrier of entry for contributors and maintainers who wish to introduce newer syntax features and hardware ports.
 
 The main idea is to breakdown RTIC's monolithic codebase by separating the generic proc-macro logic (RTIC syntax) from target-specific details (Interrupt handling, system initialization.. etc). Furthermore, the proc-macro logic is split to core and addons, where the core logic captures only the SRP Tasks/Resources model and the rest will be external addons like software tasks and async/await..etc.
 

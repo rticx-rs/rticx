@@ -123,7 +123,7 @@ pub mod my_app {
         }
     }
 
-    #[sw_task(priority = 1)]
+    #[sw_task(priority = 1)] // add capacity = 2 to stop errors
     struct MyTask2;
     impl RticSwTask for MyTask2 {
         fn init() -> Self {

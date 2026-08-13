@@ -115,7 +115,7 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticAsyncTask > :: SpawnInput , 2 > =
+            static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticAsyncTask > :: SpawnInput , 2usize > =
                 rticx :: export :: Queue :: new () ;
             impl Foo {
                 pub fn spawn (input : < Foo as RticAsyncTask > :: SpawnInput) -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
@@ -123,13 +123,6 @@ fn codegen_expands_single_core_sw_app() {
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
                         if unsafe { ! __rticx_async_system_initialized } { return Err (input) ; }
-                        let exec = unsafe {
-                            rticx_async :: executor :: recover_slot (
-                                __rticx_async_Foo ,
-                                & __rticx_internal__Foo__PTR ,
-                            )
-                        } ;
-                        if ! exec . try_allocate () { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core0Prio2Tasks :: Foo) } ;
                         __rticx_async_local_irq_pend (mypac :: Interrupt :: IRQ0) ;
@@ -138,7 +131,7 @@ fn codegen_expands_single_core_sw_app() {
                 }
             }
         },
-        "spawn() api with recover_slot",
+        "spawn() api (queue-buffered, no try_allocate)",
     );
 
     assert_section_present(
@@ -163,16 +156,67 @@ fn codegen_expands_single_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            let future = __rticx_async_Foo (FOO . assume_init_mut () , input ,) ;
-            let exec = unsafe {
-                rticx_async :: executor :: recover_slot (
-                    __rticx_async_Foo ,
-                    & __rticx_internal__Foo__PTR ,
-                )
-            } ;
-            unsafe { exec . spawn (future) ; }
+            static mut __rticx_internal__Core0Prio2Tasks__OQ : rticx :: export :: Queue < Core0Prio2Tasks , 2usize > = rticx :: export :: Queue :: new () ;
         },
-        "dispatcher spawn via wrapper + recover_slot",
+        "overflow queue",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_internal__Core0Prio2Tasks__try_install (task : Core0Prio2Tasks) -> bool {
+                match task {
+                    Core0Prio2Tasks :: Foo => {
+                        let exec = unsafe {
+                            rticx_async :: executor :: recover_slot (
+                                __rticx_async_Foo ,
+                                & __rticx_internal__Foo__PTR ,
+                            )
+                        } ;
+                        if exec . try_allocate () {
+                            let mut input_consumer = unsafe { __rticx_internal__Foo__INPUTS . split () . 1 } ;
+                            let input = unsafe { input_consumer . dequeue_unchecked () } ;
+                            let future = __rticx_async_Foo (unsafe { FOO . assume_init_mut () } , input ,) ;
+                            unsafe { exec . spawn (future) ; }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+            }
+        },
+        "install fn (try_allocate at dispatch time)",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            while let Some (task) = ready_consumer . dequeue () {
+                if ! __rticx_internal__Core0Prio2Tasks__try_install (task) {
+                    unsafe { ovf_producer . enqueue_unchecked (task) } ;
+                }
+            }
+        },
+        "dispatcher Phase A (defer busy tasks)",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            let mut deferred : [Option < Core0Prio2Tasks > ; 1usize] = [None ; 1usize] ;
+        },
+        "dispatcher Phase B deferred buffer",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            if installed {
+                __rticx_async_wake_irq_pend (mypac :: Interrupt :: IRQ0) ;
+            }
+        },
+        "dispatcher self-pend after deferred install",
     );
 
     assert_section_present(
@@ -189,6 +233,86 @@ fn codegen_expands_single_core_sw_app() {
             }
         },
         "dispatcher poll via recover_slot",
+    );
+}
+
+#[test]
+fn codegen_sizes_queues_from_capacity() {
+    let generated = run_pass(
+        common::single_core_sw_args(),
+        common::app_mod(quote! {
+            #[async_task(priority = 2, capacity = 3)]
+            struct Big;
+
+            impl RticAsyncTask for Big {
+                type InitArgs = ();
+                type SpawnInput = u32;
+                fn init(_: ()) -> Self {
+                    Big
+                }
+                fn exec(&mut self, input: u32) {}
+            }
+
+            #[async_task(priority = 2)]
+            struct Small;
+
+            impl RticAsyncTask for Small {
+                type InitArgs = ();
+                type SpawnInput = u32;
+                fn init(_: ()) -> Self {
+                    Small
+                }
+                fn exec(&mut self, input: u32) {}
+            }
+        }),
+        false,
+    );
+
+    // Input queue of `Big`: ring buffer of capacity + 1 = 4 slots.
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Big__INPUTS : rticx :: export :: Queue < < Big as RticAsyncTask > :: SpawnInput , 4usize > =
+                rticx :: export :: Queue :: new () ;
+        },
+        "capacity-3 input queue",
+    );
+
+    // Input queue of `Small`: default capacity 1 -> 2 slots.
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Small__INPUTS : rticx :: export :: Queue < < Small as RticAsyncTask > :: SpawnInput , 2usize > =
+                rticx :: export :: Queue :: new () ;
+        },
+        "default-capacity input queue",
+    );
+
+    // Ready queue: sum of capacities (3 + 1) + 1 = 5 slots.
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Core0Prio2Tasks__RQ : rticx :: export :: Queue < Core0Prio2Tasks , 5usize > = rticx :: export :: Queue :: new () ;
+        },
+        "ready queue sized by capacity sum",
+    );
+
+    // Overflow queue has the same size as the ready queue.
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Core0Prio2Tasks__OQ : rticx :: export :: Queue < Core0Prio2Tasks , 5usize > = rticx :: export :: Queue :: new () ;
+        },
+        "overflow queue sized by capacity sum",
+    );
+
+    // The deferred buffer of the dispatcher holds all pending spawns.
+    assert_section_present(
+        &generated,
+        quote! {
+            let mut deferred : [Option < Core0Prio2Tasks > ; 4usize] = [None ; 4usize] ;
+        },
+        "deferred buffer sized by capacity sum",
     );
 }
 
@@ -281,15 +405,15 @@ fn codegen_expands_multi_core_sw_app() {
                 & __rticx_internal__Task0__PTR ,
             )
         },
-        "core0 recover in spawn",
+        "core0 recover in install fn",
     );
 
     assert_section_present(
         &generated,
         quote! {
-            if ! exec . try_allocate () { return Err (input) ; }
+            if exec . try_allocate ()
         },
-        "core0 try_allocate",
+        "core0 try_allocate at dispatch time",
     );
 
     assert_section_present(
@@ -452,52 +576,83 @@ fn codegen_expands_prio_0_executor() {
     assert_section_present(
         &generated,
         quote! {
+            static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticAsyncTask > :: SpawnInput , 2usize > =
+                rticx :: export :: Queue :: new () ;
             impl Foo {
                 pub fn spawn (input : < Foo as RticAsyncTask > :: SpawnInput) -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
+                    let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
+                    let mut ready_producer = unsafe { __rticx_internal__Core0Prio0Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticAsyncTask > :: SpawnInput > {
                         if unsafe { ! __rticx_async_system_initialized } { return Err (input) ; }
-                        let exec = unsafe {
-                            rticx_async :: executor :: recover_slot (
-                                __rticx_async_Foo ,
-                                & __rticx_internal__Foo__PTR ,
-                            )
-                        } ;
-                        if ! exec . try_allocate () { return Err (input) ; }
-                        let future = __rticx_async_Foo (
-                            unsafe { FOO . assume_init_mut () } ,
-                            input ,
-                        ) ;
-                        unsafe { exec . spawn (future) ; }
+                        inputs_producer . enqueue (input) ? ;
+                        unsafe { ready_producer . enqueue_unchecked (Core0Prio0Tasks :: Foo) } ;
                         Ok (())
                     })
                 }
             }
         },
-        "prio-0 simplified spawn (no queues, no pend)",
+        "prio-0 spawn (queue-buffered, no pend)",
     );
 
     assert_section_present(
         &generated,
         quote! {
-            impl RticIdleTask for __RticxAsyncPrio0ExecutorCore0 {
-                type InitArgs = () ;
-                fn init (_core : u32 , _args : Self :: InitArgs) -> Self { Self }
-                fn exec (& mut self) -> ! {
-                    loop {
-                        {
-                            let exec = unsafe {
-                                rticx_async :: executor :: recover_slot (
-                                    __rticx_async_Foo ,
-                                    & __rticx_internal__Foo__PTR ,
-                                )
-                            } ;
-                            exec . poll (__rticx_internal__Foo__wake) ;
-                        }
-                    }
+            pub enum Core0Prio0Tasks { Foo , }
+        },
+        "prio-0 task enum",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            static mut __rticx_internal__Core0Prio0Tasks__OQ : rticx :: export :: Queue < Core0Prio0Tasks , 2usize > = rticx :: export :: Queue :: new () ;
+        },
+        "prio-0 overflow queue",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_internal__Core0Prio0Tasks__try_install (task : Core0Prio0Tasks) -> bool
+        },
+        "prio-0 install fn",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            let mut ready_consumer = __rticx_internal__Core0Prio0Tasks__RQ . split () . 1 ;
+            while let Some (task) = ready_consumer . dequeue () {
+                if ! __rticx_internal__Core0Prio0Tasks__try_install (task) {
+                    unsafe { ovf_producer . enqueue_unchecked (task) } ;
                 }
             }
         },
-        "idle executor for prio-0",
+        "idle executor Phase A",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            let mut deferred : [Option < Core0Prio0Tasks > ; 1usize] = [None ; 1usize] ;
+        },
+        "idle executor Phase B deferred buffer",
+    );
+
+    assert_section_present(
+        &generated,
+        quote! {
+            {
+                let exec = unsafe {
+                    rticx_async :: executor :: recover_slot (
+                        __rticx_async_Foo ,
+                        & __rticx_internal__Foo__PTR ,
+                    )
+                } ;
+                exec . poll (__rticx_internal__Foo__wake) ;
+            }
+        },
+        "idle executor poll",
     );
 
     assert_section_present(

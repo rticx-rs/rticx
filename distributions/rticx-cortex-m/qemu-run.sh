@@ -34,8 +34,18 @@ timeout --foreground 30s bash -c 'cargo run --example hello_rtic'
 
 if [ "${APP}" == "armv7m" ]; then
     echo ""
+    echo ">>> running sw_queue_depth"
+    cargo build --example sw_queue_depth
+    timeout --foreground 30s bash -c 'cargo run --example sw_queue_depth'
+
+    echo ""
     echo ">>> running async_ping_pong with async feature"
     cargo build --example async_ping_pong --features async
     timeout --foreground 60s bash -c 'cargo run --example async_ping_pong --features async'
+
+    echo ""
+    echo ">>> running async_queue_depth with async feature"
+    cargo build --example async_queue_depth --features async
+    timeout --foreground 60s bash -c 'cargo run --example async_queue_depth --features async'
 fi
 cd -

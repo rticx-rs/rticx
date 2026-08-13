@@ -26,6 +26,26 @@ fn analyze(args: TokenStream, items: TokenStream) -> syn::Result<Analysis> {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn analysis_capacity_propagates() {
+    let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0]);
+    let items = quote! {
+        #[sw_task(priority = 2, capacity = 5)]
+        struct Foo;
+        impl RticSwTask for Foo {
+            type InitArgs = ();
+            type SpawnInput = u32;
+            fn init(_: ()) -> Self { Foo }
+            fn exec(&mut self, input: u32) {}
+        }
+    };
+    let analysis = analyze(args, items).expect("analysis succeeds");
+    let sub = &analysis.sub_analysis[0];
+    let group = &sub.tasks_priority_map[&2];
+    assert_eq!(group.len(), 1);
+    assert_eq!(group[0].2, 5); // explicit capacity
+}
+
+#[test]
 fn analysis_single_core_one_task_one_dispatcher() {
     let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0]);
     let items = quote! {
@@ -47,6 +67,7 @@ fn analysis_single_core_one_task_one_dispatcher() {
     assert_eq!(group.len(), 1);
     assert_eq!(group[0].0.to_string(), "Foo");
     assert_eq!(group[0].1, 0); // core-local task
+    assert_eq!(group[0].2, 1); // default capacity
     assert_eq!(sub.dispatcher_priority_map.len(), 1);
     assert_eq!(
         sub.dispatcher_priority_map[&2]
@@ -82,7 +103,7 @@ fn analysis_single_core_two_tasks_same_prio() {
     assert_eq!(sub.tasks_priority_map.len(), 1);
     let group = &sub.tasks_priority_map[&2];
     assert_eq!(group.len(), 2);
-    let names: Vec<String> = group.iter().map(|(i, _)| i.to_string()).collect();
+    let names: Vec<String> = group.iter().map(|(i, _, _)| i.to_string()).collect();
     assert!(names.contains(&"Foo".to_string()));
     assert!(names.contains(&"Bar".to_string()));
     assert_eq!(sub.dispatcher_priority_map.len(), 1);
