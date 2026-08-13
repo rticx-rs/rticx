@@ -38,7 +38,6 @@ Three layers:
 | `rticx-rp2040` | `distributions/rticx-rp2040/` | Dual-core Cortex-M0+ (RP2040) |
 | `rticx-hippo` | `distributions/rticx-hippo/` | RISC-V Hippomenes MCU |
 | `rticx-atalanta` | `distributions/rticx-atalanta/` | RISC-V Atalanta MCU |
-| `distribution-template` | `distributions/distribution-template/` | Copy to start a new distro |
 
 ## Feature Flags
 

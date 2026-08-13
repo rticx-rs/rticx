@@ -48,6 +48,6 @@ pub mod export {
 }
 ```
 
-For a working reference, see the `rticx-rp2040` distribution. For a conceptual starting point, see `distributions/distribution-template/`. Note that the template is intentionally minimal and is not expected to compile against the current `rticx-core`.
+For working references, see the `rticx-rp2040` distribution. For a starting point for a new distribution, copy one of the reference distributions — `rticx-cortex-m` for single-core Cortex-M targets or `rticx-riscv` for RISC-V targets.
 
 

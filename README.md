@@ -37,7 +37,6 @@ Full user and distributor guides are available in the [project wiki](https://git
 | `distributions/rticx-cortex-m/` | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) distribution. |
 | `distributions/rticx-riscv/` | `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 |
 | `distributions/rticx-rp2040/` | `rticx-rp2040` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |
-| `distributions/distribution-template/` | `distribution-template` | Conceptual starting point for new distributions. |
 
 ## Supported distributions
 

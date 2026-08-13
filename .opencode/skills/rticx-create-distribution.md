@@ -14,7 +14,7 @@ For architecture context and design decision, see `wiki/Distributor-Guide-Archit
 
 ## Quick start
 
-- Copy `distributions/distribution-template/` as your starting point.
+- Copy a reference distribution as your starting point: `distributions/rticx-cortex-m/` for single-core Cortex-M targets or `distributions/rticx-riscv/` for RISC-V targets.
 - Two crates are needed: `<distro>/` (library, exports RTICX macro, utilities and any other necessary re-exports) and `<distro>/rticx-macro/` (proc-macro).
 - Implement the hardware specific bindings for the core pass `rticx_core::CorePassBackend` for the target hardware architecture
 - OPTIONAL: Implement the hardware specific bindings for software pass and async pass to enable support for software task and async/await syntax.
