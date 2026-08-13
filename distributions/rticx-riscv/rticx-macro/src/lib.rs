@@ -51,10 +51,6 @@ impl CorePassBackend for BackendImpl {
         let _ = self.info.set(info_bus);
     }
 
-    fn default_task_priority(&self) -> u16 {
-        MIN_TASK_PRIORITY
-    }
-
     /// post_init SLIC backend: enable & prioritize every interrupt used by the app
     #[cfg(feature = "slic")]
     fn post_init(

@@ -154,15 +154,12 @@ fn parse_task_args_with_core_and_trait() {
 #[test]
 fn parse_task_args_defaults() {
     use rticx_core::parser::ast::TaskArgs;
-    // The default task priority is set by the backend before parsing; this test runs with the
-    // mock backend value of 1 because the full builder sets the static.
     let meta: syn::Meta = syn::parse_quote!(task);
     let args = TaskArgs::parse(meta).expect("valid task args");
     assert!(args.binds.is_none());
     assert_eq!(args.core, 0);
+    assert_eq!(args.priority, 1);
     assert_eq!(args.task_trait.to_string(), "RticTask");
-    // priority defaults to whatever DEFAULT_TASK_PRIORITY currently is; this test is only
-    // checking the shape of the defaults, not the exact value.
     assert_eq!(args.shared.len(), 0);
 }
 

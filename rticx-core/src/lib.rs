@@ -1,8 +1,6 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use std::sync::atomic::AtomicU16;
-use std::sync::atomic::Ordering;
 
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use syn::{ItemMod, parse_macro_input};
@@ -30,8 +28,6 @@ pub mod parse_utils;
 
 pub mod info_bus;
 pub mod parser;
-
-static DEFAULT_TASK_PRIORITY: AtomicU16 = AtomicU16::new(0);
 
 /// Points in the generated `main()` where passes can inject code.
 pub enum MainInjectionPoint {
@@ -123,9 +119,6 @@ impl RticMacroBuilder {
     /// without needing a proc-macro context.
     pub fn build_rtic_macro2(mut self, args: TokenStream2, app_mod: ItemMod) -> TokenStream2 {
         self.core.subscribe(self.info_bus.clone());
-
-        // init statics
-        DEFAULT_TASK_PRIORITY.store(self.core.default_task_priority(), Ordering::Relaxed);
 
         let mut args = args;
         let mut app_mod = app_mod;

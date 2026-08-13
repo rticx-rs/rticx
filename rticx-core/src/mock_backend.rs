@@ -88,10 +88,6 @@ impl CorePassBackend for MockCoreBackend {
     fn pre_codegen_validation(&self, _app: &App, _analysis: &Analysis) -> syn::Result<()> {
         Ok(())
     }
-
-    fn default_task_priority(&self) -> u16 {
-        1
-    }
 }
 
 impl Default for MockCoreBackend {

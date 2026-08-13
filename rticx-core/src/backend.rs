@@ -214,26 +214,6 @@ pub trait CorePassBackend {
     /// Reference: `rticx-cortex-m` checks against `NON_CONFIGURABLE_EXCEPTIONS`.
     fn pre_codegen_validation(&self, app: &App, analysis: &Analysis) -> syn::Result<()>;
 
-    /// Returns the default priority assigned to a task when the user omits
-    /// the `priority = N` attribute.
-    ///
-    /// The returned value is also stored globally so that the idle task
-    /// (which runs at the lowest priority) and any priority computation
-    /// can reference it.
-    ///
-    /// # Porting
-    ///
-    /// Return the **lowest** (numerically largest on most architectures)
-    /// priority your hardware supports.
-    ///
-    /// * Cortex-M BASEPRI: `0xff`
-    /// * Cortex-M source-mask: `0b11`
-    /// * RISC-V mintthresh: `15`
-    /// * RISC-V CLIC: `31`
-    ///
-    /// Reference: `rticx-cortex-m` uses `1`. `rticx-hippo` uses `15`.
-    fn default_task_priority(&self) -> u16;
-
     /// Attribute macros to add to the entry point.
     ///
     /// Used to annotate the runtime entry point for bare metal applications.

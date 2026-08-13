@@ -13,8 +13,6 @@ use syn::{ItemFn, LitInt, Path, parse_quote};
 
 extern crate proc_macro;
 
-/// Lowest logical priority (This corresponds to HW priority 3 or armv6m and 255 for armv7m)
-const MIN_TASK_PRIORITY: u16 = 1;
 /// Cortex-M exceptions that have a *configurable* priority. These may be bound
 /// to hardware tasks (their priority is set via `SCB`), but must not be used as
 /// dispatcher interrupts.
@@ -64,10 +62,6 @@ struct Rp2040Rtic;
 
 // =========================================== Trait implementations ===================================================
 impl CorePassBackend for Rp2040Rtic {
-    fn default_task_priority(&self) -> u16 {
-        MIN_TASK_PRIORITY
-    }
-
     fn post_init(
         &self,
         app_args: &AppArgs,

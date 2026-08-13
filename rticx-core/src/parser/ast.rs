@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use heck::ToSnakeCase;
 use proc_macro2::Span;
 use quote::{ToTokens, format_ident};
@@ -8,9 +6,13 @@ use syn::{
     parse::Parser, parse_quote, spanned::Spanned,
 };
 
-use crate::{
-    DEFAULT_TASK_PRIORITY, errors::ParseError, parse_utils::RticAttr, rticx_traits::HWT_TRAIT_TY,
-};
+use crate::{errors::ParseError, parse_utils::RticAttr, rticx_traits::HWT_TRAIT_TY};
+
+/// Default task priority when the `priority = N` attribute is omitted.
+///
+/// Priorities follow upstream RTIC semantics: `0` is the disabled/idle task
+/// priority, and `1` onwards denote increasing urgency.
+const DEFAULT_TASK_PRIORITY: u16 = 1;
 
 #[derive(Debug, Clone)]
 pub struct InitTask {
@@ -74,7 +76,7 @@ impl TaskArgs {
         let Meta::List(args) = args else {
             return Ok(TaskArgs {
                 binds: None,
-                priority: DEFAULT_TASK_PRIORITY.load(Ordering::Relaxed),
+                priority: DEFAULT_TASK_PRIORITY,
                 shared: Default::default(),
                 core: 0,
                 task_trait: format_ident!("{HWT_TRAIT_TY}"),
@@ -120,7 +122,7 @@ impl TaskArgs {
 
         let priority = priority
             .and_then(|p| p.base10_parse().ok())
-            .unwrap_or(DEFAULT_TASK_PRIORITY.load(Ordering::Relaxed));
+            .unwrap_or(DEFAULT_TASK_PRIORITY);
 
         let core = core
             .and_then(|core| core.base10_parse().ok())

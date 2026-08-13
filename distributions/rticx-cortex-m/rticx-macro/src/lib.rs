@@ -44,9 +44,6 @@ fn is_exception(name: &Ident) -> bool {
     CONFIGURABLE_EXCEPTIONS.iter().any(|e| s == *e)
 }
 
-/// Lowest logical priority, higher values, higher urgency
-const MIN_TASK_PRIORITY: u16 = 1;
-
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     #[cfg(feature = "swtasks")]
@@ -67,10 +64,6 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
 impl CorePassBackend for CortexMRtic {
     fn subscribe(&mut self, info_bus: InfoBus) {
         self.info_bus = Some(info_bus);
-    }
-
-    fn default_task_priority(&self) -> u16 {
-        MIN_TASK_PRIORITY
     }
 
     fn post_init(

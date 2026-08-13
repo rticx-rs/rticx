@@ -37,10 +37,6 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
 
 // =========================================== Trait implementations ===================================================
 impl CorePassBackend for AtalantaRtic {
-    fn default_task_priority(&self) -> u16 {
-        MIN_TASK_PRIORITY
-    }
-
     fn post_init(
         &self,
         _app_args: &AppArgs,

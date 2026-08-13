@@ -117,6 +117,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rticx-async-pass"
+version = "0.1.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "syn",
+]
+
+[[package]]
 name = "rticx-core"
 version = "0.1.0"
 dependencies = [
@@ -135,6 +146,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rticx-async-pass",
  "rticx-core",
  "rticx-sw-pass",
  "syn",

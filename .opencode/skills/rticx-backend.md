@@ -11,19 +11,18 @@ the wiki at `wiki/`. The wiki contains procedural guides and architecture contex
 
 Inside `RticMacroBuilder::build_rtic_macro2`:
 
-1. Reset `DEFAULT_TASK_PRIORITY` from the backend.
-2. Call `core.subscribe(info_bus.clone())` — the target backend receives the `InfoBus` before anyone else.
-3. For each **pre-core pass** in insertion order:
+1. Call `core.subscribe(info_bus.clone())` — the target backend receives the `InfoBus` before anyone else.
+2. For each **pre-core pass** in insertion order:
    1. Call `pass.subscribe(info_bus.clone())` (guaranteed before `run_pass`).
    2. Call `pass.run_pass(args, app_mod) -> syn::Result<(TokenStream2, ItemMod)>`; on error, emit a compile error mentioning `pass.pass_name()`.
-4. Parse the module with `App::parse(args, app_mod)`.
-5. Publish the parsed app to the `InfoBus` under `rticx_core::App`.
-6. Run `Analysis::run(&mut parsed_app)` for resource ceiling analysis.
-7. Publish the analysis to the `InfoBus` under `rticx_core::Analysis`.
-8. Call `CorePassBackend::pre_codegen_validation`.
-9. Collect injections from all passes by calling `pass.main_injection(&point)` for each `MainInjectionPoint`.
-10. Run `CodeGen::new(core_backend, &parsed_app, &analysis).with_injections(&injections).run()`.
-11. If `debug_expand` is enabled, write expanded code to disk.
+3. Parse the module with `App::parse(args, app_mod)`.
+4. Publish the parsed app to the `InfoBus` under `rticx_core::App`.
+5. Run `Analysis::run(&mut parsed_app)` for resource ceiling analysis.
+6. Publish the analysis to the `InfoBus` under `rticx_core::Analysis`.
+7. Call `CorePassBackend::pre_codegen_validation`.
+8. Collect injections from all passes by calling `pass.main_injection(&point)` for each `MainInjectionPoint`.
+9. Run `CodeGen::new(core_backend, &parsed_app, &analysis).with_injections(&injections).run()`.
+10. If `debug_expand` is enabled, write expanded code to disk.
 
 > Only **pre-core** passes are supported. Passes that need to react after core codegen can take the final TokenStream emitted by build_rti_macro() and make further changes.
 
