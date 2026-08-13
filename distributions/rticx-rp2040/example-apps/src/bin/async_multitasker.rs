@@ -12,10 +12,10 @@ pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 mod app {
     use core::sync::atomic::{AtomicU32, Ordering};
     use cortex_m::asm;
-    use embedded_hal::digital::v2::ToggleableOutputPin;
-    use fugit::{MicrosDurationU32, RateExtU32};
+    use embedded_hal::digital::StatefulOutputPin;
     use heapless::String;
     use rp2040_hal::Clock;
+    use rp2040_hal::fugit::{MicrosDurationU32, RateExtU32};
     use rp2040_hal::gpio::bank0::{Gpio0, Gpio1, Gpio25};
     use rp2040_hal::gpio::{FunctionSio, FunctionUart, Pin, PullDown, SioOutput};
     use rp2040_hal::pac;

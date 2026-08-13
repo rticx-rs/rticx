@@ -45,15 +45,14 @@ required-features = ["swtasks"]
 
 [dependencies]
 cortex-m = "0.7.8"
-defmt = "0.3"
-defmt-rtt = "0.4"
-embedded-hal = "0.2.7"
-fugit = "0.3.7"
-heapless = "0.8.0"
-panic-halt = "0.2.0"
+defmt = "1"
+defmt-rtt = "1"
+embedded-hal = "1.0.0"
+heapless = "0.9.3"
+panic-halt = "1.0.0"
 rp2040-boot2 = "0.3.0"
-rp2040-hal = { version = "0.10.2", features = ["critical-section-impl", "defmt", "rt"] }
+rp2040-hal = { version = "0.10.2", features = ["critical-section-impl", "rt"] }
 rticx-rp2040 = { path = "../" }
 rticx-async = { path = "../../../rticx-async", optional = true }
 itoa = "1.0.11"
-base64 = { version = "0.22.1", default-features = false }
+base64 = { version = "0.23.1", default-features = false }

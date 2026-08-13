@@ -13,16 +13,14 @@ use panic_halt as _;
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
-
-
 #[rticx_rp2040::app(device = rp2040_hal::pac)]
 mod app {
 
     use core::sync::atomic::{AtomicU32, Ordering};
     use defmt::*;
-    use fugit::{MicrosDurationU32, RateExtU32};
     use heapless::String;
     use rp2040_hal::Clock;
+    use rp2040_hal::fugit::{MicrosDurationU32, RateExtU32};
     use rp2040_hal::gpio::bank0::{Gpio0, Gpio1, Gpio25};
     use rp2040_hal::gpio::{FunctionSio, FunctionUart, Pin, PullDown, SioOutput};
     use rp2040_hal::timer::{Alarm, Alarm0};
@@ -32,7 +30,7 @@ mod app {
     // Alias for our PAC crate
     use rp2040_hal::pac::{self};
     // Some traits we need
-    use embedded_hal::digital::v2::ToggleableOutputPin;
+    use embedded_hal::digital::StatefulOutputPin;
 
     static TARGET_DURATION: AtomicU32 = AtomicU32::new(0);
     static TARGET_TICKS: AtomicU32 = AtomicU32::new(0);

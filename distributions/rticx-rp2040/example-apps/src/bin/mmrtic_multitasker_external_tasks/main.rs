@@ -8,7 +8,6 @@ use panic_halt as _;
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
-
 mod external_cipher;
 mod external_hasher;
 mod external_timer_led_driver;
@@ -26,8 +25,8 @@ pub enum Command {
 pub mod app {
 
     use core::sync::atomic::AtomicU32;
-    use fugit::RateExtU32;
     use rp2040_hal::Clock;
+    use rp2040_hal::fugit::RateExtU32;
     use rp2040_hal::gpio::bank0::{Gpio0, Gpio1, Gpio25};
     use rp2040_hal::gpio::{FunctionSio, FunctionUart, Pin, PullDown, SioOutput};
     use rp2040_hal::timer::{Alarm, Alarm0};

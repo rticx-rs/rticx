@@ -1,7 +1,7 @@
 use core::sync::atomic::Ordering;
 
-use fugit::MicrosDurationU32;
 use heapless::String;
+use rp2040_hal::fugit::MicrosDurationU32;
 use rp2040_hal::timer::Alarm;
 
 use crate::{

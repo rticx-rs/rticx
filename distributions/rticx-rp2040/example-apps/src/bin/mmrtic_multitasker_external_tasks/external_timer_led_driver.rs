@@ -1,7 +1,7 @@
 use core::sync::atomic::Ordering;
 
-use embedded_hal::digital::v2::ToggleableOutputPin;
-use fugit::MicrosDurationU32;
+use embedded_hal::digital::StatefulOutputPin;
+use rp2040_hal::fugit::MicrosDurationU32;
 use rp2040_hal::timer::Alarm;
 
 use crate::app::{CommandExecutorTask, LedPin, RticMutex, RticTask, TARGET_DURATION, TARGET_TICKS};

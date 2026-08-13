@@ -21,7 +21,7 @@ pub mod my_app {
     // Ensure we halt the program on panic (if we don't mention this crate it won't
     // be linked)
 
-    use embedded_hal::digital::v2::OutputPin;
+    use embedded_hal::digital::OutputPin;
     use rp2040_hal::pac::{self};
 
     type LedOutPin = Pin<Gpio25, FunctionSio<SioOutput>, PullDown>;
