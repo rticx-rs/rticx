@@ -1,5 +1,11 @@
 # RTICX: eXtensible Realtime Interrupt Driven Concurrency Framework
 
+[![crates.io](https://img.shields.io/crates/v/rticx-core)](https://crates.io/crates/rticx-core)
+[![wiki](https://img.shields.io/badge/docs-wiki-red)](https://github.com/rticx-rs/rticx/wiki/)
+[![CI](https://github.com/rticx-rs/rticx/actions/workflows/ci.yml/badge.svg)](https://github.com/rticx-rs/rticx/actions/workflows/ci.yml)
+[![QEMU](https://github.com/rticx-rs/rticx/actions/workflows/qemu.yml/badge.svg)](https://github.com/rticx-rs/rticx/actions/workflows/qemu.yml)
+
+
 This repository contains a from scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic). The goal make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore) in order to to reduce the barrier of entry for contributing to with newer syntax features and hardware ports.
 
 The main idea is to breakdown RTIC's monolithic codebase by separating the generic proc-macro logic (RTIC syntax) from target-specific details (Interrupt handling, system initialization.. etc). Furthermore, the proc-macro logic is split to core and addons, where the core logic captures only the SRP Tasks/Resources model and the rest will be external addons like software tasks and async/await..etc.
@@ -21,7 +27,7 @@ This repository maintains the core framework and a set of reference distribution
 
 ## Documentation
 
-Full user and distributor guides are available in the [project wiki](https://github.com/zakimadaoui/rtic-mc-experiments/wiki).
+Full user and distributor guides are available in the [project wiki](https://github.com/rticx-rs/rticx/wiki/).
 
 ## Repository layout
 
@@ -66,10 +72,10 @@ The examples are located in `distributions/rticx-cortex-m/example-apps`. You can
 
 ## Examples
 
-- [RTICX ARM Cortex-m playground: SysTick hw task + spawned sw task + SRP lock ](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/hello_rtic.rs)
-- [RTICX ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_ping_pong.rs)
-- [RTICX ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_prio0.rs)
-- [RTICX RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
+- [ARM Cortex-m playground: SysTick hw task + spawned sw task + SRP lock ](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/hello_rtic.rs)
+- [ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_ping_pong.rs)
+- [ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_prio0.rs)
+- [RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
 - [Single binary multicore ping-pong](distributions/rticx-rp2040/example-apps/src/bin/ping_pong.rs)
 
 ## Academic Publications
@@ -77,3 +83,4 @@ The examples are located in `distributions/rticx-cortex-m/example-apps`. You can
 - [Master thesis: Modular and Multicore RTIC](https://trepo.tuni.fi/bitstream/10024/162037/2/MadaouiZakaria.pdf)
 - [Paper: Towards modularity of the Rust RTIC real-time scheduling framework](https://ieeexplore.ieee.org/document/10752441)
 - [Paper: Modular RTIC: Lightweight Real Time for Customized Architectures](https://www.diva-portal.org/smash/get/diva2:1993122/FULLTEXT01.pdf)
+- [Other publications](https://ltu.diva-portal.org/smash/resultList.jsf?aq2=%5B%5B%5D%5D&af=%5B%5D&searchType=SIMPLE&sortOrder2=title_sort_asc&query=RTIC&language=en&aq=%5B%5B%5D%5D&sf=all&aqe=%5B%5D&sortOrder=author_sort_asc&onlyFullText=false&noOfRows=50&dswid=8093)
