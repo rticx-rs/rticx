@@ -309,7 +309,7 @@ dependencies = [
  "cortex-m",
  "rticx-async",
  "rticx-cortex-m-macro",
- "rticx-sw-pass",
+ "rticx-spsc",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@ required-features = ["async"]
 
 [features]
 async = ["rticx-cortex-m/async", "dep:rticx-async"]
+swtasks = ["rticx-cortex-m/swtasks"]
 
 [dependencies]
 # `armv6m` selects interrupt source-masking locking (Cortex-M0/M0+/M23).
