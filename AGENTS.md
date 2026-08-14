@@ -36,8 +36,7 @@ Three layers:
 | `rticx-cortex-m` | `distributions/rticx-cortex-m/` | Single-core Cortex-M (BASEPRI or source-masking) |
 | `rticx-riscv` | `distributions/rticx-riscv/` | Single-core RISC-V (SLIC, ESP32-C3, ESP32-C6) |
 | `rticx-rp2040` | `distributions/rticx-rp2040/` | Dual-core Cortex-M0+ (RP2040) |
-| `rticx-hippo` | `distributions/rticx-hippo/` | RISC-V Hippomenes MCU |
-| `rticx-atalanta` | `distributions/rticx-atalanta/` | RISC-V Atalanta MCU |
+
 
 ## Feature Flags
 
@@ -49,8 +48,6 @@ Three layers:
 | `rticx-riscv` | `slic` / `esp32c3` / `esp32c6` | Mutually exclusive target selectors |
 | `rticx-riscv` | `async` | Enables async/await software tasks |
 | `rticx-rp2040` | `swtasks` / `autoassign` | Software tasks / auto core assignment |
-| `rticx-hippo` | `deadline-pass` | Deadline→priority conversion |
-| `rticx-atalanta` | `deadline-pass` / `pcs-pass` | Deadline conversion / PCS support |
 
 Feature propagation pattern: distro crate feature → forwards to `*-macro` crate feature → macro crate enables `dep:<pass>` via `#[cfg(feature = "...")]`.
 

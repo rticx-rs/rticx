@@ -30,7 +30,6 @@ pub trait CorePassBackend {
     ///
     /// Reference: `rticx-cortex-m` configures exceptions via SCB and external
     /// interrupts via NVIC. `rticx-rp2040` adds core-1 boot and FIFO setup.
-    /// `rticx-hippo` uses `mintthresh::write`. `rticx-atalanta` uses CLIC.
     fn post_init(
         &self,
         app_args: &AppArgs,
