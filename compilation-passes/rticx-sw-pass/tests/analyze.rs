@@ -7,8 +7,8 @@
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 use quote::quote;
-use rticx_sw_pass::software_pass::analyze::Analysis;
-use rticx_sw_pass::software_pass::parse::App;
+use rticx_sw_pass::analyze::Analysis;
+use rticx_sw_pass::parse::App;
 
 mod common;
 

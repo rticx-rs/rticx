@@ -1,8 +1,8 @@
 // Note: most of the code here is taken from rtic repo
 #![allow(clippy::inline_always)]
 
-/// Distribution crate must re-export the `export` module from all the used compilation passes
-pub use rticx_sw_pass::export::*;
+/// Re-export RTICX Single Producer Single Consumer queue to be used by sw and async passes
+pub use rticx_spsc::Queue;
 
 // Async runtime re-export
 #[cfg(feature = "async")]

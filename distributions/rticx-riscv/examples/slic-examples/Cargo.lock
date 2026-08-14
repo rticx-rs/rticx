@@ -393,7 +393,7 @@ dependencies = [
  "riscv 0.16.1",
  "riscv-slic",
  "rticx-riscv-macro",
- "rticx-sw-pass",
+ "rticx-spsc",
 ]
 
 [[package]]

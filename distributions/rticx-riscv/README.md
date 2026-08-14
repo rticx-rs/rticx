@@ -17,13 +17,13 @@ or more than one produces a compile error.
 
 ## Features
 
-| Feature    | Default | Description                                             |
-|------------|---------|---------------------------------------------------------|
-| `async`  | no     | Enable Async/Await software-tasks |
-| `swtasks`  | yes     | Enable the non-async software-tasks compilation pass (`rticx-sw-pass`). Disable with `default-features = false` for a hardware-task-only distribution. |
-| `slic` + `mecall-backend` or `clint-backend`    | no      | Generic RISC-V target using the SLIC interrupt controller abstraction. |
-| `esp32c3`  | no      | Espressif ESP32-C3. Uses `FROM_CPU_INTR{0..3}` as dispatcher software interrupts. |
-| `esp32c6`  | no      | Espressif ESP32-C6 (machine-mode). Uses `FROM_CPU_INTR{0..3}` as dispatcher software interrupts. |
+| Feature     | Description                                             |
+|-------------|---------------------------------------------------------|
+| `async`     | Enable Async/Await software-tasks |
+| `swtasks`   | Enable the non-async software-tasks compilation pass (`rticx-sw-pass`) |
+| `slic` + `mecall-backend` or `clint-backend`    | Generic RISC-V target using the SLIC interrupt controller abstraction. |
+| `esp32c3`   | Espressif ESP32-C3. Uses `FROM_CPU_INTR{0..3}` as dispatcher software interrupts. |
+| `esp32c6`   | Espressif ESP32-C6 (machine-mode). Uses `FROM_CPU_INTR{0..3}` as dispatcher software interrupts. |
 
 
 ## Running examples in QEMU

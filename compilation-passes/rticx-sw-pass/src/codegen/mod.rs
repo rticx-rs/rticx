@@ -1,9 +1,9 @@
 mod utils;
 
 use crate::SwPassBackend;
-use crate::software_pass::analyze::{Analysis, SubAnalysis};
-use crate::software_pass::parse::ast::SoftwareTask;
-use crate::software_pass::parse::{App, SWT_TRAIT_TY};
+use crate::analyze::{Analysis, SubAnalysis};
+use crate::parse::ast::SoftwareTask;
+use crate::parse::{App, SWT_TRAIT_TY};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use rticx_core::parse_utils::RticAttr;

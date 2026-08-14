@@ -27,6 +27,5 @@ panic = "abort"
 opt-level = "s"
 
 [features]
-default = ["slic-clint-backend"]
 slic-clint-backend = ["rticx-riscv/clint-backend"]
 slic-mecall-backend = ["rticx-riscv/mecall-backend"]

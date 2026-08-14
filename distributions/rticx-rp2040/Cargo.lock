@@ -521,7 +521,7 @@ dependencies = [
  "rp2040-hal",
  "rticx-async",
  "rticx-rp2040-macro",
- "rticx-sw-pass",
+ "rticx-spsc",
 ]
 
 [[package]]
@@ -667,19 +667,3 @@ checksum = "de437e2a6208b014ab52972a27e59b33fa2920d3e00fe05026167a1c509d19cc"
 dependencies = [
  "vcell",
 ]
-
-[[patch.unused]]
-name = "rticx-cortex-m"
-version = "0.2.0"
-
-[[patch.unused]]
-name = "rticx-cortex-m-macro"
-version = "0.2.0"
-
-[[patch.unused]]
-name = "rticx-riscv"
-version = "0.2.0"
-
-[[patch.unused]]
-name = "rticx-riscv-macro"
-version = "0.2.0"

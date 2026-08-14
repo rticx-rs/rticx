@@ -1,11 +1,10 @@
 // Note: most of the code here is taken from rtic repo
 #![allow(clippy::inline_always)]
 
-/// Distribution crate must re-export the `export` module from all the used compilation passes
-pub use rticx_sw_pass::export::*;
-
 /// Exports required by core-pass
-pub use hippomenes_core::Interrupt as InterruptNumber; // a trait that abstracts an interrupt type
+pub use hippomenes_core::Interrupt as InterruptNumber;
+/// Re-export RTICX Single Producer Single Consumer queue to be used by sw and async passes
+pub use rticx_spsc::Queue; // a trait that abstracts an interrupt type
 
 /// re-exports needed from the code generation in internal rticx-macro crate
 // use core::cell::Cell;

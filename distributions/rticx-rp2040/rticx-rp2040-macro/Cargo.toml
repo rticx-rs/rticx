@@ -22,9 +22,7 @@ rticx-core = { version = "0.2.0", path = "../../../rticx-core", features = [
     # "debug_expand"
 ] }
 rticx-auto-assign = { version = "0.2.0", path = "../../../compilation-passes/rticx-auto-assign", optional = true }
-rticx-sw-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-sw-pass", features = [
-    "proc-macro",
-], optional = true }
+rticx-sw-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-sw-pass", optional = true }
 rticx-async-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-async-pass", optional = true }
 
 [features]

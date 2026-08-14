@@ -8,8 +8,8 @@ use proc_macro2::TokenStream;
 use quote::ToTokens;
 use quote::quote;
 use rticx_core::parse_utils::RticAttr;
-use rticx_sw_pass::software_pass::parse::App;
-use rticx_sw_pass::software_pass::parse::ast::{AppParameters, TaskParams};
+use rticx_sw_pass::parse::App;
+use rticx_sw_pass::parse::ast::{AppParameters, TaskParams};
 
 mod common;
 

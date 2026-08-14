@@ -18,12 +18,11 @@ bench = false
 [dependencies]
 cortex-m = "0.7.8"
 rticx-cortex-m-macro = { version = "0.2.0", path = "rticx-macro" }
-rticx-sw-pass = { version = "0.2.0", path = "../../compilation-passes/rticx-sw-pass" }
 rticx-async = { version = "0.2.0", path = "../../rticx-async", optional = true }
+rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
 
 [features]
-default = ["swtasks"]
-# Software tasks pass (enabled by default; disable to use a hardware-only distribution)
+# Software tasks pass
 swtasks = ["rticx-cortex-m-macro/swtasks"]
 # Use interrupt source-masking for locking (armv6-m: Cortex-M0/M0+/M23).
 # When disabled (default), BASEPRI-based locking is used (armv7-m and above).

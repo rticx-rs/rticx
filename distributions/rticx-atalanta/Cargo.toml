@@ -10,8 +10,7 @@ bench = false
 
 [dependencies]
 rticx-atalanta-macro = { path = "rticx-macro" }
-rticx-sw-pass = { path = "../../compilation-passes/rticx-sw-pass" }                                    # exports
-rticx-deadline-pass = { path = "../../compilation-passes/rticx-deadline-pass" }                        # exports
+rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
 bsp = { package = "atalanta-bsp", git = "https://github.com/soc-hub-fi/atalanta.git", tag = "v0.2.1" }
 
 [features]

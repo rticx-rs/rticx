@@ -17,7 +17,6 @@ bench = false
 
 [dependencies]
 rticx-riscv-macro = { version = "0.2.0", path = "rticx-macro" }
-rticx-sw-pass = { version = "0.2.0", path = "../../compilation-passes/rticx-sw-pass" }
 
 # Generic RISC-V SLIC backend (`slic` feature)
 riscv = { version = "0.16.1", optional = true }
@@ -39,10 +38,12 @@ critical-section = { version = "1.2", optional = true }
 # Async runtime, needed when `async` feature is enabled
 rticx-async = { version = "0.2.0", path = "../../rticx-async", optional = true }
 
-[features]
-default = ["swtasks"]
+# Queue type to be used by software/async passes
+rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
 
-# Enable software tasks (spawn / spawn_dispatch). On by default.
+[features]
+
+# Enable software tasks (spawn / spawn_dispatch).
 swtasks = ["rticx-riscv-macro/swtasks"]
 
 # Enable async/await software tasks (rticx-async-pass)

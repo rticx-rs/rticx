@@ -11,7 +11,6 @@ strategies selected at crate-feature time:
 | `async`  | all  | Async/Await software tasks|
 | `swtasks`  | all  | Simple software tasks|
 
-Software tasks are enabled by default through the `swtasks` feature; disable it (`--no-default-features`) for a hardware-task-only build.
 
 ## Layout
 

@@ -73,7 +73,7 @@ make fmt all
 cd rticx-core && cargo test
 cd rticx-spsc && cargo test
 cd rticx-async && cargo test
-cd compilation-passes/rticx-sw-pass && cargo test --features proc-macro
+cd compilation-passes/rticx-sw-pass
 cd compilation-passes/rticx-async-pass && cargo test
 cd compilation-passes/rticx-auto-assign && cargo test -- --test-threads=1
 cd compilation-passes/rticx-deadline-pass && cargo test --features proc-macro

@@ -7,10 +7,12 @@ publish = false
 [[example]]
 name = "hello_rtic"
 path = "examples/hello_rtic.rs"
+required-features = ["swtasks"]
 
 [[example]]
 name = "sw_queue_depth"
 path = "examples/sw_queue_depth.rs"
+required-features = ["swtasks"]
 
 [[example]]
 name = "async_ping_pong"
@@ -45,3 +47,4 @@ opt-level = "s"
 
 [features]
 async = ["rticx-cortex-m/async", "dep:rticx-async"]
+swtasks = ["rticx-cortex-m/swtasks"]

@@ -29,14 +29,14 @@ echo ">>> building and running $APP examples under QEMU"
 # is discovered by Cargo — `--manifest-path` alone would ignore it and fall back
 # to the host target.
 cd ${APP_DIR}
-cargo build --example hello_rtic
-timeout --foreground 30s bash -c 'cargo run --example hello_rtic'
+cargo build --example hello_rtic  --features swtasks
+timeout --foreground 30s bash -c 'cargo run --example hello_rtic --features swtasks'
 
 if [ "${APP}" == "armv7m" ]; then
     echo ""
     echo ">>> running sw_queue_depth"
-    cargo build --example sw_queue_depth
-    timeout --foreground 30s bash -c 'cargo run --example sw_queue_depth'
+    cargo build --example sw_queue_depth --features swtasks
+    timeout --foreground 30s bash -c 'cargo run --example sw_queue_depth --features swtasks'
 
     echo ""
     echo ">>> running async_ping_pong with async feature"

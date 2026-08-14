@@ -3,8 +3,9 @@
 use bsp::clic::Clic;
 use bsp::clic::Polarity;
 use bsp::clic::Trig;
-/// Distribution crate must re-export the `export` module from all the used compilation passes
-pub use rticx_sw_pass::export::*;
+
+/// Re-export RTICX Single Producer Single Consumer queue to be used by sw and async passes
+pub use rticx_spsc::Queue;
 
 /// Exports required by core-pass
 pub use bsp::clic::InterruptNumber; // a trait that abstracts an interrupt type

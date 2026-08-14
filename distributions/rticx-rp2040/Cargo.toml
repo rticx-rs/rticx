@@ -18,8 +18,8 @@ bench = false
 [dependencies]
 cortex-m = "0.7.8"
 rticx-rp2040-macro = { version = "0.2.0", path = "rticx-rp2040-macro" }
-rticx-sw-pass = { version = "0.2.0", path = "../../compilation-passes/rticx-sw-pass" }
 rticx-async = { version = "0.2.0", path = "../../rticx-async", optional = true }
+rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
 rp2040-hal = { version = "0.10.2" }
 
 [lints.rust]

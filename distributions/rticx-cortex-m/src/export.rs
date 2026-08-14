@@ -3,8 +3,8 @@
 // rticx-rp2040 distribution in this repository.
 #![allow(clippy::inline_always)]
 
-/// Distribution crate must re-export the `export` module from all the used compilation passes
-pub use rticx_sw_pass::export::*;
+/// Re-export RTICX Single Producer Single Consumer queue to be used by sw and async passes
+pub use rticx_spsc::Queue;
 
 // Async runtime re-export
 #[cfg(feature = "async")]
@@ -13,11 +13,11 @@ pub use rticx_async as async_rt;
 /// Exports required by the core pass and by generated code
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 pub use cortex_m::{
-    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
+    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
+    Peripherals,
 };
 
 #[inline]
