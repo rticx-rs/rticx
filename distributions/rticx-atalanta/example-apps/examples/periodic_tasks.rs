@@ -3,6 +3,9 @@
 #![allow(static_mut_refs)]
 #![allow(non_snake_case)]
 
+
+// FIXME: this example is broken, please fix according to the changes in `rtic_uart*.rs`
+
 #[rticx_atalanta::app(device = bsp)]
 mod app {
 

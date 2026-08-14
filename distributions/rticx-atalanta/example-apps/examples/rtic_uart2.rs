@@ -14,7 +14,7 @@ mod app {
     }
 
     #[init]
-    fn init() -> Shared {
+    fn init() -> (Shared, TaskInits) {
         let uart = ApbUart::init(CPU_FREQ, 115_200);
         let mut timer = Timer::init::<TIMER0_ADDR>().into_periodic();
 
@@ -22,14 +22,13 @@ mod app {
         timer.set_period(10_u32.micros());
         timer.start();
 
-        Shared { uart }
+        (Shared { uart }, TaskInits {task1: Task1::new()})
     }
 
     #[task(binds = Timer0Cmp, priority=2)]
-    struct Task1 {}
-
-    impl RticTask for Task1 {
-        fn init() -> Self {
+    struct Task1;
+    impl Task1 {
+        fn new() -> Self {
             let _uart = ApbUart::init(CPU_FREQ, 115_200);
             let mut timer = Timer::init::<TIMER0_ADDR>().into_periodic();
 
@@ -38,7 +37,9 @@ mod app {
             timer.start();
             Self {}
         }
+    }
 
+    impl RticTask for Task1 {
         fn exec(&mut self) {
             sprintln!("A");
 
@@ -48,14 +49,10 @@ mod app {
         }
     }
 
-    #[task(binds = Dma1, priority=3)]
+    #[task(binds = Dma1, priority=3, init = generated)]
     struct Task2;
 
     impl RticTask for Task2 {
-        fn init() -> Self {
-            Self
-        }
-
         fn exec(&mut self) {}
     }
 }

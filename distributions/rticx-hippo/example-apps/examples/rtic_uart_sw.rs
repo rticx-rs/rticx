@@ -3,7 +3,7 @@
 use core::panic::PanicInfo;
 
 use hippomenes_rt as _;
-
+// FIXME: this example is broken, please fix according to the changes in `rtic_uart3.rs`
 #[rticx_hippo::app(device = hippomenes_core, dispatchers = [Interrupt2])]
 mod app {
     use core::fmt::Write;

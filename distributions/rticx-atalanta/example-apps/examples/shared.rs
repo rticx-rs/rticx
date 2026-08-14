@@ -13,15 +13,15 @@ mod app {
     }
 
     #[init]
-    fn init() -> Shared {
-        Shared { dummy: true }
+    fn init() -> (Shared, TaskInits) {
+        (Shared { dummy: true }, TaskInits {some_task: SomeTask::new()})
     }
 
     #[task(binds = Timer0Cmp, priority=1, shared=[dummy])]
     struct SomeTask {}
 
-    impl RticTask for SomeTask {
-        fn init() -> Self {
+    impl SomeTask {
+        fn new() -> Self {
             let _uart = ApbUart::init(CPU_FREQ, 115_200);
             sprintln!("init");
 
@@ -31,7 +31,9 @@ mod app {
 
             Self {}
         }
+    }
 
+    impl RticTask for SomeTask {
         fn exec(&mut self) {
             sprintln!("A");
             sprintln!("1");

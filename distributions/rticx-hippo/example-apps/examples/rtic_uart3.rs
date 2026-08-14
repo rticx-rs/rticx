@@ -14,23 +14,20 @@ mod app {
     }
 
     #[init]
-    fn init() -> Shared {
+    fn init() -> (Shared, TaskInits) {
         let peripherals = unsafe { hippomenes_core::Peripherals::steal() };
         let timer = peripherals.timer;
         let mut uart = peripherals.uart;
         write!(uart, "init").ok();
         timer.write(0x400F); //timer interrupt every
                              // 500*2^15 ~ 16M cycles ~0.75s @ 20MHz
-        Shared { uart }
+        (Shared { uart }, TaskInits {task3: Task3 {data: 0}})
     }
 
-    #[task(binds = Interrupt0, priority=1, shared=[uart])]
+    #[task(binds = Interrupt0, priority=1, shared=[uart], init = generated)]
     struct Task1;
 
     impl RticTask for Task1 {
-        fn init() -> Self {
-            Self
-        }
 
         fn exec(&mut self) {
             self.shared().uart.lock(|uart| {
@@ -45,13 +42,10 @@ mod app {
         }
     }
 
-    #[task(binds = Interrupt1, priority=3, shared=[uart])]
+    #[task(binds = Interrupt1, priority=3, shared=[uart], init = generated)]
     struct Task2;
 
     impl RticTask for Task2 {
-        fn init() -> Self {
-            Self
-        }
 
         fn exec(&mut self) {
             self.shared().uart.lock(|uart| {
@@ -69,10 +63,6 @@ mod app {
     }
 
     impl RticTask for Task3 {
-        fn init() -> Self {
-            Self { data: 0 }
-        }
-
         fn exec(&mut self) {
             self.shared().uart.lock(|uart| {
                 uart.write_byte(90);

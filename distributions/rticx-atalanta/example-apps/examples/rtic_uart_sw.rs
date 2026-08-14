@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+// FIXME: this example is broken, please fix according to the changes in `rtic_uart*.rs`
+
 #[rticx_atalanta::app(device = bsp, dispatchers = [Dma2])]
 mod app {
     use bsp::{

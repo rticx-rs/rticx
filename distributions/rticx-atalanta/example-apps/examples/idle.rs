@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+
+// FIXME: this example is broken, please fix according to the changes in `rtic_uart*.rs`
+
 #[rticx_atalanta::app(device = bsp)]
 mod app {
     use core::arch::asm;
