@@ -13,11 +13,11 @@ pub use rticx_async as async_rt;
 /// Exports required by the core pass and by generated code
 pub use cortex_m::interrupt::InterruptNumber; // a trait that abstracts an interrupt type
 pub use cortex_m::{
+    Peripherals,
     asm::nop,
     asm::wfi,
     interrupt,
-    peripheral::{scb::SystemHandler, DWT, NVIC, SCB, SYST},
-    Peripherals,
+    peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
 };
 
 #[inline]

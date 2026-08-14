@@ -1,17 +1,19 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-#[cfg(feature = "async")]
 use rticx_async_pass::{AsyncPass, AsyncPassBackend};
-#[cfg(feature = "autoassign")]
 use rticx_auto_assign::AutoAssignPass;
 use rticx_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
-#[cfg(feature = "swtasks")]
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 #[allow(unused)]
 use syn::{ItemFn, LitInt, Path, parse_quote};
 
 extern crate proc_macro;
+
+#[cfg(all(feature = "swtasks", feature = "async"))]
+compile_error!(
+    "rticx-rp2040-macro: the `swtasks` and `async` features are mutually exclusive; enable at most one"
+);
 
 /// Cortex-M exceptions that have a *configurable* priority. These may be bound
 /// to hardware tasks (their priority is set via `SCB`), but must not be used as
@@ -30,7 +32,6 @@ const CONFIGURABLE_EXCEPTIONS: &[&str] = &[
 /// Exceptions whose priority is *not* configurable. They may never be bound to a
 /// task (neither a dispatcher nor a user hardware task).
 const NON_CONFIGURABLE_EXCEPTIONS: &[&str] = &["NonMaskableInt", "HardFault"];
-#[cfg(any(feature = "async", feature = "swtasks"))]
 const FIFO_INTERRUPTS: &[&str] = &["SIO_IRQ_PROC1", "SIO_IRQ_PROC0"];
 
 fn is_exception(name: &Ident) -> bool {
@@ -41,20 +42,21 @@ fn is_exception(name: &Ident) -> bool {
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     // use the standard software pass provided by rticx-sw-pass crate
-    #[cfg(feature = "swtasks")]
     let sw_pass = SoftwarePass::new(SwPassBackendImpl);
 
-    #[cfg(feature = "async")]
     let async_pass = AsyncPass::new(AsyncPassBackendImpl);
 
     #[allow(unused_mut)]
     let mut builder = RticMacroBuilder::new(Rp2040Rtic);
-    #[cfg(feature = "autoassign")]
-    builder.bind_pre_core_pass(AutoAssignPass); // run auto-assign pass first
-    #[cfg(feature = "swtasks")]
-    builder.bind_pre_core_pass(sw_pass); // run software-pass second
-    #[cfg(feature = "async")]
-    builder.bind_pre_core_pass(async_pass); // run async-pass third
+    if cfg!(feature = "autoassign") {
+        builder.bind_pre_core_pass(AutoAssignPass); // run auto-assign pass first
+    }
+    if cfg!(feature = "swtasks") {
+        builder.bind_pre_core_pass(sw_pass); // run software-pass second
+    }
+    if cfg!(feature = "async") {
+        builder.bind_pre_core_pass(async_pass); // run async-pass third
+    }
     builder.build_rtic_macro(args, input)
 }
 
@@ -275,8 +277,10 @@ impl CorePassBackend for Rp2040Rtic {
                     ));
                 }
                 // Software tasks use FIFO for spawning tasks from one core to the other
-                #[cfg(any(feature = "async", feature = "swtasks"))]
-                if FIFO_INTERRUPTS.iter().any(|e| name == *e) {
+
+                if cfg!(any(feature = "async", feature = "swtasks"))
+                    && FIFO_INTERRUPTS.iter().any(|e| name == *e)
+                {
                     return Err(syn::Error::new(
                         binds.span(),
                         "FIFO interrupts are reserved by RTICX for cross-core tasks and cannot be for a hardware task",
@@ -288,9 +292,7 @@ impl CorePassBackend for Rp2040Rtic {
     }
 }
 
-#[cfg(feature = "swtasks")]
 struct SwPassBackendImpl;
-#[cfg(feature = "swtasks")]
 impl SwPassBackend for SwPassBackendImpl {
     /// Path to the SPSC queue type re-exported by this distribution.
     fn queue_path(&self) -> Path {
@@ -325,9 +327,7 @@ impl SwPassBackend for SwPassBackendImpl {
     }
 }
 
-#[cfg(feature = "async")]
 struct AsyncPassBackendImpl;
-#[cfg(feature = "async")]
 impl AsyncPassBackend for AsyncPassBackendImpl {
     fn queue_path(&self) -> Path {
         parse_quote!(rticx_rp2040::export::Queue)

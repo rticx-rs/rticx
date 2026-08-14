@@ -4,6 +4,14 @@ pub mod export;
 
 pub use rticx_riscv_macro::app;
 
+// The `swtasks` and `async` features are mutually exclusive: both passes
+// generate their own `spawn`/channel/dispatcher machinery and cannot coexist
+// in a single build.
+#[cfg(all(feature = "swtasks", feature = "async"))]
+compile_error!(
+    "rticx-riscv: the `swtasks` and `async` features are mutually exclusive; enable at most one"
+);
+
 // Enforce that exactly one of the target selector features is enabled.
 #[cfg(not(any(feature = "slic", feature = "esp32c3", feature = "esp32c6")))]
 compile_error!(

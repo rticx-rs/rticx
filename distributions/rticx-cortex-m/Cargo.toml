@@ -22,12 +22,12 @@ rticx-async = { version = "0.2.0", path = "../../rticx-async", optional = true }
 rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
 
 [features]
-# Software tasks pass
-swtasks = ["rticx-cortex-m-macro/swtasks"]
 # Use interrupt source-masking for locking (armv6-m: Cortex-M0/M0+/M23).
 # When disabled (default), BASEPRI-based locking is used (armv7-m and above).
 armv6m = ["rticx-cortex-m-macro/armv6m", "rticx-async/atomic-critical-section"]
-# Async/await software tasks support (rticx-async-pass)
+# Software tasks pass. Mutually exclusive with `async`
+swtasks = ["rticx-cortex-m-macro/swtasks"]
+# Async/await software tasks support (rticx-async-pass). Mutually exclusive with `swtasks`.
 async = [
     "rticx-cortex-m-macro/async",
     "dep:rticx-async",

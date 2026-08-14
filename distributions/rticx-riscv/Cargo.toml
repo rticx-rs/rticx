@@ -44,9 +44,11 @@ rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
 [features]
 
 # Enable software tasks (spawn / spawn_dispatch).
+# Mutually exclusive with `async`
 swtasks = ["rticx-riscv-macro/swtasks"]
 
-# Enable async/await software tasks (rticx-async-pass)
+# Enable async/await software tasks (rticx-async-pass).
+# Mutually exclusive with `swtasks`.
 async = ["rticx-riscv-macro/async", "dep:rticx-async"]
 
 # --- Mutually exclusive target selectors -------------------------------------

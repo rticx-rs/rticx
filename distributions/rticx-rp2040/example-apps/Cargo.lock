@@ -585,6 +585,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rticx-auto-assign"
+version = "0.2.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "syn 2.0.119",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "rticx-core"
 version = "0.2.0"
 dependencies = [
@@ -633,6 +645,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rticx-async-pass",
+ "rticx-auto-assign",
  "rticx-core",
  "rticx-sw-pass",
  "syn 2.0.119",

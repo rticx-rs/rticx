@@ -374,6 +374,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3f2ad9f15a07f4a0e1677124f9120ce7e83ab7e1ca7186af0ca9da529b62e80"
 
 [[package]]
+name = "rticx-async-pass"
+version = "0.2.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "syn",
+]
+
+[[package]]
 name = "rticx-core"
 version = "0.2.0"
 dependencies = [
@@ -402,6 +413,7 @@ version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rticx-async-pass",
  "rticx-core",
  "rticx-sw-pass",
  "syn",

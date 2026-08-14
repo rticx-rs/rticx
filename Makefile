@@ -9,7 +9,7 @@ CRATES := rticx-core \
           compilation-passes/rticx-async-pass
 
 # Default target: run everything CI would run.
-all: fmt-check test clippy
+all: fmt-check test clippy distros
 
 # Alias for CI.
 ci: all
@@ -68,3 +68,10 @@ qemu-armv6m:
 
 qemu-slic:
 	@$(MAKE) -C distributions/rticx-riscv/examples/slic-examples
+
+distros: 
+	make -C distributions/rticx-cortex-m clippy fmt-check
+	make -C distributions/rticx-riscv clippy fmt-check
+	make -C distributions/rticx-rp2040 all
+# FIXME: enable this once CI supports esp32 qemu
+# 	make -C distributions/rticx-riscv/examples/esp32c3-examples

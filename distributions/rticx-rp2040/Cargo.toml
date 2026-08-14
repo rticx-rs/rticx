@@ -27,7 +27,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(have_basepri)'] }
 
 [features]
 autoassign = ["rticx-rp2040-macro/autoassign"]
+# Software tasks pass. Mutually exclusive with `async`
 swtasks = ["rticx-rp2040-macro/swtasks"]
+# Async/await software tasks support. Mutually exclusive with `swtasks`.
 async = [
     "rticx-rp2040-macro/async",
     "dep:rticx-async",

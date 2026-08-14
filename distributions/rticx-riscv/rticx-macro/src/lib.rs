@@ -4,18 +4,20 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 
-#[cfg(feature = "async")]
 use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 use rticx_core::{
     Analysis, App, AppArgs, CorePassBackend, InfoBus, RticMacroBuilder, SubAnalysis, SubApp,
 };
-#[cfg(feature = "swtasks")]
+
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-#[cfg(feature = "swtasks")]
-use syn::Path;
-use syn::{ItemFn, parse_quote};
+use syn::{ItemFn, Path, parse_quote};
 
 extern crate proc_macro;
+
+#[cfg(all(feature = "swtasks", feature = "async"))]
+compile_error!(
+    "rticx-riscv-macro: the `swtasks` and `async` features are mutually exclusive; enable at most one"
+);
 
 // ============================================================================
 // Entry point – dispatches to the selected backend
@@ -23,17 +25,16 @@ extern crate proc_macro;
 
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
-    #[cfg(feature = "swtasks")]
     let sw_pass = SoftwarePass::new(SwBackendImpl);
-    #[cfg(feature = "async")]
     let async_pass = AsyncPass::new(AsyncPassBackendImpl);
 
-    #[allow(unused_mut)]
     let mut builder = RticMacroBuilder::new(BackendImpl::default());
-    #[cfg(feature = "swtasks")]
-    builder.bind_pre_core_pass(sw_pass);
-    #[cfg(feature = "async")]
-    builder.bind_pre_core_pass(async_pass);
+    if cfg!(feature = "swtasks") {
+        builder.bind_pre_core_pass(sw_pass);
+    }
+    if cfg!(feature = "async") {
+        builder.bind_pre_core_pass(async_pass);
+    }
     builder.build_rtic_macro(args, input)
 }
 
@@ -284,29 +285,28 @@ impl CorePassBackend for BackendImpl {
         #[cfg(any(feature = "esp32c3", feature = "esp32c6"))]
         {
             let info = self.info.get().expect("info must be set");
-            let sw_pas = info
-                .get::<rticx_sw_pass::App>(rticx_sw_pass::INFO_APP)
-                .expect("sw pass promise violated");
-            let allowed_names = [
-                "FROM_CPU_INTR0",
-                "FROM_CPU_INTR1",
-                "FROM_CPU_INTR2",
-                "FROM_CPU_INTR3",
-            ];
+            if let Ok(sw_pas) = info.get::<rticx_sw_pass::App>(rticx_sw_pass::INFO_APP) {
+                let allowed_names = [
+                    "FROM_CPU_INTR0",
+                    "FROM_CPU_INTR1",
+                    "FROM_CPU_INTR2",
+                    "FROM_CPU_INTR3",
+                ];
 
-            for irq_name in sw_pas.sub_apps[0].dispatchers.iter() {
-                use quote::ToTokens;
-                let irq_name = irq_name.segments.to_token_stream();
-                if !allowed_names.contains(&irq_name.to_string().trim()) {
-                    use syn::spanned::Spanned;
+                for irq_name in sw_pas.sub_apps[0].dispatchers.iter() {
+                    use quote::ToTokens;
+                    let irq_name = irq_name.segments.to_token_stream();
+                    if !allowed_names.contains(&irq_name.to_string().trim()) {
+                        use syn::spanned::Spanned;
 
-                    return Err(syn::Error::new(
-                        irq_name.span(),
-                        "Only FROM_CPU_INTR{0..3} are supported as \
+                        return Err(syn::Error::new(
+                            irq_name.span(),
+                            "Only FROM_CPU_INTR{0..3} are supported as \
                          interrupt sources on ESP32 targets.  Use these \
                          as dispatchers: `#[app(..., dispatchers = \
                          [FROM_CPU_INTR0, ...])]`.",
-                    ));
+                        ));
+                    }
                 }
             }
         }
@@ -319,10 +319,8 @@ impl CorePassBackend for BackendImpl {
 // Software-tasks pass backend
 // ============================================================================
 
-#[cfg(feature = "swtasks")]
 struct SwBackendImpl;
 
-#[cfg(feature = "swtasks")]
 impl SwPassBackend for SwBackendImpl {
     /// Path to the SPSC queue type re-exported by this distribution.
     fn queue_path(&self) -> Path {
@@ -358,10 +356,8 @@ impl SwPassBackend for SwBackendImpl {
 // Async-tasks pass backend
 // ============================================================================
 
-#[cfg(feature = "async")]
 struct AsyncPassBackendImpl;
 
-#[cfg(feature = "async")]
 impl AsyncPassBackend for AsyncPassBackendImpl {
     fn queue_path(&self) -> Path {
         parse_quote!(rticx_riscv::export::Queue)

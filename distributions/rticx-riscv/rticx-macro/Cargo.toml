@@ -21,25 +21,22 @@ rticx-core = { version = "0.2.0", path = "../../../rticx-core" }
 # rticx-core = { version = "0.2.0", path = "../../../rticx-core" , features = ["debug_expand"]}
 syn = { version = "2.0.52", features = ["extra-traits", "full"] }
 rticx-sw-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-sw-pass" }
-rticx-async-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-async-pass", optional = true }
+rticx-async-pass = { version = "0.2.0", path = "../../../compilation-passes/rticx-async-pass" }
 
 [features]
-default = ["swtasks"]
 
-# Enable software tasks pass (spawn / spawn_dispatch).
-swtasks = []
-
-# --- Target selector features (mirror the parent `rticx-riscv` crate) ---------
-# These are pure cfg gates used by the proc-macro to pick the right
-# `CorePassBackend` + `SwPassBackend` implementation. They carry no
-# dependencies of their own: the actual runtime dependencies live in the
-# library crate.
 slic = []
-esp32c3 = []
-esp32c6 = []
-
 mecall-backend = ["slic"]
 clint-backend = ["slic"]
 
-# Enable async/await software tasks (rticx-async-pass)
-async = ["dep:rticx-async-pass"]
+esp32c3 = []
+esp32c6 = []
+
+
+# Enable simple software tasks (rticx-sw-pass).
+# Mutually exclusive with `swtasks`.
+swtasks = []
+
+# Enable async/await software tasks (rticx-async-pass).
+# Mutually exclusive with `swtasks`.
+async = []

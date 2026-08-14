@@ -11,7 +11,7 @@ fmt-check:
 	cargo fmt --all --check
 
 clippy:
-	cargo clippy --all-targets --all-features
+	cargo clippy --all-targets
 
 examples:
 	make -C example-apps all
