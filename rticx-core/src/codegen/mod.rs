@@ -5,9 +5,9 @@ use task_init::{generate_task_inits_struct, generate_task_inits_write_calls};
 
 use crate::CorePassBackend;
 use crate::MainInjections;
-use crate::analysis::Analysis;
+use crate::analysis::{Analysis, SubAnalysis};
 use crate::parser::ast::{RticTask, SharedResources};
-use crate::parser::{App, ast::IdleTask};
+use crate::parser::{App, SubApp, ast::IdleTask};
 use crate::rticx_functions::{
     INTERRUPT_FREE_FN, generate_task_traits_check_functions, get_interrupt_free_fn,
 };
@@ -99,213 +99,215 @@ impl<'a> CodeGen<'a> {
             .sub_apps
             .iter()
             .zip(self.analysis.sub_analysis.iter());
+        let apps = iter.map(|(app, analysis)| self.generate_sub_app(implementation, app, analysis));
+
+        quote!( #(#apps)* )
+    }
+
+    fn generate_sub_app(
+        &self,
+        implementation: &dyn CorePassBackend,
+        app: &SubApp,
+        analysis: &SubAnalysis,
+    ) -> TokenStream2 {
         let args = &self.app.args;
-        let apps = iter.map(|(app, analysis)| {
-            let post_init = implementation.post_init(args, app, analysis);
 
-            // init
-            let def_init_task = &app.init.body;
-            let init_task = &app.init.ident;
-            let task_inits_ident = if self.app.sub_apps.len() == 1 {
-                format_ident!("TaskInits")
-            } else {
-                format_ident!("TaskInitsCore{}", app.core)
-            };
-            let task_inits_struct =
-                generate_task_inits_struct(&task_inits_ident, &analysis.late_resource_tasks);
+        let backend_post_init = implementation.post_init(args, app, analysis);
 
-            // idle
-            let def_idle_task = app.idle.as_ref().map(|idle| {
-                let idle_task = idle.generate_task_def(app.shared.as_ref());
-                Some(idle_task)
-            });
+        // init
+        let init_fn = &app.init.body;
+        let init_fn_ident = &app.init.ident;
+        let task_inits_ident = if self.app.sub_apps.len() == 1 {
+            format_ident!("TaskInits")
+        } else {
+            format_ident!("TaskInitsCore{}", app.core)
+        };
+        let task_inits_struct =
+            generate_task_inits_struct(&task_inits_ident, &analysis.late_resource_tasks);
 
-            // post_init
-            let post_init_call = app.post_init.as_ref().map(|pi| {
-                let ident = &pi.ident;
-                let body = &pi.body;
-                quote! {
-                    #[doc(hidden)]
-                    #body
+        // idle
+        let idle_task_def = app
+            .idle
+            .as_ref()
+            .map(|idle| idle.generate_task_def(app.shared.as_ref()));
 
-                    #ident();
-                }
-            });
-
-            let call_idle_task =
-                generate_idle_call(app.idle.as_ref(), implementation.populate_idle_loop());
-
-            // tasks
-            let tasks_def = app
-                .tasks
-                .iter()
-                .map(|task| task.generate_task_def(app.shared.as_ref()));
-            let task_init_calls: Vec<_> = app
-                .tasks
-                .iter()
-                .filter_map(RticTask::task_init_call)
-                .collect();
-            let generated_task_inits = if task_init_calls.is_empty() {
-                quote! {}
-            } else {
-                quote! { unsafe {#(#task_init_calls)*} }
-            };
-
-            let hw_tasks_binds = app
-                .tasks
-                .iter()
-                .filter_map(|t| t.generate_hw_task_to_irq_binding(implementation));
-
-            // shared resources
-            let shared = app.shared.as_ref();
-            let def_shared = shared.map(|shared| shared.generate_shared_resources_def());
-            let shared_resources_handle = shared.map(SharedResources::name_uppercase);
-
-            let resource_proxies = app
-                .shared
-                .as_ref()
-                .map(|shared| shared.generate_resource_proxies(implementation, args, app));
-
-            // local and shared resources initialization
-            let tasks_initializer = format_ident!("__task_inits");
-            let user_task_inits_writes = if analysis.late_resource_tasks.is_empty() {
-                quote! {}
-            } else {
-                generate_task_inits_write_calls(&analysis.late_resource_tasks, &tasks_initializer)
-            };
-            let shared_resource_ty = shared.map(|s| &s.strct.ident);
-
-            let init_system = if let Some(shared_resource_ty) = shared_resource_ty {
-                quote! {
-                    let (__shared_resources, #tasks_initializer) : (#shared_resource_ty, #task_inits_ident) = #init_task(); // call to init and get shared and local resources inits
-                    unsafe {#shared_resources_handle.write(__shared_resources);} // init shared resources
-                    #user_task_inits_writes
-                }
-            } else {
-                quote! {
-                    let #tasks_initializer : #task_inits_ident = #init_task(); // call to init and get shared and local resources inits
-                    #user_task_inits_writes
-                }
-            };
-
-            // priority masks
-            let priority_masks = implementation.generate_global_definitions(args, app, analysis);
-            let entry_attrs = implementation.entry_attrs();
-            let entry_name = implementation.entry_name(app.core);
-
-            let interrupt_free = format_ident!("{}", INTERRUPT_FREE_FN);
-
-            let def_core_type = generate_core_type(app.core);
-
-            let empty = Vec::new();
-            let before_init = self
-                .injections
-                .map(|inj| &inj.before_init)
-                .unwrap_or(&empty);
-            let before_post_init = self
-                .injections
-                .map(|inj| &inj.before_post_init)
-                .unwrap_or(&empty);
-            let before_idle = self
-                .injections
-                .map(|inj| &inj.before_idle)
-                .unwrap_or(&empty);
-
-            let doc = format!(" # CORE {}", app.core);
-            let entry_of = format!(" # Entry of CORE {}", app.core);
+        // user post_init function, called after the critical section
+        let user_post_init_call = app.post_init.as_ref().map(|pi| {
+            let ident = &pi.ident;
+            let body = &pi.body;
             quote! {
-                #[doc = #doc]
-                // define static mut shared resources
-                #def_shared
-                // init task
-                #def_init_task
-                // idle task
-                #def_idle_task
-                // define tasks
-                #(#tasks_def)*
-                // bind hw tasks to interrupts
-                #(#hw_tasks_binds)*
-                // proxies for accessing the shared resources
-                #resource_proxies
-                // unique type for the specific sub-app/core
-                #def_core_type
-                // Computed priority Masks
-                #priority_masks
-                /// Type holding one value per user task, returned from `#[init]`.
-                /// Tasks are constructed inline or via user-defined helpers.
-                #task_inits_struct
+                #[doc(hidden)]
+                #body
 
-                #[doc = #entry_of]
-                #(#entry_attrs)*
-                #[unsafe(no_mangle)]
-                fn #entry_name() -> ! {
-                    // Disable interrupts during initialization
-                    #interrupt_free(||{
-                        #(#before_init)*
-
-                        // user init code
-                        #init_system
-
-                        // init framework-generated tasks
-                        #generated_task_inits
-
-                        // injections before post_init
-                        #(#before_post_init)*
-
-                        // post initialization code
-                        #post_init
-                    });
-
-                    // injections before idle
-                    #(#before_idle)*
-
-                    // user post_init function
-                    #post_init_call
-
-                    #call_idle_task
-                }
-
+                #ident();
             }
         });
 
-        quote!( #(#apps)* )
+        let call_idle_task =
+            generate_idle_call(app.idle.as_ref(), implementation.populate_idle_loop());
+
+        // tasks
+        let task_defs = app
+            .tasks
+            .iter()
+            .map(|task| task.generate_task_def(app.shared.as_ref()));
+        let generated_task_init_calls: Vec<_> = app
+            .tasks
+            .iter()
+            .filter_map(RticTask::task_init_call)
+            .collect();
+        let generated_task_inits_block = if generated_task_init_calls.is_empty() {
+            quote! {}
+        } else {
+            quote! { unsafe {#(#generated_task_init_calls)*} }
+        };
+
+        let hw_task_bindings = app
+            .tasks
+            .iter()
+            .filter_map(|t| t.generate_hw_task_to_irq_binding(implementation));
+
+        // shared resources
+        let shared = app.shared.as_ref();
+        let shared_resources_def = shared.map(|shared| shared.generate_shared_resources_def());
+        let shared_resources_handle = shared.map(SharedResources::name_uppercase);
+
+        let resource_proxies = app
+            .shared
+            .as_ref()
+            .map(|shared| shared.generate_resource_proxies(implementation, args, app));
+
+        // local and shared resources initialization
+        let user_task_inits_var = format_ident!("__task_inits");
+        let user_task_inits_writes = if analysis.late_resource_tasks.is_empty() {
+            quote! {}
+        } else {
+            generate_task_inits_write_calls(&analysis.late_resource_tasks, &user_task_inits_var)
+        };
+        let shared_resource_ty = shared.map(|s| &s.strct.ident);
+
+        let init_system = if let Some(shared_resource_ty) = shared_resource_ty {
+            quote! {
+                let (__shared_resources, #user_task_inits_var) : (#shared_resource_ty, #task_inits_ident) = #init_fn_ident(); // call to init and get shared and local resources inits
+                unsafe {#shared_resources_handle.write(__shared_resources);} // init shared resources
+                #user_task_inits_writes
+            }
+        } else {
+            quote! {
+                let #user_task_inits_var : #task_inits_ident = #init_fn_ident(); // call to init and get shared and local resources inits
+                #user_task_inits_writes
+            }
+        };
+
+        // priority masks
+        let priority_masks = implementation.generate_global_definitions(args, app, analysis);
+        let entry_attrs = implementation.entry_attrs();
+        let entry_name = implementation.entry_name(app.core);
+
+        let interrupt_free = format_ident!("{}", INTERRUPT_FREE_FN);
+
+        let core_type_def = generate_core_type(app.core);
+
+        let before_init = self
+            .injections
+            .map(|inj| inj.before_init.as_slice())
+            .unwrap_or(&[]);
+        let before_post_init = self
+            .injections
+            .map(|inj| inj.before_post_init.as_slice())
+            .unwrap_or(&[]);
+        let before_idle = self
+            .injections
+            .map(|inj| inj.before_idle.as_slice())
+            .unwrap_or(&[]);
+
+        let doc = format!(" # CORE {}", app.core);
+        let entry_of = format!(" # Entry of CORE {}", app.core);
+        quote! {
+            #[doc = #doc]
+            // define static mut shared resources
+            #shared_resources_def
+            // init task
+            #init_fn
+            // idle task
+            #idle_task_def
+            // define tasks
+            #(#task_defs)*
+            // bind hw tasks to interrupts
+            #(#hw_task_bindings)*
+            // proxies for accessing the shared resources
+            #resource_proxies
+            // unique type for the specific sub-app/core
+            #core_type_def
+            // Computed priority Masks
+            #priority_masks
+            /// Type holding one value per user task, returned from `#[init]`.
+            /// Tasks are constructed inline or via user-defined helpers.
+            #task_inits_struct
+
+            #[doc = #entry_of]
+            #(#entry_attrs)*
+            #[unsafe(no_mangle)]
+            fn #entry_name() -> ! {
+                // Disable interrupts during initialization
+                #interrupt_free(||{
+                    #(#before_init)*
+
+                    // user init code
+                    #init_system
+
+                    // init framework-generated tasks
+                    #generated_task_inits_block
+
+                    // injections before post_init
+                    #(#before_post_init)*
+
+                    // post initialization code
+                    #backend_post_init
+                });
+
+                // injections before idle
+                #(#before_idle)*
+
+                // user post_init function
+                #user_post_init_call
+
+                #call_idle_task
+            }
+
+        }
     }
 }
 
 fn generate_idle_call(idle: Option<&IdleTask>, wfi: Option<TokenStream2>) -> TokenStream2 {
-    if let Some(idle) = idle {
-        let idle_ty = &idle.name();
-        let idle_instance_name = &idle.name_uppercase();
-        if idle.init_generated {
-            quote! {
-                unsafe {
-                    #idle_instance_name.write(#idle_ty);
-                    #idle_instance_name.assume_init_mut().exec();
-                }
-
-            }
-        } else {
-            let idle_instance_name = &idle.name_uppercase();
-            quote! {
-                unsafe {
-                    #idle_instance_name.assume_init_mut().exec();
-                }
-            }
-        }
-    } else {
-        quote! {
+    let Some(idle) = idle else {
+        return quote! {
             loop {
                 #wfi
             }
+        };
+    };
+
+    let idle_ty = idle.name();
+    let idle_instance_name = idle.name_uppercase();
+    let write = if idle.init_generated {
+        quote! { #idle_instance_name.write(#idle_ty); }
+    } else {
+        quote! {}
+    };
+    quote! {
+        unsafe {
+            #write
+            #idle_instance_name.assume_init_mut().exec();
         }
     }
 }
 
-/// Generates a unique type for some core that is unsafe to create by the uer.
-/// I.e, it will be used for internal purposes so the the user shouldn't attemp to create it
+/// Generates a unique type for some core that is unsafe to create by the user.
+/// I.e, it is used for internal purposes only, so the user shouldn't attempt to create it.
 fn generate_core_type(core: u32) -> TokenStream2 {
     let core_ty = utils::core_type(core);
-    let innter_core_ty = utils::core_type_inner(core);
+    let inner_core_ty = utils::core_type_inner(core);
     let mod_core_ty = utils::core_type_mod(core);
     let doc = format!("Unique type for core {core}");
 
@@ -313,11 +315,11 @@ fn generate_core_type(core: u32) -> TokenStream2 {
         #[doc = #doc]
         pub use #mod_core_ty::#core_ty;
         mod #mod_core_ty {
-            struct #innter_core_ty;
-            pub struct #core_ty(#innter_core_ty);
+            struct #inner_core_ty;
+            pub struct #core_ty(#inner_core_ty);
             impl #core_ty {
                 pub const unsafe fn new() -> Self {
-                    #core_ty(#innter_core_ty)
+                    #core_ty(#inner_core_ty)
                 }
             }
         }
