@@ -1,13 +1,11 @@
 use std::collections::HashSet;
 
-use proc_macro2::Span;
 use syn::Ident;
 use syn::spanned::Spanned;
 
 use crate::App;
 use crate::parser::SubApp;
 use crate::parser::ast::{HardwareTask, SharedResources};
-use heck::ToSnakeCase;
 #[derive(Debug, Clone)]
 pub struct Analysis {
     pub sub_analysis: Vec<SubAnalysis>,
@@ -52,7 +50,7 @@ impl Analysis {
 pub struct SubAnalysis {
     // used interrupts and their priorities
     pub used_irqs: Vec<(syn::Ident, u16)>,
-    // tasks requiring some late local resource initialization.
+    // tasks the user must initialize through the `TaskInits` struct returned by `#[init]`
     pub late_resource_tasks: Vec<LateResourceTask>,
 }
 
@@ -74,7 +72,7 @@ impl SubAnalysis {
             .iter()
             .chain(app.idle.iter()) // idle is also a task and we shouldn't forget it
             .filter_map(|t| {
-                if t.init_generated {
+                if t.args.init_generated {
                     None
                 } else {
                     Some(LateResourceTask {
@@ -124,12 +122,10 @@ pub struct LateResourceTask {
 impl LateResourceTask {
     /// By convention, this method is used to generate the name of the static task instance
     pub fn name_uppercase(&self) -> Ident {
-        let name = self.task_name.to_string().to_snake_case().to_uppercase();
-        Ident::new(&name, Span::call_site())
+        crate::parser::ast::uppercase_ident(&self.task_name)
     }
 
     pub fn name_snakecase(&self) -> Ident {
-        let name = self.task_name.to_string().to_snake_case();
-        Ident::new(&name, Span::call_site())
+        crate::parser::ast::snakecase_ident(&self.task_name)
     }
 }

@@ -19,7 +19,7 @@ impl RticTask {
 
         let task_prio_impl = self.generate_priority_func();
         let shared_mod = shared_resources.map(|shared| shared.generate_shared_for_task(self));
-        let current_current_fn = self.generate_current_core_fn();
+        let current_core_fn = self.generate_current_core_fn();
         quote! {
             static mut #task_static_handle: core::mem::MaybeUninit<#task_ty> = core::mem::MaybeUninit::uninit();
             #task_struct
@@ -29,12 +29,12 @@ impl RticTask {
 
             #task_prio_impl
             #shared_mod
-            #current_current_fn
+            #current_core_fn
         }
     }
 
     pub fn task_init_call(&self) -> Option<TokenStream2> {
-        if !self.init_generated {
+        if !self.args.init_generated {
             // user tasks are constructed by the user through `TaskInits`
             return None;
         }

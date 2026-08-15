@@ -290,7 +290,7 @@ fn generate_idle_call(idle: Option<&IdleTask>, wfi: Option<TokenStream2>) -> Tok
 
     let idle_ty = idle.name();
     let idle_instance_name = idle.name_uppercase();
-    let write = if idle.init_generated {
+    let write = if idle.args.init_generated {
         quote! { #idle_instance_name.write(#idle_ty); }
     } else {
         quote! {}

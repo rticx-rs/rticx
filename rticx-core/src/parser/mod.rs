@@ -105,7 +105,7 @@ impl App {
 
         let mut shared = Self::construct_shared_resources(shared_resources)?;
         let mut inits = Self::construct_inits(inits, span)?;
-        let mut post_inits = Self::construct_post_inits(post_inits, span)?;
+        let mut post_inits = Self::construct_post_inits(post_inits)?;
         let mut idles = Self::construct_idle_tasks(idles, &task_impls)?;
         let mut tasks = Self::construct_rtic_tasks(task_structs, &task_impls)?;
 
@@ -270,7 +270,6 @@ impl App {
 
             let tasks = out.entry(args.core).or_insert_with(Vec::new);
             let task = RticTask {
-                init_generated: args.init_generated,
                 args,
                 task_struct,
                 struct_impl,
@@ -308,7 +307,6 @@ impl App {
                 ));
             }
             let task = IdleTask {
-                init_generated: args.init_generated,
                 args,
                 task_struct: idle_struct,
                 struct_impl,
@@ -354,7 +352,6 @@ impl App {
 
     fn construct_post_inits(
         post_inits: Vec<(ItemFn, usize)>,
-        _module_span: Span,
     ) -> syn::Result<HashMap<u32, PostInitTask>> {
         let mut out = HashMap::new();
         for (mut post_init_fn, init_attr_idx) in post_inits {

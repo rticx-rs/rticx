@@ -225,7 +225,7 @@ fn task_is_user_initializable_by_default() {
     let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
     let app = App::parse(args, module).expect("valid app");
     let task = &app.sub_apps[0].tasks[0];
-    assert!(!task.init_generated);
+    assert!(!task.args.init_generated);
     assert!(task.task_init_call().is_none());
 }
 
@@ -254,7 +254,7 @@ fn task_marks_generated_as_framework_initialized() {
     let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
     let app = App::parse(args, module).expect("valid app");
     let task = &app.sub_apps[0].tasks[0];
-    assert!(task.init_generated);
+    assert!(task.args.init_generated);
     assert!(task.task_init_call().is_some());
 }
 

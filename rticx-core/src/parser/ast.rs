@@ -97,9 +97,6 @@ pub struct RticTask {
     pub args: TaskArgs,
     pub task_struct: ItemStruct,
     pub struct_impl: Option<ItemImpl>,
-    /// Whether the framework constructs this task at boot (`init = generated`).
-    /// User tasks are constructed by the user through `TaskInits`.
-    pub init_generated: bool,
 }
 
 impl RticTask {
@@ -109,19 +106,24 @@ impl RticTask {
 
     /// By convention, this method is used to generate the name of the static task instance
     pub fn name_uppercase(&self) -> Ident {
-        let name = self
-            .task_struct
-            .ident
-            .to_string()
-            .to_snake_case()
-            .to_uppercase();
-        Ident::new(&name, Span::call_site())
+        uppercase_ident(&self.task_struct.ident)
     }
 
     pub fn name_snakecase(&self) -> Ident {
-        let name = self.task_struct.ident.to_string().to_snake_case();
-        Ident::new(&name, Span::call_site())
+        snakecase_ident(&self.task_struct.ident)
     }
+}
+
+/// By convention, used to generate the name of a static task/resource instance.
+pub fn uppercase_ident(ident: &Ident) -> Ident {
+    let name = ident.to_string().to_snake_case().to_uppercase();
+    Ident::new(&name, Span::call_site())
+}
+
+/// By convention, used to generate snake-cased names (e.g. struct fields).
+pub fn snakecase_ident(ident: &Ident) -> Ident {
+    let name = ident.to_string().to_snake_case();
+    Ident::new(&name, Span::call_site())
 }
 
 #[derive(Debug, Clone)]
@@ -165,8 +167,7 @@ impl SharedResources {
             .find(|field| &field.ident == field_name)
     }
     pub fn name_uppercase(&self) -> Ident {
-        let name = self.strct.ident.to_string().to_snake_case().to_uppercase();
-        Ident::new(&name, Span::call_site())
+        uppercase_ident(&self.strct.ident)
     }
 }
 

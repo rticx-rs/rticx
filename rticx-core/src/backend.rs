@@ -1,7 +1,7 @@
 use super::*;
 
 /// Interface for providing the low-level hardware bindings specific for a target(s) (A.k.a The Backend) to be used during code generation phase
-/// of the **Core Compilation Pass*.
+/// of the **Core Compilation Pass**.
 pub trait CorePassBackend {
     /// Code emitted **after** `#[init]` and all task `init()` functions,
     /// but **before** the idle loop begins.  Runs inside a critical
