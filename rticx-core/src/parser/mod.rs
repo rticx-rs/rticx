@@ -176,7 +176,11 @@ impl App {
             && !path.segments.is_empty()
             && let Type::Path(struct_type) = impl_item.self_ty.as_ref()
         {
-            return Some(struct_type.path.segments[0].ident.to_string());
+            return struct_type
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string());
         }
         None
     }
@@ -259,13 +263,7 @@ impl App {
                 .get(&task_struct.ident.to_string())
                 .and_then(|impls| {
                     impls.iter().find(|impl_item| {
-                        if let Some((_, path, _)) = &impl_item.trait_
-                            && !path.segments.is_empty()
-                            && path.segments[0].ident.to_string().ends_with(&trait_name)
-                        {
-                            return true;
-                        }
-                        false
+                        Self::impl_trait_str(impl_item).as_deref() == Some(trait_name.as_str())
                     })
                 })
                 .cloned();
@@ -293,13 +291,7 @@ impl App {
                 .get(&idle_struct.ident.to_string())
                 .and_then(|impls| {
                     impls.iter().find(|impl_item| {
-                        if let Some((_, path, _)) = &impl_item.trait_
-                            && !path.segments.is_empty()
-                            && path.segments[0].ident.to_string().ends_with(IDLE_TRAIT_TY)
-                        {
-                            return true;
-                        }
-                        false
+                        Self::impl_trait_str(impl_item).as_deref() == Some(IDLE_TRAIT_TY)
                     })
                 })
                 .cloned();
