@@ -287,3 +287,82 @@ fn task_mismatched_trait_impl_not_captured() {
     // The impl RticTask does NOT match task_trait = RticAsyncTask, so it should NOT be captured
     assert!(task.struct_impl.is_none());
 }
+
+#[test]
+fn duplicate_init_per_core_errors() {
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct Shared {}
+
+            #[init]
+            fn init_a() -> (Shared, TaskInits) {
+                (Shared {}, TaskInits { uart_task: UartTask })
+            }
+
+            #[init]
+            fn init_b() -> (Shared, TaskInits) {
+                (Shared {}, TaskInits { uart_task: UartTask })
+            }
+
+            #[task(binds = UART, priority = 2)]
+            struct Foo;
+        }
+    };
+    let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
+    let err = App::parse(args, module).expect_err("duplicate init must fail");
+    assert!(err.to_string().contains("multiple `#[init]` functions"));
+}
+
+#[test]
+fn duplicate_shared_per_core_errors() {
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct SharedA {}
+
+            #[shared]
+            struct SharedB {}
+
+            #[init]
+            fn init() -> (SharedA, TaskInits) {
+                (SharedA {}, TaskInits { uart_task: UartTask })
+            }
+
+            #[task(binds = UART, priority = 2)]
+            struct Foo;
+        }
+    };
+    let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
+    let err = App::parse(args, module).expect_err("duplicate shared must fail");
+    assert!(err.to_string().contains("multiple `#[shared]` structs"));
+}
+
+#[test]
+fn duplicate_impls_same_trait_error() {
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared]
+            struct Shared {}
+
+            #[init]
+            fn init() -> (Shared, TaskInits) {
+                (Shared {}, TaskInits { uart_task: UartTask })
+            }
+
+            #[task(binds = UART, priority = 2)]
+            struct Foo;
+
+            impl RticTask for Foo {
+                fn exec(&mut self) {}
+            }
+
+            impl RticTask for Foo {
+                fn exec(&mut self) {}
+            }
+        }
+    };
+    let args: proc_macro2::TokenStream = quote::quote!(device = mypac);
+    let err = App::parse(args, module).expect_err("duplicate impl must fail");
+    assert!(err.to_string().contains("duplicate `impl RticTask`"));
+}

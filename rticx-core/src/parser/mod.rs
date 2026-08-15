@@ -40,9 +40,10 @@ impl App {
         // but it is not decided yet how this will be handled
         let mut idles = Vec::new();
         let mut task_structs = Vec::new();
-        let mut task_impls: HashMap<String, ItemImpl> = HashMap::new();
+        let mut task_impls: HashMap<String, Vec<ItemImpl>> = HashMap::new();
         let mut user_includes = Vec::new();
         let mut other_code = Vec::new();
+        let mut errors = Vec::new();
         let app_mod_items = module
             .content
             .ok_or(syn::Error::new(span, "Empty app module."))?
@@ -72,7 +73,23 @@ impl App {
                 }
                 Item::Impl(impl_item) => {
                     if let Some(implementor) = Self::capture_trait_impl(&impl_item) {
-                        let _ = task_impls.insert(implementor, impl_item);
+                        let impls = task_impls.entry(implementor.clone()).or_default();
+                        if let Some(existing) = impls.iter().find(|existing| {
+                            Self::impl_trait_str(existing) == Self::impl_trait_str(&impl_item)
+                        }) {
+                            let trait_str =
+                                Self::impl_trait_str(&impl_item).unwrap_or_else(|| "?".to_string());
+                            let mut error = syn::Error::new(
+                                impl_item.span(),
+                                format!("duplicate `impl {trait_str}` for `{implementor}`"),
+                            );
+                            error.combine(syn::Error::new(
+                                existing.span(),
+                                "first impl defined here",
+                            ));
+                            errors.push(error);
+                        }
+                        impls.push(impl_item);
                     } else {
                         other_code.push(impl_item.into())
                     }
@@ -80,6 +97,10 @@ impl App {
                 Item::Use(use_item) => user_includes.push(use_item),
                 _ => other_code.push(item),
             }
+        }
+
+        if let Some(error) = Self::combine_errors(errors) {
+            return Err(error);
         }
 
         let mut shared = Self::construct_shared_resources(shared_resources)?;
@@ -160,49 +181,71 @@ impl App {
         None
     }
 
+    /// String of the trait an impl block implements, e.g. `RticTask`.
+    fn impl_trait_str(impl_item: &ItemImpl) -> Option<String> {
+        impl_item
+            .trait_
+            .as_ref()
+            .and_then(|(_, path, _)| path.segments.last())
+            .map(|segment| segment.ident.to_string())
+    }
+
+    fn combine_errors(mut errors: Vec<syn::Error>) -> Option<syn::Error> {
+        let mut combined = errors.pop()?;
+        for error in errors {
+            combined.combine(error);
+        }
+        Some(combined)
+    }
+
     fn construct_shared_resources(
         shared_resources: Vec<(ItemStruct, usize)>,
     ) -> syn::Result<HashMap<u32, SharedResources>> {
-        shared_resources
-            .into_iter()
-            .map(|(mut strct, attr_idx)| {
-                // remove the #[shared] attribute
-                let attr = strct.attrs.remove(attr_idx);
-                let args = SharedResourcesArgs::parse(attr.meta)?;
-                let parsed_elements = strct
-                    .fields
-                    .iter()
-                    .map(|f| {
-                        let ident = f.ident.clone().ok_or_else(|| {
-                            syn::Error::new(
-                                f.span(),
-                                "`#[shared]` struct must use named fields; tuple structs are not supported.",
-                            )
-                        })?;
-                        Ok(SharedElement {
-                            ident,
-                            ty: f.ty.clone(),
-                            priority: 0,
-                        })
+        let mut out = HashMap::new();
+        for (mut strct, attr_idx) in shared_resources {
+            // remove the #[shared] attribute
+            let attr = strct.attrs.remove(attr_idx);
+            let args = SharedResourcesArgs::parse(attr.meta)?;
+            if out.contains_key(&args.core) {
+                return Err(syn::Error::new(
+                    strct.ident.span(),
+                    format!("multiple `#[shared]` structs for core {}", args.core),
+                ));
+            }
+            let parsed_elements = strct
+                .fields
+                .iter()
+                .map(|f| {
+                    let ident = f.ident.clone().ok_or_else(|| {
+                        syn::Error::new(
+                            f.span(),
+                            "`#[shared]` struct must use named fields; tuple structs are not supported.",
+                        )
+                    })?;
+                    Ok(SharedElement {
+                        ident,
+                        ty: f.ty.clone(),
+                        priority: 0,
                     })
-                    .collect::<syn::Result<_>>()?;
-                Ok((
-                    args.core,
-                    SharedResources {
-                        args,
-                        strct,
-                        resources: parsed_elements,
-                    },
-                ))
-            })
-            .collect::<Result<HashMap<_, _>, syn::Error>>()
+                })
+                .collect::<syn::Result<_>>()?;
+            out.insert(
+                args.core,
+                SharedResources {
+                    args,
+                    strct,
+                    resources: parsed_elements,
+                },
+            );
+        }
+        Ok(out)
     }
 
     /// links the tasks struct definitions with their implementation part and generates a RticTask struct of it.
     /// The returned tasks are already split between hardware and software tasks
     fn construct_rtic_tasks(
         task_structs: Vec<(ItemStruct, usize)>,
-        task_impls: &HashMap<String, ItemImpl>,
+        task_impls: &HashMap<String, Vec<ItemImpl>>,
     ) -> syn::Result<HashMap<u32, Vec<RticTask>>> {
         let mut out = HashMap::new();
         for (mut task_struct, attr_idx) in task_structs {
@@ -212,25 +255,27 @@ impl App {
 
             // find the task struct impl and verify its trait matches the task_trait
             let trait_name = args.task_trait.to_string();
-            let struct_impl =
-                task_impls
-                    .get(&task_struct.ident.to_string())
-                    .and_then(|impl_item| {
+            let struct_impl = task_impls
+                .get(&task_struct.ident.to_string())
+                .and_then(|impls| {
+                    impls.iter().find(|impl_item| {
                         if let Some((_, path, _)) = &impl_item.trait_
                             && !path.segments.is_empty()
                             && path.segments[0].ident.to_string().ends_with(&trait_name)
                         {
-                            return Some(impl_item.clone());
+                            return true;
                         }
-                        None
-                    });
+                        false
+                    })
+                })
+                .cloned();
 
             let tasks = out.entry(args.core).or_insert_with(Vec::new);
             let task = RticTask {
                 init_generated: args.init_generated,
                 args,
                 task_struct,
-                struct_impl: struct_impl.clone(),
+                struct_impl,
             };
             tasks.push(task);
         }
@@ -239,39 +284,46 @@ impl App {
 
     fn construct_idle_tasks(
         idles: Vec<(ItemStruct, usize)>,
-        task_impls: &HashMap<String, ItemImpl>,
+        task_impls: &HashMap<String, Vec<ItemImpl>>,
     ) -> syn::Result<HashMap<u32, IdleTask>> {
-        idles
-            .into_iter()
-            .map(|(mut idle_struct, init_attr_idx)| {
-                // find the task struct impl and verify its trait is RticIdleTask
-                let struct_impl =
-                    task_impls
-                        .get(&idle_struct.ident.to_string())
-                        .and_then(|impl_item| {
-                            if let Some((_, path, _)) = &impl_item.trait_
-                                && !path.segments.is_empty()
-                                && path.segments[0].ident.to_string().ends_with(IDLE_TRAIT_TY)
-                            {
-                                return Some(impl_item.clone());
-                            }
-                            None
-                        });
+        let mut out = HashMap::new();
+        for (mut idle_struct, init_attr_idx) in idles {
+            // find the task struct impl and verify its trait is RticIdleTask
+            let struct_impl = task_impls
+                .get(&idle_struct.ident.to_string())
+                .and_then(|impls| {
+                    impls.iter().find(|impl_item| {
+                        if let Some((_, path, _)) = &impl_item.trait_
+                            && !path.segments.is_empty()
+                            && path.segments[0].ident.to_string().ends_with(IDLE_TRAIT_TY)
+                        {
+                            return true;
+                        }
+                        false
+                    })
+                })
+                .cloned();
 
-                // remove the #[idle]
-                let attrs = idle_struct.attrs.remove(init_attr_idx);
-                let mut args = TaskArgs::parse(attrs.meta)?;
-                args.task_trait = format_ident!("{IDLE_TRAIT_TY}"); // correct the trait type for idle
-                let core = args.core;
-                let task = IdleTask {
-                    init_generated: args.init_generated,
-                    args,
-                    task_struct: idle_struct,
-                    struct_impl: struct_impl.clone(),
-                };
-                Ok((core, task))
-            })
-            .collect::<Result<HashMap<_, _>, syn::Error>>()
+            // remove the #[idle]
+            let attrs = idle_struct.attrs.remove(init_attr_idx);
+            let mut args = TaskArgs::parse(attrs.meta)?;
+            args.task_trait = format_ident!("{IDLE_TRAIT_TY}"); // correct the trait type for idle
+            let core = args.core;
+            if out.contains_key(&core) {
+                return Err(syn::Error::new(
+                    idle_struct.ident.span(),
+                    format!("multiple `#[idle]` structs for core {core}"),
+                ));
+            }
+            let task = IdleTask {
+                init_generated: args.init_generated,
+                args,
+                task_struct: idle_struct,
+                struct_impl,
+            };
+            out.insert(core, task);
+        }
+        Ok(out)
     }
 
     fn construct_inits(
@@ -279,48 +331,58 @@ impl App {
         module_span: Span,
     ) -> syn::Result<HashMap<u32, InitTask>> {
         if inits.is_empty() {
-            Err(syn::Error::new(
+            return Err(syn::Error::new(
                 module_span,
                 "No function with #[init] attribute was found in this module.",
-            ))
-        } else {
-            inits
-                .into_iter()
-                .map(|(mut init_fn, init_attr_idx)| {
-                    // remove the [#init]
-                    let attr = init_fn.attrs.remove(init_attr_idx);
-                    let args = InitTaskArgs::parse(attr.meta)?;
-                    Ok((
-                        args.core,
-                        InitTask {
-                            args,
-                            ident: init_fn.sig.ident.clone(),
-                            body: init_fn,
-                        },
-                    ))
-                })
-                .collect::<Result<HashMap<_, _>, syn::Error>>()
+            ));
         }
+
+        let mut out = HashMap::new();
+        for (mut init_fn, init_attr_idx) in inits {
+            // remove the [#init]
+            let attr = init_fn.attrs.remove(init_attr_idx);
+            let args = InitTaskArgs::parse(attr.meta)?;
+            if out.contains_key(&args.core) {
+                return Err(syn::Error::new(
+                    init_fn.sig.ident.span(),
+                    format!("multiple `#[init]` functions for core {}", args.core),
+                ));
+            }
+            out.insert(
+                args.core,
+                InitTask {
+                    args,
+                    ident: init_fn.sig.ident.clone(),
+                    body: init_fn,
+                },
+            );
+        }
+        Ok(out)
     }
 
     fn construct_post_inits(
         post_inits: Vec<(ItemFn, usize)>,
         _module_span: Span,
     ) -> syn::Result<HashMap<u32, PostInitTask>> {
-        post_inits
-            .into_iter()
-            .map(|(mut post_init_fn, init_attr_idx)| {
-                let attr = post_init_fn.attrs.remove(init_attr_idx);
-                let args = InitTaskArgs::parse(attr.meta)?;
-                Ok((
-                    args.core,
-                    PostInitTask {
-                        args,
-                        ident: post_init_fn.sig.ident.clone(),
-                        body: post_init_fn,
-                    },
-                ))
-            })
-            .collect::<Result<HashMap<_, _>, syn::Error>>()
+        let mut out = HashMap::new();
+        for (mut post_init_fn, init_attr_idx) in post_inits {
+            let attr = post_init_fn.attrs.remove(init_attr_idx);
+            let args = InitTaskArgs::parse(attr.meta)?;
+            if out.contains_key(&args.core) {
+                return Err(syn::Error::new(
+                    post_init_fn.sig.ident.span(),
+                    format!("multiple `#[post_init]` functions for core {}", args.core),
+                ));
+            }
+            out.insert(
+                args.core,
+                PostInitTask {
+                    args,
+                    ident: post_init_fn.sig.ident.clone(),
+                    body: post_init_fn,
+                },
+            );
+        }
+        Ok(out)
     }
 }
