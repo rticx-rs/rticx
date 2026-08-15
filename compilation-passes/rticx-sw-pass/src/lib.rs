@@ -6,6 +6,8 @@ use crate::codegen::CodeGen;
 pub use crate::parse::App;
 pub use analyze::Analysis;
 use proc_macro2::TokenStream;
+use quote::format_ident;
+use rticx_core::parse_utils::RticAttr;
 use rticx_core::{InfoBus, MainInjectionPoint, RticPass};
 use std::cell::RefCell;
 use syn::ItemMod;
@@ -51,6 +53,10 @@ impl RticPass for SoftwarePass {
             b.publish(INFO_ANALYSIS, analysis)
                 .unwrap_or_else(|_| panic!("no other crate is allowed to publish {INFO_ANALYSIS}"))
         });
+        // hand the app arguments back to the next pass without the ones we consumed
+        let mut attr = RticAttr::parse_from_tokens(args.clone(), format_ident!("app"))?;
+        attr.elements.remove("dispatchers");
+        let args = attr.args_tokens();
         Ok((args, code))
     }
 

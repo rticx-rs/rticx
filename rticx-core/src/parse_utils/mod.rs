@@ -219,18 +219,28 @@ impl RticAttr {
             })
             .collect()
     }
-}
 
-impl ToTokens for RticAttr {
-    /// Reconstruct the tokenstream representation of #[app(arg1="val1", ...)] macro attribute from the internal state of [Self]
-    fn to_tokens(&self, tokens: &mut TokenStream2) {
+    /// Reconstructs the bare `key = value, ...` argument token stream of this
+    /// attribute (without the `#[name(...)]` wrapper).
+    ///
+    /// Useful for passes that consume some arguments and hand the remaining
+    /// ones back to the next compilation pass.
+    pub fn args_tokens(&self) -> TokenStream2 {
         let args = self.elements.iter().map(|(name, value)| {
             let name = format_ident!("{name}");
             quote!(#name = #value)
         });
         let mut args_token_stream = TokenStream2::new();
         args_token_stream.append_separated(args, Punct::new(',', Spacing::Alone));
+        args_token_stream
+    }
+}
+
+impl ToTokens for RticAttr {
+    /// Reconstruct the tokenstream representation of #[app(arg1="val1", ...)] macro attribute from the internal state of [Self]
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
         let attr_name = &self.name;
+        let args_token_stream = self.args_tokens();
         let attribute: Attribute = parse_quote!(#[#attr_name(#args_token_stream)]);
         tokens.append_all(attribute.to_token_stream())
     }

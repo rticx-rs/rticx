@@ -176,6 +176,10 @@ impl<'a> CodeGen<'a> {
                 // Now we parse and reconstruct the task attribute
                 let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap(); // FIXME: propagate error
                 reconstructed_task_attr.name = format_ident!("task");
+                // these arguments are consumed by this pass; the core pass would
+                // reject them as unknown task arguments
+                reconstructed_task_attr.elements.remove("spawn_by");
+                reconstructed_task_attr.elements.remove("capacity");
                 reconstructed_task_attr
                     .elements
                     .insert("task_trait".into(), syn::parse_str(SWT_TRAIT_TY).unwrap());
