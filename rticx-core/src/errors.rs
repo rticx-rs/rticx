@@ -21,8 +21,8 @@ impl ParseError {
 pub enum Error {
     #[error("Can't publish '{0}' entry to info bus. Entry already exists")]
     EntryOccupied(String),
-    #[error("Could not find '{0}' entry")]
+    #[error("Could not find '{0}' entry in info bus")]
     EntryNotFound(String),
-    #[error("The target type is incorrect for entry '{0}'")]
-    InvalidTargetType(String),
+    #[error("Type mismatch for entry '{0}': expected `{1}`, found `{2}`")]
+    InvalidTargetType(String, String, String),
 }

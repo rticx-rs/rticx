@@ -1,5 +1,5 @@
 use std::{
-    any::Any,
+    any::{Any, type_name},
     collections::{HashMap, hash_map::Entry},
     rc::Rc,
     sync::{Arc, Mutex},
@@ -7,10 +7,14 @@ use std::{
 
 use crate::errors;
 
+/// An entry in the bus: the type name of the stored value (kept for better
+/// error messages) and the value itself.
+type InfoEntry = (String, Rc<dyn Any>);
+
 /// A shared bus where compilation passes and backends can publish and get information from.
 #[derive(Clone)]
 pub struct InfoBus {
-    infos: Arc<Mutex<HashMap<String, Rc<dyn Any>>>>,
+    infos: Arc<Mutex<HashMap<String, InfoEntry>>>,
 }
 
 impl InfoBus {
@@ -28,7 +32,7 @@ impl InfoBus {
         match infos.entry(entry.to_string()) {
             Entry::Occupied(_) => Err(errors::Error::EntryOccupied(entry.to_string())),
             Entry::Vacant(e) => {
-                e.insert_entry(Rc::new(value));
+                e.insert((type_name::<T>().to_string(), Rc::new(value)));
                 Ok(())
             }
         }
@@ -36,12 +40,18 @@ impl InfoBus {
 
     pub fn get<T: 'static>(&self, entry: &str) -> Result<Rc<T>, errors::Error> {
         let infos = self.infos.lock().expect("must be able to lock info bus");
-        let e = infos
+        let (stored_type, value) = infos
             .get(entry)
             .cloned()
-            .ok_or(errors::Error::EntryNotFound(entry.to_string()))?;
+            .ok_or_else(|| errors::Error::EntryNotFound(entry.to_string()))?;
 
-        Rc::downcast::<T>(e).map_err(|_| errors::Error::InvalidTargetType(entry.to_string()))
+        Rc::downcast::<T>(value).map_err(|_| {
+            errors::Error::InvalidTargetType(
+                entry.to_string(),
+                type_name::<T>().to_string(),
+                stored_type,
+            )
+        })
     }
 }
 
@@ -94,7 +104,7 @@ mod tests {
         let res: Result<Rc<String>, _> = bus.get(key);
         assert!(matches!(
             res.unwrap_err(),
-            errors::Error::InvalidTargetType(_)
+            errors::Error::InvalidTargetType(..)
         ));
     }
 
