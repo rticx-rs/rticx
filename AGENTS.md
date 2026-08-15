@@ -51,6 +51,10 @@ Three layers:
 
 Feature propagation pattern: distro crate feature → forwards to `*-macro` crate feature → macro crate enables `dep:<pass>` via `#[cfg(feature = "...")]`.
 
+## Conventions
+
+- **Attribute args** are parsed via `rticx_core::parse_utils::RticAttr` (typed accessors + supported-key checks). Unknown `#[app]` args produce warnings in the generated code; unknown task-level args are compile errors. Passes must strip the args they consume before returning from `run_pass` — see wiki "Writing Compilation Passes".
+
 ## GOTCHAS
 
 - **`build-std` is required** for `riscv32imc-unknown-none-elf`. Add to `.cargo/config.toml`:
@@ -70,10 +74,10 @@ make fmt all
 cd rticx-core && cargo test
 cd rticx-spsc && cargo test
 cd rticx-async && cargo test
-cd compilation-passes/rticx-sw-pass
+cd compilation-passes/rticx-sw-pass && cargo test
 cd compilation-passes/rticx-async-pass && cargo test
 cd compilation-passes/rticx-auto-assign && cargo test -- --test-threads=1
-cd compilation-passes/rticx-deadline-pass && cargo test --features proc-macro
+cd compilation-passes/rticx-deadline-pass && cargo test
 
 # Build distribution examples
 cd distributions/rticx-cortex-m/example-apps/armv7m-app

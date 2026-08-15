@@ -206,11 +206,8 @@ impl RticAttr {
             .keys()
             .filter(|key| !supported.contains(&key.as_str()))
             .map(|unknown| {
-                let warn_fn = format_ident!("__rticx_warn_unknown_{}_{}", attr_name, unknown);
-                let msg = format!(
-                    "unknown `{attr_name}` argument `{unknown}`; supported: {}",
-                    supported.join(", ")
-                );
+                let warn_fn = format_ident!("rticx_warn_unknown_{}_{}", attr_name, unknown);
+                let msg = format!("unknown `{attr_name}` argument `{unknown}`",);
                 quote! {
                     #[deprecated(note = #msg)]
                     fn #warn_fn() {}

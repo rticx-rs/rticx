@@ -6,8 +6,8 @@ the wiki.
 ## Primary reference
 
 Read `wiki/Distributor-Guide-Writing-Compilation-Passes.md` for the full
-procedure: trait implementation, InfoBus usage, testing, and pass-specific
-backend traits.
+procedure: trait implementation, `RticAttr` attribute parsing, InfoBus usage,
+testing, and pass-specific backend traits.
 
 For project architecture and design decisions context, see
 `wiki/Distributor-Guide-Architecture.md`.
@@ -16,8 +16,9 @@ For project architecture and design decisions context, see
 
 1. Create a new rust crate and pull rticx-core as a dependency.
 2. Implement `rticx_core::RticPass` trait.
-3. Keep the compilation pass hardware agnostic by abstracting the hardware specific details behind a backend trait which will be implemented by a distribution (See `rticx_sw_pass::SwPassBackend` for an example)
-4. Always create a README.md at the root of the crate containing:
+3. RTICX App attributes can be parsed with `rticx_core::parse_utils::RticAttr`. Strip every argument your pass consumes from the `args` token stream before returning from `run_pass` (`RticAttr::args_tokens`), and strip your pass-only task-attribute keys before re-emitting task attributes to the core pass.
+4. Keep the compilation pass hardware agnostic by abstracting the hardware specific details behind a backend trait which will be implemented by a distribution (See `rticx_sw_pass::SwPassBackend` for an example)
+5. Always create a README.md at the root of the crate containing:
   - What the compilation pass is about
   - Specify if this pass is for single core or both singe and multicore targets 
   - Example of high-level/user-application syntax
