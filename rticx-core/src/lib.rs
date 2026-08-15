@@ -67,7 +67,7 @@ pub trait RticPass {
         app_mod: ItemMod,
     ) -> syn::Result<(TokenStream2, ItemMod)>;
 
-    /// Returns a human readable name/alias used to identify the pass. This identifier will show np in errors for example
+    /// Returns a human readable name/alias used to identify the pass. This identifier will show up in errors for example
     /// to help knowing exactly which compilation pass has failed in that case.
     fn pass_name(&self) -> &str;
 
@@ -129,11 +129,7 @@ impl RticMacroBuilder {
             let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
                 Ok(out) => out,
                 Err(e) => {
-                    eprintln!(
-                        "An error occurred during the `{}` compilation pass",
-                        pass.pass_name()
-                    );
-                    return e.to_compile_error();
+                    return contextualize(e, format!("in `{}` compilation pass", pass.pass_name()));
                 }
             };
             app_mod = out_mod;
@@ -144,10 +140,10 @@ impl RticMacroBuilder {
         let mut parsed_app = match App::parse(args, app_mod) {
             Ok(parsed) => parsed,
             Err(e) => {
-                eprintln!(
-                    "An error occurred during the `core` compilation pass during the user code `parsing` phase."
+                return contextualize(
+                    e,
+                    "in `core` compilation pass during the user code `parsing` phase",
                 );
-                return e.to_compile_error();
             }
         };
         self.info_bus
@@ -158,10 +154,10 @@ impl RticMacroBuilder {
         let analysis = match Analysis::run(&mut parsed_app) {
             Ok(a) => a,
             Err(e) => {
-                eprintln!(
-                    "An error occurred during the `core` compilation pass  during the user code `analysis` phase."
+                return contextualize(
+                    e,
+                    "in `core` compilation pass during the user code `analysis` phase",
                 );
-                return e.to_compile_error();
             }
         };
         self.info_bus
@@ -208,4 +204,10 @@ impl RticMacroBuilder {
     pub fn info_bus(&self) -> &InfoBus {
         &self.info_bus
     }
+}
+
+/// Wrap an error with context about which compilation pass/phase failed,
+/// keeping the original span so rustc points at the user's code.
+fn contextualize(e: syn::Error, context: impl std::fmt::Display) -> TokenStream2 {
+    syn::Error::new(e.span(), format!("{context}: {e}")).to_compile_error()
 }
