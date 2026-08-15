@@ -253,3 +253,39 @@ fn analysis_dispatchers_too_few() {
     let result = analyze(args, items);
     assert_err_contains(result, "Expected 2 dispatchers, but found 1.");
 }
+
+#[test]
+fn analysis_dispatcher_assignment_deterministic() {
+    // Dispatchers are assigned in declaration order to the priority groups in
+    // ascending order: the first declared dispatcher handles the lowest
+    // priority group.
+    let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0, IRQ1]);
+    let items = quote! {
+            #[async_task(priority = 3)]
+            struct High;
+            impl RticAsyncTask for High {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+            #[async_task(priority = 2)]
+            struct Low;
+            impl RticAsyncTask for Low {
+    type SpawnInput = u32;
+                fn exec(&mut self, input: u32) {}
+            }
+        };
+    let analysis = analyze(args, items).expect("analysis succeeds");
+    let sub = &analysis.sub_analysis[0];
+    assert_eq!(
+        sub.dispatcher_priority_map[&2]
+            .to_token_stream()
+            .to_string(),
+        "IRQ0"
+    );
+    assert_eq!(
+        sub.dispatcher_priority_map[&3]
+            .to_token_stream()
+            .to_string(),
+        "IRQ1"
+    );
+}

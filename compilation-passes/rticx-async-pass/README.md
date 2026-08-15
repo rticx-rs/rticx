@@ -6,9 +6,9 @@ concurrency framework.
 ## Overview
 
 `rticx-async-pass` extends the RTICX syntax with `#[async_task]` attributes,
-adding first-class `async fn` / `.await` software tasks on top of the RTIC
+adding first-class `async fn` / `.await` software tasks on top of the RTICX
 priority model.  Each async task has a future that is polled by an **executor
-loop** — which is itself a hardware-task, exactly like `sw_task` dispatchers
+loop** which is itself a hardware-task, exactly like `sw_task` dispatchers
 in `rticx-sw-pass`.  Tasks at the same (core, priority) share one
 dispatcher/executor.
 
@@ -263,6 +263,7 @@ The pass inherits the sw-pass multicore model unchanged:
 
 - `#[async_task(core = C, spawn_by = S)]` — task lives on core `C`, spawnable from core `S`.
 - Each core gets its own dispatchers; cross-core and core-local task priorities must be disjoint (analysis rejects overlap).
+- Dispatcher assignment is deterministic: priority groups are sorted ascending and dispatchers are consumed in declaration order (the first declared dispatcher handles the lowest priority group).
 - `spawn_from(spawner_token, input)` sends the input to the target core's queue and triggers the cross-pend mechanism.
 - The future is always created **on the target core** by the target core's dispatcher — only the spawn input travels across cores.
 
@@ -324,7 +325,6 @@ The reference `rticx-rp2040` distribution ships exactly this configuration.
 - **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.
 - **No cancellation** — an in-flight future cannot be cancelled; the slot must complete naturally.
 - **Cross-core channel waking** requires the backend to implement `generate_wake_pend_fn` with a runtime core check; works automatically on single-core.
-- **Multicore distributor** — currently only the single-core `rticx-cortex-m` distribution implements `AsyncPassBackend`; multicore distributions (e.g. `rticx-rp2040`) need an async executor backend.
 
 ---
 

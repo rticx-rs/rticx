@@ -9,12 +9,6 @@ pub fn ident_uppercase(ident: &Ident) -> Ident {
     Ident::new(&name, Span::call_site())
 }
 
-#[allow(unused)]
-pub fn ident_snakecase(ident: &Ident) -> Ident {
-    let name = ident.to_string().to_snake_case();
-    Ident::new(&name, Span::call_site())
-}
-
 pub fn priority_ty_ident(priority: u16, core: u32) -> Ident {
     format_ident!("Core{core}Prio{priority}Tasks")
 }

@@ -6,7 +6,6 @@ use crate::parse::ast::AsyncTask;
 use crate::parse::{ASYNC_TASK_TRAIT_TY, App};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
-use rticx_core::parse_utils::RticAttr;
 use std::cell::RefCell;
 use syn::{ItemMod, LitInt, Path, parse_quote};
 
@@ -52,7 +51,7 @@ impl<'a> CodeGen<'a> {
         }
     }
 
-    pub fn run(&mut self) -> ItemMod {
+    pub fn run(&self) -> ItemMod {
         let sub_apps = self.generate_subapps();
         let local_pend_fns = self.get_local_pend_fns();
         let cross_pend_fns = self.get_cross_pend_fns();
@@ -190,13 +189,13 @@ impl<'a> CodeGen<'a> {
         quote!(#(#fns)*)
     }
 
-    fn generate_subapps(&mut self) -> TokenStream {
+    fn generate_subapps(&self) -> TokenStream {
         let num_cores = self.app.sub_apps.len();
         let queue_path = self.backend.queue_path();
         let async_runtime_path = self.backend.async_runtime_path();
         let backend = self.backend;
         let app_params = &self.app.app_params;
-        let apps = self.app.sub_apps.iter_mut();
+        let apps = self.app.sub_apps.iter();
         let analysis = self.analysis.sub_analysis.iter();
 
         let sub_apps = apps.zip(analysis).map(|(sub_app, sub_analysis)| {
@@ -205,33 +204,15 @@ impl<'a> CodeGen<'a> {
             let interrupt_ty = backend
                 .custom_interrupt_path(core)
                 .unwrap_or_else(|| parse_quote!(#pac::Interrupt));
-            let tasks_iter = sub_app
-                .sw_tasks
-                .iter_mut()
-                .chain(sub_app.mc_sw_tasks.iter_mut());
+            let tasks_iter = sub_app.sw_tasks.iter().chain(sub_app.mc_sw_tasks.iter());
             let (sw_tasks, wrapper_fns, ptr_statics, wake_fns): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
                 tasks_iter
                     .map(|task| {
-                        let attr_idx = task
-                            .task_struct
-                            .attrs
-                            .iter()
-                            .position(|attr| attr.path().is_ident("async_task"))
-                            .expect("An async task must have an async_task attribute");
-
-                        let attr = task.task_struct.attrs.remove(attr_idx);
-
-                        let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap();
-                        reconstructed_task_attr.name = format_ident!("task");
-                        // these arguments are consumed by this pass; the core pass would
-                        // reject them as unknown task arguments
-                        reconstructed_task_attr.elements.remove("spawn_by");
-                        reconstructed_task_attr.elements.remove("capacity");
-                        reconstructed_task_attr.elements.insert(
-                            "task_trait".into(),
-                            syn::parse_str(ASYNC_TASK_TRAIT_TY).unwrap(),
-                        );
-
+                        // The task attribute was already reconstructed by the
+                        // parsing phase: `async_task` renamed to `task`,
+                        // pass-only keys removed, and the
+                        // `task_trait = RticAsyncTask` argument added.
+                        let task_attr = &task.task_attr;
                         let task_struct = &task.task_struct;
                         let task_impl = &task.task_impl;
 
@@ -263,7 +244,7 @@ impl<'a> CodeGen<'a> {
 
                         (
                             quote! {
-                                #reconstructed_task_attr
+                                #task_attr
                                 #task_struct
                                 #task_impl
                                 #spawn_impl

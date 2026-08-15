@@ -69,7 +69,7 @@ impl RticPass for IdentityPass {
 fn expansion_disabled_without_trigger_env() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let _env = set_expand_env(&dir.path());
+    let _env = set_expand_env(dir.path());
     // SAFETY: single-threaded test process (guarded by ENV_LOCK).
     unsafe { std::env::remove_var("RTICX_EXPAND") };
 
@@ -175,7 +175,7 @@ fn writes_ordered_snapshots_after_every_stage() {
 fn writes_input_of_failing_pass() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let _env = set_expand_env(&dir.path());
+    let _env = set_expand_env(dir.path());
     let pass_dir = dir.path().join("passes");
     set_pass_dir(&pass_dir);
 

@@ -108,8 +108,8 @@ fn async_task_attr(args: TokenStream) -> RticAttr {
 
 #[test]
 fn task_params_defaults() {
-    let attr = async_task_attr(quote!());
-    let params = TaskParams::from_attr(&attr).expect("valid attr");
+    let mut attr = async_task_attr(quote!());
+    let params = TaskParams::from_attr(&mut attr).expect("valid attr");
     assert_eq!(params.priority, 0);
     assert_eq!(params.core, 0);
     assert_eq!(params.spawn_by, 0);
@@ -118,8 +118,8 @@ fn task_params_defaults() {
 
 #[test]
 fn task_params_explicit_values() {
-    let attr = async_task_attr(quote!(priority = 3, core = 1, spawn_by = 0));
-    let params = TaskParams::from_attr(&attr).expect("valid attr");
+    let mut attr = async_task_attr(quote!(priority = 3, core = 1, spawn_by = 0));
+    let params = TaskParams::from_attr(&mut attr).expect("valid attr");
     assert_eq!(params.priority, 3);
     assert_eq!(params.core, 1);
     assert_eq!(params.spawn_by, 0);
@@ -128,21 +128,21 @@ fn task_params_explicit_values() {
 
 #[test]
 fn task_params_explicit_capacity() {
-    let attr = async_task_attr(quote!(capacity = 4));
-    let params = TaskParams::from_attr(&attr).expect("valid attr");
+    let mut attr = async_task_attr(quote!(capacity = 4));
+    let params = TaskParams::from_attr(&mut attr).expect("valid attr");
     assert_eq!(params.capacity, 4);
 }
 
 #[test]
 fn task_params_capacity_zero_errors() {
-    let attr = async_task_attr(quote!(capacity = 0));
-    assert_err_contains(TaskParams::from_attr(&attr), "at least 1");
+    let mut attr = async_task_attr(quote!(capacity = 0));
+    assert_err_contains(TaskParams::from_attr(&mut attr), "at least 1");
 }
 
 #[test]
 fn task_params_spawn_by_defaults_to_core() {
-    let attr = async_task_attr(quote!(core = 2));
-    let params = TaskParams::from_attr(&attr).expect("valid attr");
+    let mut attr = async_task_attr(quote!(core = 2));
+    let params = TaskParams::from_attr(&mut attr).expect("valid attr");
     assert_eq!(params.core, 2);
     assert_eq!(params.spawn_by, 2);
 }
@@ -392,4 +392,177 @@ fn parse_prio_0_without_user_idle_succeeds() {
     let sub = &app.sub_apps[0];
     assert_eq!(sub.sw_tasks.len(), 1);
     assert_eq!(sub.sw_tasks[0].params.priority, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Block D : error propagation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_params_non_integer_priority_errors() {
+    let mut attr = async_task_attr(quote!(priority = "high"));
+    assert_err_contains(
+        TaskParams::from_attr(&mut attr),
+        "`priority` must be an integer literal",
+    );
+}
+
+#[test]
+fn task_params_overflowing_priority_errors() {
+    let mut attr = async_task_attr(quote!(priority = 99999999999));
+    assert_err_contains(
+        TaskParams::from_attr(&mut attr),
+        "must be an integer literal",
+    );
+}
+
+#[test]
+fn task_params_shared_passthrough() {
+    let mut attr = async_task_attr(quote!(priority = 2, shared = [counter]));
+    let params = TaskParams::from_attr(&mut attr).expect("valid attr");
+    assert_eq!(params.priority, 2);
+    // `shared` must survive so the core pass can see it.
+    assert!(attr.elements.contains_key("shared"));
+}
+
+#[test]
+fn parse_task_attr_preserves_core_pass_args() {
+    // The reconstructed `#[task(...)]` attribute must keep `priority` and
+    // `core` for the core pass, and must not leak the pass-only keys.
+    let items = quote! {
+        #[async_task(priority = 3, core = 0, spawn_by = 0, capacity = 2)]
+        struct Foo;
+    };
+    let app = parse_app(common::multi_core_args(), items).expect("valid app");
+    let task_attr = &app.sub_apps[0].sw_tasks[0].task_attr;
+    assert!(task_attr.elements.contains_key("priority"));
+    assert!(task_attr.elements.contains_key("core"));
+    assert!(task_attr.elements.contains_key("task_trait"));
+    assert!(!task_attr.elements.contains_key("spawn_by"));
+    assert!(!task_attr.elements.contains_key("capacity"));
+    assert_eq!(task_attr.name.to_string(), "task");
+}
+
+#[test]
+fn parse_core_out_of_range_errors() {
+    let items = quote! {
+        #[async_task(core = 2)]
+        struct Foo;
+    };
+    assert_err_contains(
+        parse_app(common::single_core_args(), items),
+        "Task `Foo` has `core = 2`",
+    );
+}
+
+#[test]
+fn parse_spawn_by_out_of_range_errors() {
+    let items = quote! {
+        #[async_task(spawn_by = 1)]
+        struct Foo;
+    };
+    assert_err_contains(
+        parse_app(common::single_core_args(), items),
+        "Task `Foo` has `spawn_by = 1`",
+    );
+}
+
+#[test]
+fn parse_impl_for_non_async_task_preserved() {
+    // `impl RticAsyncTask for Bar` where `Bar` is not an async task must not
+    // be silently dropped from the module.
+    let items = quote! {
+        struct Bar;
+
+        impl RticAsyncTask for Bar {
+            fn exec(&mut self) {}
+        }
+    };
+    let app = parse_app(common::single_core_args(), items).expect("valid app");
+    assert!(
+        app.rest_of_code
+            .iter()
+            .any(|item| matches!(item, syn::Item::Impl(i) if i.trait_.is_some()))
+    );
+}
+
+#[test]
+fn parse_qualified_trait_path_impl_matched() {
+    let items = quote! {
+        #[async_task]
+        struct Foo;
+
+        impl crate::app::RticAsyncTask for Foo {
+            fn exec(&mut self) {}
+        }
+    };
+    let app = parse_app(common::single_core_args(), items).expect("valid app");
+    let sub = &app.sub_apps[0];
+    assert_eq!(sub.sw_tasks.len(), 1);
+    assert!(sub.sw_tasks[0].task_impl.is_some());
+}
+
+#[test]
+fn parse_multiple_impls_for_same_task_errors() {
+    let items = quote! {
+        #[async_task]
+        struct Foo;
+
+        impl RticAsyncTask for Foo {
+            fn exec(&mut self) {}
+        }
+
+        impl RticAsyncTask for Foo {
+            fn exec(&mut self) {}
+        }
+    };
+    assert_err_contains(
+        parse_app(common::single_core_args(), items),
+        "Multiple `RticAsyncTask` implementations found for task `Foo`",
+    );
+}
+
+#[test]
+fn parse_async_task_on_enum_errors() {
+    let items = quote! {
+        #[async_task]
+        enum Foo {}
+    };
+    assert_err_contains(
+        parse_app(common::single_core_args(), items),
+        "`#[async_task]` can only be applied to structs",
+    );
+}
+
+#[test]
+fn app_params_non_path_dispatcher_errors() {
+    let args: TokenStream = quote!(device = mypac, dispatchers = [IRQ0, 42]);
+    assert_err_contains(parse_app_params(args), "must be interrupt paths");
+}
+
+#[test]
+fn app_params_non_path_nested_dispatcher_errors() {
+    let args: TokenStream = quote!(device = mypac, cores = 2, dispatchers = [[IRQ0], [42]]);
+    assert_err_contains(parse_app_params(args), "must be interrupt paths");
+}
+
+#[test]
+fn app_params_non_array_dispatcher_errors() {
+    let args: TokenStream = quote!(device = mypac, dispatchers = IRQ0);
+    assert_err_contains(
+        parse_app_params(args),
+        "must be an array of interrupt paths",
+    );
+}
+
+#[test]
+fn app_params_zero_cores_errors() {
+    let args: TokenStream = quote!(device = mypac, cores = 0);
+    assert_err_contains(parse_app_params(args), "must be at least 1");
+}
+
+#[test]
+fn app_params_non_integer_cores_errors() {
+    let args: TokenStream = quote!(device = mypac, cores = "two");
+    assert_err_contains(parse_app_params(args), "`cores` must be an integer literal");
 }

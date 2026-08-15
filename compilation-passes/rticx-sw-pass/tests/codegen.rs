@@ -41,6 +41,11 @@ fn codegen_expands_single_core_sw_app() {
         quote! { struct Bar ; },
         "rest-of-code passthrough",
     );
+    // The original `#[sw_task]` attribute must be consumed by the pass.
+    assert!(
+        !generated.contains("sw_task"),
+        "the original `#[sw_task]` attribute leaked into the generated code:\n{generated}"
+    );
 
     // ---- RticSwTask trait ----
     assert_section_present(
@@ -95,7 +100,6 @@ fn codegen_expands_single_core_sw_app() {
                 pub fn spawn (input : < Foo as RticSwTask > :: SpawnInput) -> Result < () , < Foo as RticSwTask > :: SpawnInput > {
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
-                    /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticSwTask > :: SpawnInput > {
                         if unsafe { ! __rticx_sw_system_initialized } { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
@@ -276,7 +280,6 @@ fn codegen_expands_multi_core_sw_app() {
                 pub fn spawn (input : < Task0 as RticSwTask > :: SpawnInput) -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
                     let mut inputs_producer = unsafe { __rticx_internal__Task0__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
-                    /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                     __rticx_interrupt_free (| | -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
                         if unsafe { ! __rticx_sw_system_initialized } { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;
@@ -349,7 +352,6 @@ fn codegen_expands_multi_core_sw_app() {
                 pub fn spawn_from (_spawner : __rticx__internal__Core0 , input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , < Cross as RticSwTask > :: SpawnInput > {
                     let mut inputs_producer = unsafe { __rticx_internal__Cross__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core1Prio3Tasks__RQ . split () . 0 } ;
-                    /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                     __rticx_interrupt_free (| | -> Result < () , < Cross as RticSwTask > :: SpawnInput > {
                         if unsafe { ! __rticx_sw_system_initialized } { return Err (input) ; }
                         inputs_producer . enqueue (input) ? ;

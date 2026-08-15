@@ -1,8 +1,8 @@
-use crate::parse::ast::{AppParameters, AsyncTask, TaskParams};
-use proc_macro2::{Ident, TokenStream};
+use crate::parse::ast::{AppParameters, AsyncTask, TaskParams, into_task_attr};
+use proc_macro2::{Ident, Span, TokenStream};
 use rticx_core::parse_utils::RticAttr;
 use std::collections::HashMap;
-use syn::{Item, ItemImpl, ItemMod, ItemStruct, Type, Visibility};
+use syn::{Attribute, Item, ItemImpl, ItemMod, Type, Visibility, spanned::Spanned};
 
 pub mod ast;
 
@@ -13,6 +13,8 @@ pub const ASYNC_TASK_TRAIT_TY: &str = "RticAsyncTask";
 pub struct SubApp {
     pub core: u32,
     pub dispatchers: Vec<syn::Path>,
+    /// Span of the `dispatchers = [...]` app argument, for error reporting.
+    pub dispatchers_span: Option<Span>,
     /// Single core/ Core-local software tasks
     pub sw_tasks: Vec<AsyncTask>,
     /// Multi core/ software tasks to be spawned on this core from other cores
@@ -36,14 +38,23 @@ impl App {
         let app_params = AppParameters::parse(args)?;
         let app_mod_items = app_mod.content.take().unwrap_or_default().1;
         let mut sw_task_structs = Vec::new();
-        let mut sw_task_impls = HashMap::new();
+        let mut sw_task_impls: Vec<(Ident, ItemImpl)> = Vec::new();
         let mut has_user_idle = false;
         let mut rest_of_code = Vec::with_capacity(app_mod_items.len());
 
         for item in app_mod_items {
+            if !matches!(item, Item::Struct(_))
+                && let Some(attrs) = item_attrs(&item)
+                && let Some(attr_idx) = find_async_task_attr(attrs)
+            {
+                return Err(syn::Error::new(
+                    attrs[attr_idx].span(),
+                    "`#[async_task]` can only be applied to structs.",
+                ));
+            }
             match item {
                 Item::Struct(struct_) => {
-                    if let Some(attr_idx) = Self::is_struct_with_attr(&struct_, "async_task") {
+                    if let Some(attr_idx) = find_async_task_attr(&struct_.attrs) {
                         sw_task_structs.push((struct_, attr_idx))
                     } else {
                         if struct_.attrs.iter().any(|a| a.path().is_ident("idle")) {
@@ -53,26 +64,55 @@ impl App {
                     }
                 }
                 Item::Impl(impl_) => {
-                    if let Some(implementor) = Self::get_sw_task_implementor(&impl_) {
-                        sw_task_impls.insert(implementor.clone(), impl_);
+                    if let Some(implementor) = get_async_task_implementor(&impl_) {
+                        sw_task_impls.push((implementor.clone(), impl_));
                     } else {
                         rest_of_code.push(Item::Impl(impl_))
                     }
                 }
-                _ => rest_of_code.push(item),
+                item => rest_of_code.push(item),
             }
         }
 
         let cores = app_params.cores;
         let mut sw_tasks = HashMap::with_capacity(cores as usize);
         let mut mc_sw_tasks = HashMap::with_capacity(cores as usize);
-        for (task_struct, attr_idx) in sw_task_structs {
-            let task_impl = sw_task_impls.remove(&task_struct.ident);
+        for (mut task_struct, attr_idx) in sw_task_structs {
+            // The `impl RticAsyncTask for <struct>` is optional at this stage:
+            // it may also live outside the `#[app]` module.  The core pass
+            // generates static checks that the trait is implemented.
+            let task_impl = take_impl_for(&mut sw_task_impls, &task_struct.ident)?;
 
-            let attrs = RticAttr::parse_from_attr(&task_struct.attrs[attr_idx])?;
-            let params = TaskParams::from_attr(&attrs)?;
+            let mut attrs = RticAttr::parse_from_attr(&task_struct.attrs[attr_idx])?;
+            let params = TaskParams::from_attr(&mut attrs)?;
+            let task_attr = into_task_attr(attrs);
+            // Consume the original `#[async_task]` attribute: the
+            // reconstructed `#[task(...)]` attribute replaces it in the
+            // generated code.
+            task_struct.attrs.remove(attr_idx);
+
+            if params.core >= cores {
+                return Err(syn::Error::new(
+                    task_struct.ident.span(),
+                    format!(
+                        "Task `{}` has `core = {}`, but the application only has {cores} core(s).",
+                        task_struct.ident, params.core
+                    ),
+                ));
+            }
+            if params.spawn_by >= cores {
+                return Err(syn::Error::new(
+                    task_struct.ident.span(),
+                    format!(
+                        "Task `{}` has `spawn_by = {}`, but the application only has {cores} core(s).",
+                        task_struct.ident, params.spawn_by
+                    ),
+                ));
+            }
+
             let task = AsyncTask {
                 params,
+                task_attr,
                 task_struct,
                 task_impl,
             };
@@ -90,6 +130,12 @@ impl App {
             }
         }
 
+        // `impl RticAsyncTask for X` blocks whose `X` is not an async task are
+        // re-emitted as-is so they are not silently dropped.
+        for (_, impl_) in sw_task_impls {
+            rest_of_code.push(Item::Impl(impl_));
+        }
+
         let mut sub_apps = Vec::with_capacity(cores as usize);
         for core in 0..cores {
             let dispatchers = app_params
@@ -102,6 +148,7 @@ impl App {
             sub_apps.push(SubApp {
                 core,
                 dispatchers,
+                dispatchers_span: app_params.dispatchers_span,
                 sw_tasks: sw,
                 mc_sw_tasks: mc,
             })
@@ -128,34 +175,76 @@ impl App {
             rest_of_code,
         })
     }
+}
 
-    /// returns the index of the `attr_name` attribute if found in the attribute list of some struct
-    fn is_struct_with_attr(strct: &ItemStruct, attr_name: &str) -> Option<usize> {
-        for (i, attr) in strct.attrs.iter().enumerate() {
-            let path = attr.meta.path();
-            if path.segments.len() == 1 && path.segments[0].ident == attr_name {
-                return Some(i);
-            }
-        }
-        None
+/// Returns the index of the first `async_task` attribute in `attrs`, if any.
+fn find_async_task_attr(attrs: &[Attribute]) -> Option<usize> {
+    attrs
+        .iter()
+        .position(|attr| attr.path().is_ident("async_task"))
+}
+
+/// Attributes attached to `item`, if the item kind carries attributes.
+fn item_attrs(item: &Item) -> Option<&[Attribute]> {
+    Some(match item {
+        Item::Const(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::ExternCrate(item) => &item.attrs,
+        Item::Fn(item) => &item.attrs,
+        Item::ForeignMod(item) => &item.attrs,
+        Item::Macro(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        Item::Static(item) => &item.attrs,
+        Item::Struct(item) => &item.attrs,
+        Item::Trait(item) => &item.attrs,
+        Item::TraitAlias(item) => &item.attrs,
+        Item::Type(item) => &item.attrs,
+        Item::Union(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
+        _ => return None,
+    })
+}
+
+/// The implementor of an `impl <trait> for <type>` block whose trait name ends
+/// with `RticAsyncTask`.  The last path segment is matched so that qualified
+/// paths (e.g. `crate::RticAsyncTask`) are recognized too.
+fn get_async_task_implementor(impl_item: &ItemImpl) -> Option<&Ident> {
+    let (_, path, _) = impl_item.trait_.as_ref()?;
+    if !path
+        .segments
+        .last()?
+        .ident
+        .to_string()
+        .ends_with(ASYNC_TASK_TRAIT_TY)
+    {
+        return None;
     }
-
-    fn get_sw_task_implementor(impl_item: &ItemImpl) -> Option<&Ident> {
-        if let Some((_, ref path, _)) = impl_item.trait_ {
-            if path.segments.is_empty() {
-                return None;
-            }
-
-            if path.segments[0]
-                .ident
-                .to_string()
-                .ends_with(ASYNC_TASK_TRAIT_TY)
-                && let Type::Path(struct_type) = impl_item.self_ty.as_ref()
-            {
-                let implementor_name = &struct_type.path.segments[0].ident;
-                return Some(implementor_name);
-            }
-        }
-        None
+    if let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
+        return Some(&struct_type.path.segments.last()?.ident);
     }
+    None
+}
+
+/// Removes the `impl RticAsyncTask for <ident>` block from `impls`, erroring
+/// if the task has more than one such implementation.
+fn take_impl_for(
+    impls: &mut Vec<(Ident, ItemImpl)>,
+    ident: &Ident,
+) -> syn::Result<Option<ItemImpl>> {
+    let mut found = None;
+    let mut i = 0;
+    while i < impls.len() {
+        if &impls[i].0 == ident {
+            let (_, impl_) = impls.remove(i);
+            if found.replace(impl_).is_some() {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    format!("Multiple `RticAsyncTask` implementations found for task `{ident}`."),
+                ));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    Ok(found)
 }

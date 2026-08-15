@@ -104,6 +104,11 @@ impl RticAttr {
         self.take_int(key)
     }
 
+    /// Remove and parse `key` as an unsigned integer literal, e.g. `capacity = 4`.
+    pub fn take_usize(&mut self, key: &str) -> syn::Result<Option<usize>> {
+        self.take_int(key)
+    }
+
     fn take_int<T>(&mut self, key: &str) -> syn::Result<Option<T>>
     where
         T: std::str::FromStr,

@@ -27,6 +27,11 @@ fn codegen_expands_single_core_sw_app() {
         quote! { struct Bar ; },
         "rest-of-code passthrough",
     );
+    // The original `#[async_task]` attribute must be consumed by the pass.
+    assert!(
+        !generated.contains("async_task"),
+        "the original `#[async_task]` attribute leaked into the generated code:\n{generated}"
+    );
 
     assert_section_present(
         &generated,

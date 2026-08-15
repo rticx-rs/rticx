@@ -6,7 +6,6 @@ use crate::parse::ast::SoftwareTask;
 use crate::parse::{App, SWT_TRAIT_TY};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
-use rticx_core::parse_utils::RticAttr;
 use syn::{ItemMod, LitInt, Path, parse_quote};
 
 /// Compute the name of the core-local pend function for `core`.
@@ -38,7 +37,7 @@ impl<'a> CodeGen<'a> {
         }
     }
 
-    pub fn run(&mut self) -> ItemMod {
+    pub fn run(&self) -> ItemMod {
         // For every sub-application, generate the software tasks and their dispatchers and associated queues and types.
         let sub_apps = self.generate_subapps();
         let local_pend_fns = self.get_local_pend_fns();
@@ -144,58 +143,34 @@ impl<'a> CodeGen<'a> {
         quote!(#(#fns)*)
     }
 
-    fn generate_subapps(&mut self) -> TokenStream {
+    fn generate_subapps(&self) -> TokenStream {
         let num_cores = self.app.sub_apps.len();
         let queue_path = self.backend.queue_path();
-        let apps = self.app.sub_apps.iter_mut();
+        let apps = self.app.sub_apps.iter();
         let analysis = self.analysis.sub_analysis.iter();
 
         let sub_apps = apps.zip(analysis).map(|(sub_app, sub_analysis)| {
             let pac = &self.app.app_params.pacs[sub_app.core as usize];
             // first merge the multi-core and core local tasks as the same code will be generated for both
-            let tasks_iter = sub_app
-                .sw_tasks
-                .iter_mut()
-                .chain(sub_app.mc_sw_tasks.iter_mut());
+            let tasks_iter = sub_app.sw_tasks.iter().chain(sub_app.mc_sw_tasks.iter());
             // Re-generate the software tasks definitions and generate the spawn() api for each task
             let sw_tasks = tasks_iter.map(|task| {
-                // We will rename the "sw_task" attribute to "task" so that the standard pass recognizes this as a task
-                // also, we will add the `task_trait = RticSwTask` argument.
-
-                // first find the index of the sw_task attribute
-                let attr_idx = task
-                    .task_struct
-                    .attrs
-                    .iter()
-                    .position(|attr| attr.path().is_ident("sw_task"))
-                    .expect("A sw task must have a sw_task attribute");
-
-                // Then remove the old attribute as we will reconstruct it
-                let attr = task.task_struct.attrs.remove(attr_idx);
-
-                // Now we parse and reconstruct the task attribute
-                let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap(); // FIXME: propagate error
-                reconstructed_task_attr.name = format_ident!("task");
-                // these arguments are consumed by this pass; the core pass would
-                // reject them as unknown task arguments
-                reconstructed_task_attr.elements.remove("spawn_by");
-                reconstructed_task_attr.elements.remove("capacity");
-                reconstructed_task_attr
-                    .elements
-                    .insert("task_trait".into(), syn::parse_str(SWT_TRAIT_TY).unwrap());
-
+                // The task attribute was already reconstructed by the parsing
+                // phase: `sw_task` renamed to `task`, pass-only keys removed,
+                // and the `task_trait = RticSwTask` argument added.
+                let task_attr = &task.task_attr;
                 let task_struct = &task.task_struct;
                 let task_impl = &task.task_impl;
                 // generate the spawn() function for this software task
                 let dispatcher = sub_analysis
                     .dispatcher_priority_map
                     .get(&task.params.priority)
-                    .unwrap(); // safe to unwrap
+                    .expect("analysis assigns a dispatcher to every priority group"); // safe to unwrap
                 let spawn_impl =
                     task.generate_spawn_api(dispatcher, pac, self.backend, num_cores, &queue_path);
 
                 quote! {
-                    #reconstructed_task_attr
+                    #task_attr
                     #task_struct
                     #task_impl
                     #spawn_impl
@@ -325,7 +300,7 @@ impl SoftwareTask {
                     pub fn spawn(input : #inputs_ty) -> Result<(), #inputs_ty> {
                         let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};
-                        /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
+                        // need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                         #critical_section_fn(|| -> Result<(), #inputs_ty>  {
                             if unsafe { !__rticx_sw_system_initialized } {
                                 return Err(input);
@@ -353,7 +328,7 @@ impl SoftwareTask {
                     pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), #inputs_ty> {
                         let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};
-                        /// need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
+                        // need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
                         #critical_section_fn(|| -> Result<(), #inputs_ty>  {
                             if unsafe { !__rticx_sw_system_initialized } {
                                 return Err(input);
