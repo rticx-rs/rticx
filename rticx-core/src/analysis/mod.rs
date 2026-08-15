@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use syn::Ident;
-use syn::spanned::Spanned;
 
 use crate::App;
 use crate::parser::SubApp;
@@ -114,9 +113,9 @@ fn update_resource_priorities(
                 }
             } else {
                 return Err(syn::Error::new(
-                    task.task_struct.span(),
+                    resource_ident.span(),
                     format!(
-                        "The resource `{resource_ident}` was not found in `{}`",
+                        "the resource `{resource_ident}` was not found in the `#[shared]` struct `{}`",
                         shared.strct.ident
                     ),
                 ));
