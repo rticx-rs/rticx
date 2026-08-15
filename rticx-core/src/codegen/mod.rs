@@ -1,5 +1,6 @@
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
+use std::collections::HashSet;
 use task_init::{generate_task_inits_struct, generate_task_inits_write_calls};
 
 use crate::CorePassBackend;
@@ -323,11 +324,18 @@ fn generate_core_type(core: u32) -> TokenStream2 {
     }
 }
 
-/// This will generate the `use path::to::pac as _` statement.
-/// This is usually needed as the PAC needs to be imported as it defines the vector table
+/// This will generate the `use path::to::pac as _;` statements.
+/// This is usually needed as the PAC needs to be imported as it defines the vector table.
+/// Each core may use a different PAC, so one import is emitted per unique PAC path.
 fn generate_use_pac_statement(app: &App) -> TokenStream2 {
-    let path_to_pac = &app.args.pacs[0];
+    let mut seen = HashSet::new();
+    let pacs = app
+        .args
+        .pacs
+        .iter()
+        .filter(|path| seen.insert(path.to_token_stream().to_string()))
+        .collect::<Vec<_>>();
     quote! {
-        use #path_to_pac as _;
+        #(use #pacs as _;)*
     }
 }
