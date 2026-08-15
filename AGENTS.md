@@ -29,6 +29,12 @@ Three layers:
 | `rticx-deadline-pass` | `compilation-passes/rticx-deadline-pass/` | Converts `deadline = D` to priorities |
 | `rticx-async-pass` | `compilation-passes/rticx-async-pass/` | Async/await software tasks (executors, channels, wakers) |
 
+### Tooling
+
+| Tool | Path | What it does |
+|------|------|---------------|
+| `rticx-expand` | `tools/rticx-expand/` | `cargo rticx-expand` subcommand: prints the complete expanded source (user code around the `#[…::app]` module preserved) to stdout like `cargo expand` (`--merge` splices it into the source file, `restore` reverts), `--expand-passes <dir>` snapshots the module after every pass + the core pass for diffing |
+
 ### Distributions
 
 | Distribution | Path | Target |
@@ -42,7 +48,6 @@ Three layers:
 
 | Crate | Feature | Effect |
 |-------|---------|--------|
-| `rticx-core` | `debug_expand` | Writes expanded code to disk |
 | `rticx-cortex-m` | `armv6m` | Source-masking lock (default: BASEPRI) |
 | `rticx-cortex-m` | `async` | Enables async/await software tasks |
 | `rticx-riscv` | `slic` / `esp32c3` / `esp32c6` | Mutually exclusive target selectors |
@@ -79,6 +84,10 @@ cd compilation-passes/rticx-async-pass && cargo test
 cd compilation-passes/rticx-auto-assign && cargo test -- --test-threads=1
 cd compilation-passes/rticx-deadline-pass && cargo test
 
+# rticx-expand tool
+cd tools/rticx-expand && cargo test
+cargo install --path tools/rticx-expand  # enables `cargo rticx-expand`
+
 # Build distribution examples
 cd distributions/rticx-cortex-m/example-apps/armv7m-app
 cargo build --example hello_rtic
@@ -103,4 +112,4 @@ Load these with the `skill` tool for detailed reference on specific tasks:
 | `rticx-create-distribution` | How to create a new distribution (references wiki) |
 
 
-*Last oriented: 2026-08-12*
+*Last oriented: 2026-08-15*

@@ -68,6 +68,7 @@ impl<'a> CodeGen<'a> {
             pub mod #app_mod {
                 #![allow(non_upper_case_globals)]
                 #![allow(non_snake_case)]
+
                 /// Include peripheral crate(s) that defines the vector table
                 #peripheral_crate
 
@@ -221,10 +222,8 @@ impl<'a> CodeGen<'a> {
             .map(|inj| inj.before_idle.as_slice())
             .unwrap_or(&[]);
 
-        let doc = format!(" # CORE {}", app.core);
         let entry_of = format!(" # Entry of CORE {}", app.core);
         quote! {
-            #[doc = #doc]
             // define static mut shared resources
             #shared_resources_def
             // init task

@@ -204,14 +204,8 @@ impl<'a> CodeGen<'a> {
 
             // generate dispatchers as hardware tasks
             let dispatcher_tasks = generate_dispatcher_tasks(sub_analysis, &queue_path);
-            let core_doc = format!(" Core {}", sub_app.core);
             quote! {
-                #[doc = " Software tasks of"]
-                #[doc = #core_doc]
                 #(#sw_tasks)*
-
-                #[doc = " Dispatchers of"]
-                #[doc = #core_doc]
                 #dispatcher_tasks
             }
         });

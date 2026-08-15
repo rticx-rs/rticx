@@ -1,0 +1,22 @@
+[package]
+name = "rticx-expand"
+version = "0.1.0"
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+description = "Expands RTICX applications into plain Rust for GDB debugging, inspection, and security vetting"
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+keywords = ["rtic", "rticx", "proc-macro", "embedded", "debugging"]
+categories = ["development-tools", "embedded"]
+readme = "README.md"
+
+[[bin]]
+name = "cargo-rticx-expand"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"

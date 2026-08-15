@@ -11,6 +11,7 @@ pub use common_internal::rticx_traits;
 pub use analysis::{Analysis, SubAnalysis};
 pub use backend::CorePassBackend;
 use codegen::CodeGen;
+use expand_log::{ExpandLog, render_pass_state};
 pub use parser::{
     App, SubApp,
     ast::{AppArgs, RticTask},
@@ -23,6 +24,7 @@ mod backend;
 pub mod codegen;
 mod common_internal;
 pub mod errors;
+pub mod expand_log;
 pub mod mock_backend;
 pub mod parse_utils;
 
@@ -108,38 +110,109 @@ impl RticMacroBuilder {
     /// Returns a `proc_macro::TokenStream` of the expanded user application. This is the entry
     /// point used by distribution proc-macros.
     pub fn build_rtic_macro(self, args: TokenStream, input: TokenStream) -> TokenStream {
+        // The first token of the annotated item carries a span from the file
+        // the user invoked the macro from. Use it to derive where expansion
+        // files should be written when `RTICX_EXPAND` is set.
+        let source_file = input
+            .clone()
+            .into_iter()
+            .next()
+            .and_then(|token| token.span().local_file());
         let args = TokenStream2::from(args);
         let app_mod = parse_macro_input!(input as ItemMod);
-        self.build_rtic_macro2(args, app_mod).into()
+        self.build_rtic_macro2(args, app_mod, source_file).into()
     }
 
     /// Same as [build_rtic_macro] but operates on `proc_macro2` types.
     ///
     /// This method is exposed so that tests and downstream tooling can drive the core pipeline
-    /// without needing a proc-macro context.
-    pub fn build_rtic_macro2(mut self, args: TokenStream2, app_mod: ItemMod) -> TokenStream2 {
+    /// without needing a proc-macro context. `source_file` is the file the macro was invoked
+    /// from (if known) and is used to name expansion files when `RTICX_EXPAND` is set.
+    pub fn build_rtic_macro2(
+        mut self,
+        args: TokenStream2,
+        app_mod: ItemMod,
+        source_file: Option<std::path::PathBuf>,
+    ) -> TokenStream2 {
         self.core.subscribe(self.info_bus.clone());
 
+        let expand_log = ExpandLog::from_env(source_file);
         let mut args = args;
         let mut app_mod = app_mod;
 
+        // Best-effort: baseline snapshot of the module exactly as the user
+        // wrote it, so the first diff shows what the first pass changed.
+        if let Some(log) = &expand_log
+            && log.pass_dir().is_some()
+        {
+            let state =
+                render_pass_state("original app module (before all passes)", &args, &app_mod);
+            log.write_pass_state(0, "original", &state);
+        }
+
         // First, run pre-core passes (in the order of their insertion)
-        for pass in &mut self.pre_std_passes {
+        for (idx, pass) in self.pre_std_passes.iter_mut().enumerate() {
             (*pass).subscribe(self.info_bus.clone());
+            // Clone the pre-pass state (only while logging) so that the input
+            // of a failing pass can still be dumped.
+            let pass_input = expand_log
+                .as_ref()
+                .filter(|log| log.pass_dir().is_some())
+                .map(|_| (args.clone(), app_mod.clone()));
             let (out_args, out_mod) = match pass.run_pass(args, app_mod) {
                 Ok(out) => out,
                 Err(e) => {
+                    // Best-effort: dump the state the failing pass received so
+                    // pass developers can inspect what broke it.
+                    if let (Some(log), Some((pre_args, pre_mod))) = (&expand_log, pass_input) {
+                        let state = render_pass_state(
+                            &format!("input to `{}` (pass failed)", pass.pass_name()),
+                            &pre_args,
+                            &pre_mod,
+                        );
+                        log.write_pass_state(
+                            idx + 1,
+                            &format!("{}_input", pass.pass_name()),
+                            &state,
+                        );
+                    }
                     return contextualize(e, format!("in `{}` compilation pass", pass.pass_name()));
                 }
             };
             app_mod = out_mod;
             args = out_args;
+            // Snapshot the module after the pass so consecutive snapshots can
+            // be diffed to see exactly what the pass changed.
+            if let Some(log) = &expand_log
+                && log.pass_dir().is_some()
+            {
+                let state = render_pass_state(
+                    &format!("output of `{}`", pass.pass_name()),
+                    &args,
+                    &app_mod,
+                );
+                log.write_pass_state(idx + 1, pass.pass_name(), &state);
+            }
         }
 
         // parse user application comprised of init, idle, and other tasks and resources
+        let parse_input = expand_log
+            .as_ref()
+            .filter(|log| log.pass_dir().is_some())
+            .map(|_| (args.clone(), app_mod.clone()));
         let mut parsed_app = match App::parse(args, app_mod) {
             Ok(parsed) => parsed,
             Err(e) => {
+                // Best-effort: dump the post-passes state the core parser
+                // received, so pass developers can inspect what broke it.
+                if let (Some(log), Some((post_args, post_mod))) = (&expand_log, parse_input) {
+                    let state = render_pass_state(
+                        "state after all passes (core parsing failed)",
+                        &post_args,
+                        &post_mod,
+                    );
+                    log.write_pass_state(self.pre_std_passes.len() + 1, "post_passes", &state);
+                }
                 return contextualize(
                     e,
                     "in `core` compilation pass during the user code `parsing` phase",
@@ -187,15 +260,13 @@ impl RticMacroBuilder {
             .with_injections(&injections)
             .run();
 
-        #[cfg(feature = "debug_expand")]
-        if let Ok(binary_name) = std::env::var("CARGO_BIN_NAME")
-            && let Ok(out) = project_root::get_project_root()
-        {
-            let _ = std::fs::create_dir_all(out.join("examples"));
-            let _ = std::fs::write(
-                out.join(format!("examples/{binary_name}_expanded.rs")),
-                code.to_string().as_bytes(),
-            );
+        // Best-effort: write the final expansion even if the generated code
+        // later fails to type-check, so it can still be inspected/debugged.
+        if let Some(log) = &expand_log {
+            log.write("expanded", &code);
+            if log.pass_dir().is_some() {
+                log.write_pass_state(self.pre_std_passes.len() + 1, "core", &code.to_string());
+            }
         }
 
         code

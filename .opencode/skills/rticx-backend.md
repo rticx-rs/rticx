@@ -22,7 +22,7 @@ Inside `RticMacroBuilder::build_rtic_macro2`:
 7. Call `CorePassBackend::pre_codegen_validation`.
 8. Collect injections from all passes by calling `pass.main_injection(&point)` for each `MainInjectionPoint`.
 9. Run `CodeGen::new(core_backend, &parsed_app, &analysis).with_injections(&injections).run()`.
-10. If `debug_expand` is enabled, write expanded code to disk.
+10. If `RTICX_EXPAND` is set, write the final expansion to `target/rticx-expand/` via `rticx-core/src/expand_log.rs`.
 
 > Only **pre-core** passes are supported. Passes that need to react after core codegen can take the final TokenStream emitted by build_rti_macro() and make further changes.
 

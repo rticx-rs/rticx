@@ -40,6 +40,7 @@ Full user and distributor guides are available in the [project wiki](https://git
 | `compilation-passes/rticx-sw-pass/` | `rticx-sw-pass` | Vanilla software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
 | `compilation-passes/rticx-auto-assign/` | `rticx-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
 | `compilation-passes/rticx-deadline-pass/` | `rticx-deadline-pass` | Converts `deadline = D` attributes into RTICX priorities. |
+| `tools/rticx-expand/` | `rticx-expand` | `cargo rticx-expand` subcommand: prints the complete expanded source (user code preserved) to stdout like `cargo expand` (`--merge` splices it into the source file for inspection and GDB stepping, `restore` reverts); `--expand-passes <dir>` snapshots the module after every pass for diffing. |
 | `distributions/rticx-cortex-m/` | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) distribution. |
 | `distributions/rticx-riscv/` | `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 |
 | `distributions/rticx-rp2040/` | `rticx-rp2040` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |

@@ -298,17 +298,12 @@ impl<'a> CodeGen<'a> {
                 &async_runtime_path,
                 core,
             );
-            let core_doc = format!(" Core {}", sub_app.core);
             quote! {
-                #[doc = " Async tasks of"]
-                #[doc = #core_doc]
                 #(#sw_tasks)*
                 #(#wrapper_fns)*
                 #(#ptr_statics)*
                 #(#wake_fns)*
 
-                #[doc = " Dispatchers of"]
-                #[doc = #core_doc]
                 #dispatcher_tasks
                 #idle_executor
             }
