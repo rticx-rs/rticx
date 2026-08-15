@@ -175,7 +175,7 @@ impl<'a> CodeGen<'a> {
 
                 // Now we parse and reconstruct the task attribute
                 let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap(); // FIXME: propagate error
-                let _ = reconstructed_task_attr.name.insert(format_ident!("task"));
+                reconstructed_task_attr.name = format_ident!("task");
                 reconstructed_task_attr
                     .elements
                     .insert("task_trait".into(), syn::parse_str(SWT_TRAIT_TY).unwrap());

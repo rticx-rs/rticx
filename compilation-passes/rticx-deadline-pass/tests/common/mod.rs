@@ -4,7 +4,7 @@
 
 use proc_macro2::TokenStream;
 use quote::ToTokens;
-use quote::quote;
+use quote::{format_ident, quote};
 use rticx_core::parse_utils::RticAttr;
 use rticx_deadline_pass::deadline_pass::{App, DeadlineToPriorityPass};
 
@@ -31,7 +31,7 @@ pub fn app_mod(items: TokenStream) -> syn::ItemMod {
 /// Parse args + items and run the deadline pass analysis.
 pub fn analyze(args: TokenStream, items: TokenStream) -> syn::Result<App> {
     let app_mod = app_mod(items);
-    let params = RticAttr::parse_from_tokens(args).expect("params parse");
+    let params = RticAttr::parse_from_tokens(args, format_ident!("app")).expect("params parse");
     let mut parsed = App::parse(&params, app_mod).expect("app parse");
     let pass = DeadlineToPriorityPass::new(255); // High max_priority for tests
     pass.analyze(&mut parsed);

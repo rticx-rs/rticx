@@ -1,4 +1,5 @@
 use proc_macro2::{Span, TokenStream};
+use quote::format_ident;
 use rticx_core::{errors::ParseError, parse_utils::RticAttr};
 use std::collections::HashMap;
 use syn::{Expr, Ident, ItemImpl, ItemStruct, Lit, Path, spanned::Spanned};
@@ -13,7 +14,7 @@ pub struct AppParameters {
 impl AppParameters {
     pub fn parse(args: &TokenStream) -> syn::Result<Self> {
         let args_span = args.span();
-        let mut args = RticAttr::parse_from_tokens(args.clone())?;
+        let mut args = RticAttr::parse_from_tokens(args.clone(), format_ident!("app"))?;
 
         // parse the number of cores
         let cores = args.elements.remove("cores");

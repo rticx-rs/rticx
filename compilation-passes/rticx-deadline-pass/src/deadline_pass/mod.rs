@@ -4,6 +4,7 @@ pub use parse::App;
 
 use codegen::CodeGen;
 use proc_macro2::TokenStream;
+use quote::format_ident;
 use rticx_core::RticPass;
 use rticx_core::parse_utils::RticAttr;
 use syn::{ItemMod, parse_quote};
@@ -22,7 +23,7 @@ impl DeadlineToPriorityPass {
 impl RticPass for DeadlineToPriorityPass {
     fn subscribe(&mut self, _info_bus: rticx_core::InfoBus) {}
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
-        let params = RticAttr::parse_from_tokens(args.clone())?;
+        let params = RticAttr::parse_from_tokens(args.clone(), format_ident!("app"))?;
 
         let mut parsed = App::parse(&params, app_mod)?;
 

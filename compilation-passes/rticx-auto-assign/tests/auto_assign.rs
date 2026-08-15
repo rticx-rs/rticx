@@ -5,7 +5,7 @@
 //! the returned error) to verify the logic.
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use rticx_auto_assign::auto_assign;
 use rticx_auto_assign::parse::App;
 use rticx_core::parse_utils::RticAttr;
@@ -15,7 +15,8 @@ mod common;
 use common::{app_mod, assert_err_contains, multi_core_args, single_core_args};
 
 fn parse(args: &TokenStream, app_mod: syn::ItemMod) -> App {
-    let params = RticAttr::parse_from_tokens(args.clone()).expect("params parse");
+    let params =
+        RticAttr::parse_from_tokens(args.clone(), format_ident!("app")).expect("params parse");
     App::parse(&params, app_mod).expect("app parse")
 }
 

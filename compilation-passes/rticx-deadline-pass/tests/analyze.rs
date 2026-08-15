@@ -3,7 +3,7 @@
 //! These run `App::parse` followed by `DeadlineToPriorityPass::analyze` and inspect the resulting
 //! `App` (positive scenarios) or assert the expected `syn::Error` (negative scenarios).
 
-use quote::quote;
+use quote::{format_ident, quote};
 use rticx_deadline_pass::deadline_pass::App;
 
 mod common;
@@ -216,7 +216,8 @@ fn analyze_panics_when_more_unique_deadlines_than_max_priority() {
     };
 
     let app_mod = common::app_mod(items);
-    let params = rticx_core::parse_utils::RticAttr::parse_from_tokens(args).expect("params parse");
+    let params = rticx_core::parse_utils::RticAttr::parse_from_tokens(args, format_ident!("app"))
+        .expect("params parse");
     let mut parsed = App::parse(&params, app_mod).expect("app parse");
 
     // Max priority = 2, but we have 3 unique deadlines
@@ -247,7 +248,8 @@ fn analyze_max_priority_edge_case_equal() {
     };
 
     let app_mod = common::app_mod(items);
-    let params = rticx_core::parse_utils::RticAttr::parse_from_tokens(args).expect("params parse");
+    let params = rticx_core::parse_utils::RticAttr::parse_from_tokens(args, format_ident!("app"))
+        .expect("params parse");
     let mut parsed = App::parse(&params, app_mod).expect("app parse");
 
     // Max priority = 2, 2 unique deadlines = OK

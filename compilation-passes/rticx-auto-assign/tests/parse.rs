@@ -1,7 +1,7 @@
 //! Integration tests for the parse phase of `rticx-auto-assign`.
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, format_ident, quote};
 use rticx_auto_assign::parse::{APP_CORES, App};
 use rticx_core::parse_utils::RticAttr;
 use std::sync::atomic::Ordering;
@@ -13,7 +13,7 @@ use common::{app_mod, assert_err_contains, multi_core_args, single_core_args};
 /// Builds a params `RticAttr` from a raw args tokenstream (mirrors what
 /// `AutoAssignPass::run_pass` does internally).
 fn params(args: &TokenStream) -> RticAttr {
-    RticAttr::parse_from_tokens(args.clone()).expect("params parse")
+    RticAttr::parse_from_tokens(args.clone(), format_ident!("app")).expect("params parse")
 }
 
 #[test]

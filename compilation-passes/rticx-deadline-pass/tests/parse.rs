@@ -1,7 +1,7 @@
 //! Integration tests for the parse phase of `rticx-deadline-pass`.
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, format_ident, quote};
 use rticx_core::parse_utils::RticAttr;
 use rticx_deadline_pass::deadline_pass::parse::App;
 
@@ -11,7 +11,7 @@ use common::{app_mod, single_core_args};
 
 /// Builds a params `RticAttr` from a raw args tokenstream
 fn params(args: &TokenStream) -> RticAttr {
-    RticAttr::parse_from_tokens(args.clone()).expect("params parse")
+    RticAttr::parse_from_tokens(args.clone(), format_ident!("app")).expect("params parse")
 }
 
 #[test]

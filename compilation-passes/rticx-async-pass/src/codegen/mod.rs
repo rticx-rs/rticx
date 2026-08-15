@@ -222,7 +222,7 @@ impl<'a> CodeGen<'a> {
                         let attr = task.task_struct.attrs.remove(attr_idx);
 
                         let mut reconstructed_task_attr = RticAttr::parse_from_attr(&attr).unwrap();
-                        let _ = reconstructed_task_attr.name.insert(format_ident!("task"));
+                        reconstructed_task_attr.name = format_ident!("task");
                         reconstructed_task_attr.elements.insert(
                             "task_trait".into(),
                             syn::parse_str(ASYNC_TASK_TRAIT_TY).unwrap(),
