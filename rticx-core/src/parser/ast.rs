@@ -1,10 +1,7 @@
 use heck::ToSnakeCase;
 use proc_macro2::Span;
-use quote::{ToTokens, format_ident};
-use syn::{
-    Expr, ExprArray, ExprLit, Ident, ItemFn, ItemImpl, ItemStruct, Lit, LitInt, Meta,
-    parse::Parser, parse_quote, spanned::Spanned,
-};
+use quote::format_ident;
+use syn::{Expr, Ident, ItemFn, ItemImpl, ItemStruct, Meta, spanned::Spanned};
 
 use crate::{errors::ParseError, parse_utils::RticAttr, rticx_traits::HWT_TRAIT_TY};
 
@@ -35,26 +32,9 @@ pub struct InitTaskArgs {
 
 impl InitTaskArgs {
     pub fn parse(args: Meta) -> syn::Result<Self> {
-        let mut core: Option<syn::LitInt> = None;
-        let Meta::List(args) = args else {
-            return Ok(Self::default());
-        };
-
-        syn::meta::parser(|meta| {
-            if meta.path.is_ident("core") {
-                core = Some(meta.value()?.parse()?)
-            } else {
-                // this is needed to advance the values iterator
-                let _ = meta.value()?.parse::<Expr>();
-            }
-            Ok(())
-        })
-        .parse2(args.tokens)?;
-
-        let core = core
-            .and_then(|core| core.base10_parse().ok())
-            .unwrap_or_default();
-
+        let mut attr = RticAttr::from_meta(&args)?;
+        attr.ensure_supported(&["core"])?;
+        let core = attr.take_u32("core")?.unwrap_or_default();
         Ok(Self { core })
     }
 }
@@ -77,80 +57,23 @@ pub struct TaskArgs {
 
 impl TaskArgs {
     pub fn parse(args: Meta) -> syn::Result<Self> {
-        let Meta::List(args) = args else {
-            return Ok(TaskArgs {
-                binds: None,
-                priority: DEFAULT_TASK_PRIORITY,
-                shared: Default::default(),
-                core: 0,
-                task_trait: format_ident!("{HWT_TRAIT_TY}"),
-                init_generated: false,
-            });
-        };
+        let mut attr = RticAttr::from_meta(&args)?;
+        attr.ensure_supported(&["binds", "priority", "shared", "core", "task_trait", "init"])?;
 
-        let mut binds: Option<syn::Path> = None;
-        let mut task_trait: Option<Ident> = None;
-        let mut priority: Option<LitInt> = None;
-        let mut shared: Option<ExprArray> = None;
-        let mut core: Option<LitInt> = None;
-        let mut init_generated: Option<bool> = None;
-
-        syn::meta::parser(|meta| {
-            if meta.path.is_ident("binds") {
-                binds = Some(meta.value()?.parse()?);
-            } else if meta.path.is_ident("priority") {
-                priority = Some(meta.value()?.parse()?);
-            } else if meta.path.is_ident("shared") {
-                shared = Some(meta.value()?.parse()?);
-            } else if meta.path.is_ident("core") {
-                core = Some(meta.value()?.parse()?);
-            } else if meta.path.is_ident("task_trait") {
-                task_trait = Some(meta.value()?.parse()?);
-            } else if meta.path.is_ident("init") {
-                let value: Expr = meta.value()?.parse()?;
-                match value {
-                    Expr::Path(p) if p.path.is_ident("generated") => init_generated = Some(true),
-                    other => {
-                        return Err(syn::Error::new(other.span(), "expected `init = generated`"));
-                    }
-                }
-            } else {
-                // this is needed to advance the values iterator
-                let _: syn::Result<Expr> = meta
-                    .value()
-                    // Try parsing the assignment operator. On failure, set value = ().
-                    .map(|v| v.parse())
-                    .unwrap_or_else(|_| Ok(parse_quote!(())));
+        let binds = attr.take_ident("binds")?;
+        let priority = attr.take_u16("priority")?.unwrap_or(DEFAULT_TASK_PRIORITY);
+        let shared = attr.take_ident_array("shared")?.unwrap_or_default();
+        let core = attr.take_u32("core")?.unwrap_or_default();
+        let task_trait = attr
+            .take_ident("task_trait")?
+            .unwrap_or_else(|| format_ident!("{HWT_TRAIT_TY}"));
+        let init_generated = match attr.take_expr("init") {
+            None => false,
+            Some(Expr::Path(p)) if p.path.is_ident("generated") => true,
+            Some(other) => {
+                return Err(syn::Error::new(other.span(), "expected `init = generated`"));
             }
-            Ok(())
-        })
-        .parse2(args.tokens.clone())
-        .inspect_err(|_e| {
-            eprintln!(
-                "An error occurred while parsing: {:?}",
-                args.tokens.to_string()
-            );
-        })?;
-
-        let binds = binds.map(|i| Ident::new(&i.to_token_stream().to_string(), Span::call_site()));
-
-        let priority = priority
-            .and_then(|p| p.base10_parse().ok())
-            .unwrap_or(DEFAULT_TASK_PRIORITY);
-
-        let core = core
-            .and_then(|core| core.base10_parse().ok())
-            .unwrap_or_default();
-        let task_trait = task_trait.unwrap_or(format_ident!("{HWT_TRAIT_TY}"));
-
-        let shared = shared
-            .map(|expr| {
-                expr.elems
-                    .into_iter()
-                    .map(|elem| Ident::new(&elem.to_token_stream().to_string(), Span::call_site()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        };
 
         Ok(Self {
             binds,
@@ -158,7 +81,7 @@ impl TaskArgs {
             shared,
             core,
             task_trait,
-            init_generated: init_generated.unwrap_or_default(),
+            init_generated,
         })
     }
 }
@@ -215,26 +138,9 @@ pub struct SharedResourcesArgs {
 
 impl SharedResourcesArgs {
     pub fn parse(args: Meta) -> syn::Result<Self> {
-        let mut core: Option<syn::LitInt> = None;
-        let Meta::List(args) = args else {
-            return Ok(Self::default());
-        };
-
-        syn::meta::parser(|meta| {
-            if meta.path.is_ident("core") {
-                core = Some(meta.value()?.parse()?)
-            } else {
-                // this is needed to advance the values iterator
-                let _ = meta.value()?.parse::<Expr>();
-            }
-            Ok(())
-        })
-        .parse2(args.tokens)?;
-
-        let core = core
-            .and_then(|core| core.base10_parse().ok())
-            .unwrap_or_default();
-
+        let mut attr = RticAttr::from_meta(&args)?;
+        attr.ensure_supported(&["core"])?;
+        let core = attr.take_u32("core")?.unwrap_or_default();
         Ok(Self { core })
     }
 }
@@ -270,28 +176,22 @@ pub struct AppArgs {
     // path to peripheral crate
     pub pacs: Vec<syn::Path>,
     pub cores: u32,
+    /// Warning items generated for unsupported arguments, to be emitted by codegen.
+    pub warnings: Vec<proc_macro2::TokenStream>,
 }
 
 impl AppArgs {
     pub fn parse(args: proc_macro2::TokenStream) -> syn::Result<Self> {
         let args_span = args.span();
 
-        let mut args = RticAttr::parse_from_tokens(args.clone(), format_ident!("app"))?;
+        let mut attr = RticAttr::parse_from_tokens(args.clone(), format_ident!("app"))?;
 
         // parse the number of cores
-        let cores = args.elements.remove("cores");
-        let cores = match cores {
-            Some(Expr::Lit(ExprLit {
-                lit: Lit::Int(lit_int),
-                ..
-            })) => lit_int.base10_parse()?,
-            _ => 1_u32,
-        };
+        let cores = attr.take_u32("cores")?.unwrap_or(1);
 
         // parse the path(s) to PAC(s)
-        let device = args
-            .elements
-            .remove("device")
+        let device = attr
+            .take_expr("device")
             .ok_or(ParseError::DeviceArg.to_syn(args_span))?;
 
         let pacs = match device {
@@ -300,26 +200,36 @@ impl AppArgs {
                     return Err(ParseError::DevicesCoresMismatch.to_syn(args_span));
                 }
 
-                let mut devices = Vec::with_capacity(cores as usize);
-                for exp in array_exp.elems {
-                    if let Expr::Path(p) = exp {
-                        devices.push(p.path)
-                    } else {
-                        return Err(ParseError::DeviceNotPath.to_syn(args_span));
-                    }
-                }
-                devices
+                array_exp
+                    .elems
+                    .into_iter()
+                    .map(|exp| match exp {
+                        Expr::Path(p) if p.qself.is_none() => Ok(p.path),
+                        other => Err(syn::Error::new(
+                            other.span(),
+                            "each element of `device` must be a path to a PAC crate",
+                        )),
+                    })
+                    .collect::<syn::Result<Vec<_>>>()?
             }
-            Expr::Path(path_to_pac) => {
-                let mut devices = Vec::with_capacity(cores as usize);
-                for _ in 0..cores {
-                    devices.push(path_to_pac.path.clone())
-                }
-                devices
+            Expr::Path(path_to_pac) if path_to_pac.qself.is_none() => {
+                vec![path_to_pac.path; cores as usize]
             }
-            _ => return Err(ParseError::DeviceNotPath.to_syn(args_span)),
+            other => {
+                return Err(syn::Error::new(
+                    other.span(),
+                    "`device` must be a path or an array of paths to PAC crates",
+                ));
+            }
         };
 
-        Ok(Self { pacs, cores })
+        // warn about unsupported arguments instead of failing
+        let warnings = attr.unsupported_warnings(&["device", "cores"]);
+
+        Ok(Self {
+            pacs,
+            cores,
+            warnings,
+        })
     }
 }

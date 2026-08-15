@@ -175,6 +175,32 @@ fn parse_task_args_init_bad_value_errors() {
 }
 
 #[test]
+fn parse_task_args_unknown_arg_errors() {
+    use rticx_core::parser::ast::TaskArgs;
+    let meta: syn::Meta = syn::parse_quote!(task(binds = UART, priorty = 2));
+    let err = TaskArgs::parse(meta).expect_err("typo'd argument must fail");
+    assert!(err.to_string().contains("unknown argument `priorty`"));
+}
+
+#[test]
+fn parse_task_args_non_integer_priority_errors() {
+    use rticx_core::parser::ast::TaskArgs;
+    let meta: syn::Meta = syn::parse_quote!(task(binds = UART, priority = "high"));
+    let err = TaskArgs::parse(meta).expect_err("non-integer priority must fail");
+    assert!(
+        err.to_string()
+            .contains("`priority` must be an integer literal")
+    );
+}
+
+#[test]
+fn app_args_unknown_key_generates_warning() {
+    let args: TokenStream = quote!(device = mypac, tyop = 3);
+    let parsed = AppArgs::parse(args).expect("unknown key must warn, not fail");
+    assert_eq!(parsed.warnings.len(), 1);
+}
+
+#[test]
 fn task_is_user_initializable_by_default() {
     let module: syn::ItemMod = syn::parse_quote! {
         mod app {

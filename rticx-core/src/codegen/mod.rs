@@ -51,6 +51,7 @@ impl<'a> CodeGen<'a> {
         let peripheral_crate = generate_use_pac_statement(app);
         let user_includes = &app.user_includes;
         let user_code = &app.other_code;
+        let warnings = &app.args.warnings;
         let interrupt_free_fn = get_interrupt_free_fn(implementation);
 
         // traits
@@ -71,6 +72,8 @@ impl<'a> CodeGen<'a> {
 
                 // ================================== user includes ====================================
                 #(#user_includes)*
+                // ================================== app args warnings =================================
+                #(#warnings)*
                 // ==================================== rticx traits ====================================
                 #rticx_traits_mod
                 // ================================== rticx functions ===================================

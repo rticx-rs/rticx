@@ -181,10 +181,10 @@ impl RticAttr {
 
     /// Returns an error for the first argument that is not in `supported`.
     pub fn ensure_supported(&self, supported: &[&str]) -> syn::Result<()> {
-        for unknown in self
+        if let Some(unknown) = self
             .elements
             .keys()
-            .filter(|key| !supported.contains(&key.as_str()))
+            .find(|key| !supported.contains(&key.as_str()))
         {
             return Err(syn::Error::new(
                 self.elements[unknown].span(),
