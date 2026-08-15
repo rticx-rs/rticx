@@ -3,7 +3,7 @@
 use proc_macro2::{Punct, Spacing, TokenStream as TokenStream2};
 use quote::{ToTokens, TokenStreamExt, format_ident, quote};
 use std::collections::HashMap;
-use syn::{Attribute, Meta, parse::Parser, parse_quote};
+use syn::{Attribute, Meta, parse::Parser, parse_quote, spanned::Spanned};
 
 #[derive(Debug, Clone)]
 pub struct RticAttr {
@@ -39,7 +39,10 @@ impl RticAttr {
                 parsed.name = name;
                 Ok(parsed)
             }
-            Meta::NameValue(_) => unreachable!(),
+            Meta::NameValue(ref nv) => Err(syn::Error::new(
+                nv.span(),
+                "expected attribute of the form `#[name(key = value, ...)]`",
+            )),
         }
     }
 

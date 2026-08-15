@@ -94,9 +94,15 @@ impl App {
             sub_apps.push(SubApp {
                 core,
                 shared: shared.remove(&core),
-                init: inits
-                    .remove(&core)
-                    .unwrap_or_else(|| panic!("No init found for core {core}")),
+                init: match inits.remove(&core) {
+                    Some(init) => init,
+                    None => {
+                        return Err(syn::Error::new(
+                            span,
+                            format!("No `#[init]` function was found for core {core}."),
+                        ));
+                    }
+                },
                 post_init: post_inits.remove(&core),
                 idle: idles.remove(&core),
                 tasks: tasks.remove(&core).unwrap_or_default(),
@@ -166,15 +172,20 @@ impl App {
                 let parsed_elements = strct
                     .fields
                     .iter()
-                    .map(|f| SharedElement {
-                        ident: f
-                            .ident
-                            .clone()
-                            .expect("unnamed struct is not supported for shared resources"),
-                        ty: f.ty.clone(),
-                        priority: 0,
+                    .map(|f| {
+                        let ident = f.ident.clone().ok_or_else(|| {
+                            syn::Error::new(
+                                f.span(),
+                                "`#[shared]` struct must use named fields; tuple structs are not supported.",
+                            )
+                        })?;
+                        Ok(SharedElement {
+                            ident,
+                            ty: f.ty.clone(),
+                            priority: 0,
+                        })
                     })
-                    .collect();
+                    .collect::<syn::Result<_>>()?;
                 Ok((
                     args.core,
                     SharedResources {
