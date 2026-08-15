@@ -85,7 +85,9 @@ impl CorePassBackend for CortexMRtic {
         // Configure priority + enable for every interrupt bound in this application
         // (this covers both user hardware tasks and dispatcher interrupts generated
         // by the software tasks pass, since both end up as `#[task(binds = ..)]`).
-        for (irq_name, priority) in &app_analysis.used_irqs {
+        for irq in &app_analysis.used_irqs {
+            let irq_name = &irq.name;
+            let priority = irq.priority;
             let es = format!(
                 "Maximum priority used by interrupt vector '{irq_name}' is more than supported by hardware"
             );

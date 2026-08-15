@@ -19,8 +19,8 @@ fn analysis_updates_resource_priority() {
 
     let sub_analysis = &analysis.sub_analysis[0];
     assert_eq!(sub_analysis.used_irqs.len(), 1);
-    assert_eq!(sub_analysis.used_irqs[0].0.to_string(), "UART");
-    assert_eq!(sub_analysis.used_irqs[0].1, 2);
+    assert_eq!(sub_analysis.used_irqs[0].name.to_string(), "UART");
+    assert_eq!(sub_analysis.used_irqs[0].priority, 2);
 }
 
 #[test]

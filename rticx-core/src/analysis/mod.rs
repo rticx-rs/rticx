@@ -47,9 +47,15 @@ impl Analysis {
 }
 
 #[derive(Debug, Clone)]
+pub struct UsedIrq {
+    pub name: Ident,
+    pub priority: u16,
+}
+
+#[derive(Debug, Clone)]
 pub struct SubAnalysis {
     // used interrupts and their priorities
-    pub used_irqs: Vec<(syn::Ident, u16)>,
+    pub used_irqs: Vec<UsedIrq>,
     // tasks the user must initialize through the `TaskInits` struct returned by `#[init]`
     pub late_resource_tasks: Vec<LateResourceTask>,
 }
@@ -60,7 +66,12 @@ impl SubAnalysis {
         let used_interrupts = app
             .tasks
             .iter()
-            .filter_map(|t| Some((t.args.binds.clone()?, t.args.priority)))
+            .filter_map(|t| {
+                Some(UsedIrq {
+                    name: t.args.binds.clone()?,
+                    priority: t.args.priority,
+                })
+            })
             .collect();
 
         // All user tasks must be initialized explicitly by the user through the

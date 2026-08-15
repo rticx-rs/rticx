@@ -62,7 +62,9 @@ impl CorePassBackend for BackendImpl {
         // Dispatchers are also SLIC interrupts (`SoftwareInterruptN`) and get their
         // priority set here. Hardware task interrupts are PAC interrupts
         // routed through the SLIC.
-        let set_prio = app_analysis.used_irqs.iter().map(|(irq_name, priority)| {
+        let set_prio = app_analysis.used_irqs.iter().map(|irq| {
+            let irq_name = &irq.name;
+            let priority = irq.priority;
             quote! {
                 unsafe {
                     rticx_riscv::export::set_priority(
@@ -112,9 +114,9 @@ impl CorePassBackend for BackendImpl {
         let interrupt_start = if cfg!(feature = "esp32c6") { 20u8 } else { 16 };
         let mut external_interrupts_map = std::collections::HashMap::new();
 
-        for ((irq_name, priority), cpu_interrupt_id) in
-            app_analysis.used_irqs.iter().zip(interrupt_start..)
-        {
+        for (irq, cpu_interrupt_id) in app_analysis.used_irqs.iter().zip(interrupt_start..) {
+            let irq_name = &irq.name;
+            let priority = irq.priority;
             let es_max = format!(
                 "Maximum priority used by interrupt vector '{irq_name}' is more than supported by hardware"
             );
@@ -202,7 +204,7 @@ impl CorePassBackend for BackendImpl {
             // The SLIC requires us to call to the [`rticx_riscv::export::codegen`] macro to generate
             // the appropriate SLIC structure, interrupt enumerations, etc.
             let mut stmts = vec![];
-            let used_irqs = app_analysis.used_irqs.iter().map(|irq| &irq.0);
+            let used_irqs = app_analysis.used_irqs.iter().map(|irq| &irq.name);
             let device = &app_args.pacs[0];
             let slic = quote! {rticx_riscv::export::riscv_slic};
 
