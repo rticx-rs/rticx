@@ -276,18 +276,6 @@ impl App {
             inits
                 .into_iter()
                 .map(|(mut init_fn, init_attr_idx)| {
-                    // // check return type
-                    // let expected_ret = format!("-> {}", shared_resources.strct.ident);
-                    // let found_ret = format!("{}", init_fn.sig.output.to_token_stream());
-                    // if found_ret != expected_ret {
-                    //     return Err(syn::Error::new(
-                    //         init_fn.span(),
-                    //         format!(
-                    //             "Expected function return type to be {expected_ret}, found {found_ret}."
-                    //         ),
-                    //     ));
-                    // }
-
                     // remove the [#init]
                     let attr = init_fn.attrs.remove(init_attr_idx);
                     let args = InitTaskArgs::parse(attr.meta)?;

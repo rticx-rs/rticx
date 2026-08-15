@@ -13,7 +13,7 @@ pub struct RticAttr {
 }
 
 impl RticAttr {
-    /// Parse a #[app(arg1="val1", ...)] macro attribute
+    /// Parse a #[app(arg1="val1", ...)] or #[task(core=N, param=M...)] macro attributes
     pub fn parse_from_attr(attribute: &Attribute) -> syn::Result<Self> {
         match attribute.meta {
             Meta::Path(ref path) => {
@@ -43,7 +43,7 @@ impl RticAttr {
         }
     }
 
-    /// Parse the tokenstream representation of the arguments of an #[app(arg1="val1", ...)] macro attribute
+    /// Parse the tokenstream representation of the arguments of an #[app(arg1="val1", ...)] or #[task(core=N, param=M...)] macro attribute
     pub fn parse_from_tokens(tokens: TokenStream2) -> syn::Result<Self> {
         let mut elements = HashMap::new();
         syn::meta::parser(|meta| {
