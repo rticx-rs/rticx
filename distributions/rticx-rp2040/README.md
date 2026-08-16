@@ -4,7 +4,7 @@
 
 ## Notes
 - This crate uses `rp2040-hal` crate pinned at version "0.10.2". 
-- Enabling `async` features will enabled the `critical-section-impl` feature of `rp2040-hal`, and you must remove/disable any other critical section backend
+- Enabling `async` features will enable the `critical-section-impl` feature of `rp2040-hal`, and you must remove/disable any other critical section backend
 
 
 ## Features
@@ -15,7 +15,22 @@
 
 ## Documentation
 
-Full user guide is available in the [project wiki](https://github.com/rticx-rs/rticx/wiki/User-Guide).
+Full user guide is available in the [project wiki](https://github.com/rticx-rs/rticx/wiki/User-Guide) including multicore syntax.
+
+## Core 1 stack size
+
+By default, core 1 gets a stack of **4096** 32-bit words (16 KiB). You can change
+this with the `core1_stack = N` `#[app]` argument, where `N` is the stack size in
+**32-bit words** (not bytes). The argument is only accepted when `cores = 2`;
+if omitted, the default of `4096` is used.
+
+``` rust
+// Give core 1 a 32 KiB stack (8192 * 4 bytes)
+#[rticx_rp2040::app(device = rp2040_hal::pac, cores = 2, core1_stack = 8192)]
+mod my_app {
+    // ...
+}
+```
 
 ## Examples
 You can find examples in `example-apps`. 

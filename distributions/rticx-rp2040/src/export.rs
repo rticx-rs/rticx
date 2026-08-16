@@ -281,21 +281,16 @@ pub mod cross_core {
         }
     }
 
-    pub fn init_core1<F>(entry: F)
+    /// Initialize and spawn core 1 from core 0.
+    ///
+    /// `stack` is the stack memory for core 1 and is sized in 32-bit (`usize`)
+    /// words. The RTICX code generation creates a `Stack<SIZE>` static from the
+    /// `core1_stack = N` `#[app]` argument (default `4096` words = 16 KiB) and
+    /// passes `&mut STACK.mem` here.
+    pub fn init_core1<F>(entry: F, stack: &'static mut [usize])
     where
         F: FnOnce() + Send + 'static,
     {
-        /// Stack for core 1
-        ///
-        /// Core 0 gets its stack via the normal route - any memory not used by static values is
-        /// reserved for stack and initialised by cortex-m-rt.
-        /// To get the same for Core 1, we would need to compile everything seperately and
-        /// modify the linker file for both programs, and that's quite annoying.
-        /// So instead, core1.spawn takes a [usize] which gets used for the stack.
-        /// NOTE: We use the `Stack` struct here to ensure that it has 32-byte alignment, which allows
-        /// the stack guard to take up the least amount of usable RAM.
-        static mut CORE1_STACK: super::Stack<4096> = super::Stack::new();
-
         let mut pac = unsafe { rp2040_hal::pac::Peripherals::steal() };
 
         // The single-cycle I/O block controls our GPIO pins
@@ -304,8 +299,7 @@ pub mod cross_core {
         let mut mc = super::Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
         let cores = mc.cores();
         let core1 = &mut cores[1];
-        #[allow(static_mut_refs)]
-        let _ = core1.spawn(unsafe { &mut CORE1_STACK.mem }, entry);
+        let _ = core1.spawn(stack, entry);
     }
 }
 

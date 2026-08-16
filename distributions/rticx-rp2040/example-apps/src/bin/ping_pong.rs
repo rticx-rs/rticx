@@ -12,7 +12,7 @@ use panic_halt as _;
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
-#[rticx_rp2040::app(device=rp2040_hal::pac, dispatchers=[[DMA_IRQ_0], [DMA_IRQ_1]], cores = 2)]
+#[rticx_rp2040::app(device=rp2040_hal::pac, dispatchers=[[DMA_IRQ_0], [DMA_IRQ_1]], cores = 2, core1_stack = 2048)]
 pub mod my_app {
 
     use cortex_m::asm;

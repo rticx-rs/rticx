@@ -103,7 +103,7 @@ pub mod app {
         init = generated,
     )]
     pub struct Encryptor;
-    
+
     /// Software task that decrypts the base64 input provided to it and prints the result to uart_tx
     /// see [crate::external_cipher] for task implementation
     #[sw_task(
@@ -112,7 +112,7 @@ pub mod app {
         init = generated,
     )]
     pub struct Decryptor;
-    
+
     /// Software task that hashes the input provided to it and prints it to the uart_tx
     #[sw_task(
         priority = 1,

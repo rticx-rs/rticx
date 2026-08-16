@@ -3,10 +3,13 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use rticx_async_pass::{AsyncPass, AsyncPassBackend};
 use rticx_auto_assign::AutoAssignPass;
-use rticx_core::{AppArgs, CorePassBackend, RticMacroBuilder, SubAnalysis, SubApp};
+use rticx_core::parse_utils::RticAttr;
+use rticx_core::{
+    AppArgs, CorePassBackend, InfoBus, RticMacroBuilder, RticPass, SubAnalysis, SubApp,
+};
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 #[allow(unused)]
-use syn::{ItemFn, LitInt, Path, parse_quote};
+use syn::{Expr, ExprLit, ItemFn, ItemMod, Lit, LitInt, Path, parse_quote, spanned::Spanned};
 
 extern crate proc_macro;
 
@@ -14,6 +17,15 @@ extern crate proc_macro;
 compile_error!(
     "rticx-rp2040-macro: the `swtasks` and `async` features are mutually exclusive; enable at most one"
 );
+
+/// Info bus entry holding the stack size (in 32-bit words) of core 1.
+/// Published by [`Core1StackPass`], consumed by the backend when generating the
+/// core 1 stack static in `generate_global_definitions`.
+static INFO_CORE1_STACK_SIZE: &str = "rticx_rp2040_core1_stack::StackSize";
+
+/// Default core 1 stack size in 32-bit words (4096 * 4 = 16 KiB) used when the
+/// user does not specify the `core1_stack` argument.
+const DEFAULT_CORE1_STACK_SIZE: usize = 4096;
 
 /// Cortex-M exceptions that have a *configurable* priority. These may be bound
 /// to hardware tasks (their priority is set via `SCB`), but must not be used as
@@ -48,7 +60,9 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let async_pass = AsyncPass::new(AsyncPassBackendImpl);
 
     #[allow(unused_mut)]
-    let mut builder = RticMacroBuilder::new(Rp2040Rtic);
+    let mut builder = RticMacroBuilder::new(Rp2040Rtic::new());
+    // distro-specific pass: consumes the `core1_stack` app argument (pass-through otherwise)
+    builder.bind_pre_core_pass(Core1StackPass::new());
     if cfg!(feature = "autoassign") {
         builder.bind_pre_core_pass(AutoAssignPass); // run auto-assign pass first
     }
@@ -61,10 +75,113 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     builder.build_rtic_macro(args, input)
 }
 
-struct Rp2040Rtic;
+struct Rp2040Rtic {
+    info_bus: Option<InfoBus>,
+}
+
+impl Rp2040Rtic {
+    fn new() -> Self {
+        Self { info_bus: None }
+    }
+}
+
+/// Distro-specific pass that consumes the `core1_stack = N` `#[app]` argument
+/// and publishes the core 1 stack size (in 32-bit words) to the info bus.
+///
+/// The application module syntax is left completely unchanged (pass-through);
+/// only the consumed argument is stripped from the `#[app(...)]` arguments so
+/// that the core parser never sees it.
+struct Core1StackPass {
+    info_bus: Option<InfoBus>,
+}
+
+impl Core1StackPass {
+    fn new() -> Self {
+        Self { info_bus: None }
+    }
+}
+
+/// Parse the `cores = N` app argument without removing it from the attribute
+/// (the core parser still needs it). Returns `Ok(None)` if the argument is
+/// absent or not an integer literal.
+fn parse_cores_arg(expr: Option<&Expr>) -> syn::Result<Option<u32>> {
+    match expr {
+        Some(Expr::Lit(ExprLit {
+            lit: Lit::Int(lit), ..
+        })) => lit.base10_digits().parse().map(Some).map_err(|e| {
+            syn::Error::new(
+                lit.span(),
+                format!("`cores` must be an integer literal: {e}"),
+            )
+        }),
+        _ => Ok(None),
+    }
+}
+
+impl RticPass for Core1StackPass {
+    fn subscribe(&mut self, info_bus: InfoBus) {
+        let _ = self.info_bus.insert(info_bus);
+    }
+
+    fn run_pass(
+        &self,
+        args: TokenStream2,
+        app_mod: ItemMod,
+    ) -> syn::Result<(TokenStream2, ItemMod)> {
+        let mut attr = RticAttr::parse_from_tokens(args.clone(), format_ident!("app"))?;
+
+        // capture the span before removing the argument
+        let core1_stack_span = attr
+            .get_expr("core1_stack")
+            .map(|e| e.span())
+            .unwrap_or_else(proc_macro2::Span::call_site);
+
+        let stack_size = match attr.take_usize("core1_stack")? {
+            Some(n) => {
+                // core1_stack is only meaningful when a second core is actually started
+                let cores = parse_cores_arg(attr.get_expr("cores"))?.unwrap_or(1);
+                if cores != 2 {
+                    return Err(syn::Error::new(
+                        core1_stack_span,
+                        format!(
+                            "`core1_stack` is only supported with `cores = 2` (found `cores = {cores}`)"
+                        ),
+                    ));
+                }
+                if n < 1024 {
+                    return Err(syn::Error::new(
+                        core1_stack_span,
+                        "`core1_stack` must be at least 1024 words (4KiB)",
+                    ));
+                }
+                n
+            }
+            None => DEFAULT_CORE1_STACK_SIZE,
+        };
+
+        self.info_bus.as_ref().inspect(|b| {
+            b.publish(INFO_CORE1_STACK_SIZE, stack_size)
+                .unwrap_or_else(|_| {
+                    panic!("no other crate is allowed to publish {INFO_CORE1_STACK_SIZE}")
+                });
+        });
+
+        // hand the app arguments back without the argument we consumed; the module is untouched
+        let args = attr.args_tokens();
+        Ok((args, app_mod))
+    }
+
+    fn pass_name(&self) -> &str {
+        "Core1Stack"
+    }
+}
 
 // =========================================== Trait implementations ===================================================
 impl CorePassBackend for Rp2040Rtic {
+    fn subscribe(&mut self, info_bus: InfoBus) {
+        self.info_bus = Some(info_bus);
+    }
+
     fn post_init(
         &self,
         app_args: &AppArgs,
@@ -117,10 +234,13 @@ impl CorePassBackend for Rp2040Rtic {
         }
 
         // initialize core 1 from core 0 if the application is for multicore (cores > 1)
+        // The stack static itself is emitted by `generate_global_definitions` (core 0 only),
+        // sized from the `core1_stack` argument published to the info bus by `Core1StackPass`.
         let init_and_spawn_core1 = if sub_app.core == 0 && app_args.cores > 1 {
-            Some(quote!(rticx_rp2040::export::cross_core::init_core1(
-                move || core1_entry()
-            );))
+            Some(quote!(
+                let core1_stack = unsafe { &mut __rticx_internal_CORE1_STACK.mem };
+                rticx_rp2040::export::cross_core::init_core1(move || core1_entry(), core1_stack);
+            ))
         } else {
             None
         };
@@ -215,6 +335,27 @@ impl CorePassBackend for Rp2040Rtic {
         let core = app_info.core;
         let chunks_ident = format_ident!("__rticx_internal_MASK_CHUNKS_core{core}");
         let masks_ident = format_ident!("__rticx_internal_MASKS_core{core}");
+
+        // Stack for core 1, sized from the `core1_stack` argument published to
+        // the info bus by `Core1StackPass`. Emitted only by the core 0 sub-app;
+        // referenced by `post_init` when spawning core 1.
+        let core1_stack_def = if app_info.core == 0 && app_args.cores > 1 {
+            let core1_stack_size = self
+                .info_bus
+                .as_ref()
+                .and_then(|b| b.get::<usize>(INFO_CORE1_STACK_SIZE).ok())
+                .map(|v| *v)
+                .unwrap_or(DEFAULT_CORE1_STACK_SIZE);
+
+            Some(quote! {
+                #[doc(hidden)]
+                static mut __rticx_internal_CORE1_STACK: rticx_rp2040::export::Stack<#core1_stack_size> =
+                    rticx_rp2040::export::Stack::new();
+            })
+        } else {
+            None
+        };
+
         Some(quote! {
             #[doc(hidden)]
             #[allow(non_upper_case_globals)]
@@ -227,6 +368,8 @@ impl CorePassBackend for Rp2040Rtic {
             const #masks_ident: [rticx_rp2040::export::Mask<#chunks_ident>; 3] = [
                 #(#masks)*
             ];
+
+            #core1_stack_def
         })
     }
 
