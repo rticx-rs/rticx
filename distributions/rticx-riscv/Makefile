@@ -12,10 +12,10 @@ fmt-check:
 	cargo fmt --all --check
 
 clippy:
-	RUSTFLAGS="-Dwarnings" cargo clippy --features "slic","mecall-backend"
-	RUSTFLAGS="-Dwarnings" cargo clippy --features "slic","clint-backend"
-	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c3"
-	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c6"
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "slic","mecall-backend" --target riscv32imc-unknown-none-elf
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "slic","clint-backend" --target riscv32imc-unknown-none-elf
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c3" --target riscv32imc-unknown-none-elf
+	RUSTFLAGS="-Dwarnings" cargo clippy --features "esp32c6" --target riscv32imc-unknown-none-elf
 
 examples: examples-slic examples-esp
 

@@ -334,6 +334,7 @@ fn generate_core_type(core: u32) -> TokenStream2 {
             struct #inner_core_ty;
             pub struct #core_ty(#inner_core_ty);
             impl #core_ty {
+                #[inline(always)]
                 pub const unsafe fn new() -> Self {
                     #core_ty(#inner_core_ty)
                 }

@@ -188,12 +188,23 @@ pub trait AsyncPassBackend {
     /// This method is guaranteed to be called before any other methods in this trait.
     fn subscribe(&mut self, _info_bus: InfoBus) {}
 
-    /// TODO: Add docs here
-    fn generate_wake_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn {
-        self.generate_local_pend_fn(core, empty_body_fn)
+    /// Body of the interrupt-pending function used to wake an executor's dispatcher.
+    /// For single core targets, keep the default implementation.
+    /// For multicore, the`generate_wake_pend_fn` backend should implement a runtime core check to decide if this is a local or cross-core pend
+    /// and perform the appropriate interrupt pending action.
+    /// - local-core pend when the calling core is the same as `target_core`
+    /// - cross-core pend when the calling core is different from `target_core`
+    ///
+    /// If a multicore distribution does not implemnent a multicore-aware waker pend backend then rticx_async::Channel
+    /// will not work correctly across cores (only for core-local use)
+    ///
+    /// # Reference:
+    /// - rticx-rp2040 distro
+    fn generate_wake_pend_fn(&self, target_core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn {
+        self.generate_local_pend_fn(target_core, empty_body_fn)
     }
 
-    /// TODO: Add docs here
+    /// Path to async runtime. This should be a re-exported path of `rticx_async`, e.g `rticx_cortex_m::export::rticx_async` (unless you want to point to a custom runtime with similar API)
     fn async_runtime_path(&self) -> syn::Path;
 
     /// Optional startup stack-overflow check emitted at the start of the `core`'s entry
