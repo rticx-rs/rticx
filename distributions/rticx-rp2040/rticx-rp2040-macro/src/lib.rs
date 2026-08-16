@@ -516,4 +516,38 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
         empty_body_fn.block = Box::new(body);
         empty_body_fn
     }
+
+    fn generate_stack_overflow_check(&self, core: u32) -> Option<TokenStream2> {
+        match core {
+            0 => Some(quote! {
+                {
+                    // Check for stack overflow using symbols from `cortex-m-rt`.
+                    unsafe extern "C" {
+                        static _stack_start: u32;
+                        static __ebss: u32;
+                    }
+                    let stack_start = unsafe { &_stack_start as *const _ as u32 };
+                    let ebss = unsafe { &__ebss as *const _ as u32 };
+                    if stack_start > ebss {
+                        // No flip-link usage, check the MSP for overflow.
+                        if rticx_rp2040::export::msp::read() <= ebss {
+                            ::core::panic!("Stack overflow after allocating executors (core 0)");
+                        }
+                    }
+                }
+            }),
+            // Core 1's stack is the `__rticx_internal_CORE1_STACK` static (sized by
+            // the `core1_stack` app argument); check the MSP against its base.
+            1 => Some(quote! {
+                {
+                    let stack_base =
+                        unsafe { core::ptr::addr_of!(__rticx_internal_CORE1_STACK.mem) } as u32;
+                    if rticx_rp2040::export::msp::read() <= stack_base {
+                        ::core::panic!("Stack overflow after allocating executors (core 1)");
+                    }
+                }
+            }),
+            _ => None,
+        }
+    }
 }

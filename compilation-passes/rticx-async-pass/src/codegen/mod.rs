@@ -7,6 +7,7 @@ use crate::parse::{ASYNC_TASK_TRAIT_TY, App};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use syn::{ItemMod, LitInt, Path, parse_quote};
 
 fn local_pend_fn_ident(core: u32, num_cores: usize) -> Ident {
@@ -33,7 +34,7 @@ pub struct CodeGen<'a> {
     app: App,
     analysis: Analysis,
     backend: &'a dyn AsyncPassBackend,
-    slot_init_stmts: &'a RefCell<Vec<TokenStream>>,
+    slot_init_stmts: &'a RefCell<HashMap<u32, Vec<TokenStream>>>,
 }
 
 impl<'a> CodeGen<'a> {
@@ -41,7 +42,7 @@ impl<'a> CodeGen<'a> {
         app: App,
         analysis: Analysis,
         backend: &'a dyn AsyncPassBackend,
-        slot_init_stmts: &'a RefCell<Vec<TokenStream>>,
+        slot_init_stmts: &'a RefCell<HashMap<u32, Vec<TokenStream>>>,
     ) -> CodeGen<'a> {
         Self {
             app,
@@ -103,7 +104,10 @@ impl<'a> CodeGen<'a> {
                 let wrapper_fn_ident = utils::async_wrapper_ident(task.name());
                 let ptr_ident = utils::exec_ptr_ident(task.name());
 
-                stmts.push(quote! {
+                // Each core's entry function allocates the slots of its own
+                // tasks (on its own stack); the injection for a core is looked
+                // up by `sub_app.core` in `main_injection`.
+                stmts.entry(sub_app.core).or_default().push(quote! {
                     {
                         let __s = core::mem::ManuallyDrop::new(
                             #async_runtime_path::executor::ExecSlot::new_from_witness(#wrapper_fn_ident)

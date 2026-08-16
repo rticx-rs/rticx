@@ -20,7 +20,7 @@ Inside `RticMacroBuilder::build_rtic_macro2`:
 5. Run `Analysis::run(&mut parsed_app)` for resource ceiling analysis.
 6. Publish the analysis to the `InfoBus` under `rticx_core::Analysis`.
 7. Call `CorePassBackend::pre_codegen_validation`.
-8. Collect injections from all passes by calling `pass.main_injection(&point)` for each `MainInjectionPoint`.
+8. Collect injections from all passes by calling `pass.main_injection(&point, core)` for each `MainInjectionPoint` and each core.
 9. Run `CodeGen::new(core_backend, &parsed_app, &analysis).with_injections(&injections).run()`.
 10. If `RTICX_EXPAND` is set, write the final expansion to `target/rticx-expand/` via `rticx-core/src/expand_log.rs`.
 
@@ -44,7 +44,7 @@ pub trait RticPass {
 
     fn pass_name(&self) -> &str;
 
-    fn main_injection(&self, _point: &MainInjectionPoint) -> Option<TokenStream2> {
+    fn main_injection(&self, _point: &MainInjectionPoint, _core: u32) -> Option<TokenStream2> {
         None
     }
 }
@@ -65,7 +65,7 @@ pub enum MainInjectionPoint {
 }
 ```
 
-Passes use `main_injection` to inject code (e.g. variable declarations) directly into `main()`'s body. Since `main() -> !`, injected locals live forever on the stack.
+Passes use `main_injection` to inject code (e.g. variable declarations) directly into the entry function body, targeting specific cores. Since the entry functions are `-> !`, injected locals live forever on the stack.
 ---
 
 ## `CorePassBackend` Trait

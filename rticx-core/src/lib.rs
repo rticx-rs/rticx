@@ -3,6 +3,7 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 
 use proc_macro2::{Ident, TokenStream as TokenStream2};
+use std::collections::HashMap;
 use syn::{ItemMod, parse_macro_input};
 
 pub use common_internal::rticx_functions;
@@ -32,7 +33,14 @@ pub mod info_bus;
 pub mod parser;
 
 /// Points in the generated `main()` where passes can inject code.
+///
+/// Injections are collected **per core**: `RticPass::main_injection` receives
+/// the core index the tokens will be emitted for, so multicore-aware passes can
+/// target specific cores (e.g. only inject into core 1's entry function).
 pub enum MainInjectionPoint {
+    /// At the very start of each core's entry function, before the
+    /// interrupt-free initialization block.
+    EntryStart,
     /// Inside the `interrupt_free` block, before system_init
     BeforeInit,
     /// Inside the `interrupt_free` block, after system_init + task_init, before post_init
@@ -41,12 +49,13 @@ pub enum MainInjectionPoint {
     BeforeIdle,
 }
 
-/// Collected token streams from passes, keyed by injection point.
+/// Collected token streams from passes, keyed by injection point and core.
 #[derive(Default)]
 pub struct MainInjections {
-    pub before_init: Vec<TokenStream2>,
-    pub before_post_init: Vec<TokenStream2>,
-    pub before_idle: Vec<TokenStream2>,
+    pub entry_start: HashMap<u32, Vec<TokenStream2>>,
+    pub before_init: HashMap<u32, Vec<TokenStream2>>,
+    pub before_post_init: HashMap<u32, Vec<TokenStream2>>,
+    pub before_idle: HashMap<u32, Vec<TokenStream2>>,
 }
 
 /// A trait that allows defining a **Compilation Pass**.
@@ -75,7 +84,12 @@ pub trait RticPass {
 
     /// Return tokens to inject into `main()` at the given injection point.
     /// Called after all passes have run and before the core pass generates `main()`.
-    fn main_injection(&self, _point: &MainInjectionPoint) -> Option<TokenStream2> {
+    ///
+    /// The method is called once per injection point **per core**; `core` is
+    /// the index of the entry function the returned tokens will be emitted in.
+    /// Return `None` (or tokens specific to that core) to target individual
+    /// cores in a multicore application.
+    fn main_injection(&self, _point: &MainInjectionPoint, _core: u32) -> Option<TokenStream2> {
         None
     }
 }
@@ -242,17 +256,28 @@ impl RticMacroBuilder {
             return e.to_compile_error();
         }
 
-        // Collect injections from all passes
+        // Collect injections from all passes, per core
         let mut injections = MainInjections::default();
+        let num_cores = parsed_app.args.cores;
         for pass in &self.pre_std_passes {
-            if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforeInit) {
-                injections.before_init.push(tokens);
-            }
-            if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforePostInit) {
-                injections.before_post_init.push(tokens);
-            }
-            if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforeIdle) {
-                injections.before_idle.push(tokens);
+            for core in 0..num_cores {
+                if let Some(tokens) = pass.main_injection(&MainInjectionPoint::EntryStart, core) {
+                    injections.entry_start.entry(core).or_default().push(tokens);
+                }
+                if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforeInit, core) {
+                    injections.before_init.entry(core).or_default().push(tokens);
+                }
+                if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforePostInit, core)
+                {
+                    injections
+                        .before_post_init
+                        .entry(core)
+                        .or_default()
+                        .push(tokens);
+                }
+                if let Some(tokens) = pass.main_injection(&MainInjectionPoint::BeforeIdle, core) {
+                    injections.before_idle.entry(core).or_default().push(tokens);
+                }
             }
         }
 

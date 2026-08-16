@@ -17,6 +17,7 @@ pub use cortex_m::{
     asm::wfi,
     interrupt,
     peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
+    register::msp,
 };
 /// re-exports needed from the code generation in internal rticx-rp2040-macro crate
 pub use rp2040_hal::multicore::{Multicore, Stack};

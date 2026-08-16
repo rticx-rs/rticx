@@ -210,17 +210,27 @@ impl<'a> CodeGen<'a> {
 
         let core_type_def = generate_core_type(app.core);
 
+        let core = app.core;
+
+        let entry_start = self
+            .injections
+            .and_then(|inj| inj.entry_start.get(&core))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let before_init = self
             .injections
-            .map(|inj| inj.before_init.as_slice())
+            .and_then(|inj| inj.before_init.get(&core))
+            .map(Vec::as_slice)
             .unwrap_or(&[]);
         let before_post_init = self
             .injections
-            .map(|inj| inj.before_post_init.as_slice())
+            .and_then(|inj| inj.before_post_init.get(&core))
+            .map(Vec::as_slice)
             .unwrap_or(&[]);
         let before_idle = self
             .injections
-            .map(|inj| inj.before_idle.as_slice())
+            .and_then(|inj| inj.before_idle.get(&core))
+            .map(Vec::as_slice)
             .unwrap_or(&[]);
 
         let entry_of = format!(" # Entry of CORE {}", app.core);
@@ -249,6 +259,9 @@ impl<'a> CodeGen<'a> {
             #(#entry_attrs)*
             #[unsafe(no_mangle)]
             fn #entry_name() -> ! {
+                // injections at entry start (before the interrupt-free init block)
+                #(#entry_start)*
+
                 // Disable interrupts during initialization
                 #interrupt_free(||{
                     #(#before_init)*
@@ -266,11 +279,11 @@ impl<'a> CodeGen<'a> {
                     #backend_post_init
                 });
 
-                // enable global interrupts (target specific)
-                #enable_global_interrupts
-
                 // injections before idle
                 #(#before_idle)*
+
+                // enable global interrupts (target specific)
+                #enable_global_interrupts
 
                 // user post_init function
                 #user_post_init_call

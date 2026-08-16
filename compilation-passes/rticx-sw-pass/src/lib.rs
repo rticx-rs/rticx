@@ -64,7 +64,7 @@ impl RticPass for SoftwarePass {
         "SoftwareTasks"
     }
 
-    fn main_injection(&self, point: &MainInjectionPoint) -> Option<TokenStream> {
+    fn main_injection(&self, point: &MainInjectionPoint, _core: u32) -> Option<TokenStream> {
         if matches!(point, MainInjectionPoint::BeforePostInit) && *self.has_tasks.borrow() {
             Some(quote::quote! {
                 unsafe { __rticx_sw_system_initialized = true; }

@@ -10,6 +10,7 @@ use quote::format_ident;
 use rticx_core::parse_utils::RticAttr;
 use rticx_core::{InfoBus, MainInjectionPoint, RticPass};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use syn::ItemMod;
 
 pub static INFO_APP: &str = "rticx_async_pass::App";
@@ -18,7 +19,9 @@ pub static INFO_ANALYSIS: &str = "rticx_async_pass::Analysis";
 pub struct AsyncPass {
     backend: Box<dyn AsyncPassBackend>,
     info_bus: Option<InfoBus>,
-    slot_init_stmts: RefCell<Vec<TokenStream>>,
+    /// Executor slot init statements, keyed by the core whose entry function
+    /// they must be injected into.
+    slot_init_stmts: RefCell<HashMap<u32, Vec<TokenStream>>>,
     has_tasks: RefCell<bool>,
 }
 
@@ -27,7 +30,7 @@ impl AsyncPass {
         Self {
             backend: Box::new(backend),
             info_bus: None,
-            slot_init_stmts: RefCell::new(Vec::new()),
+            slot_init_stmts: RefCell::new(HashMap::new()),
             has_tasks: RefCell::new(false),
         }
     }
@@ -71,7 +74,7 @@ impl RticPass for AsyncPass {
         "AsyncPass"
     }
 
-    fn main_injection(&self, point: &MainInjectionPoint) -> Option<TokenStream> {
+    fn main_injection(&self, point: &MainInjectionPoint, core: u32) -> Option<TokenStream> {
         match point {
             MainInjectionPoint::BeforePostInit => {
                 if *self.has_tasks.borrow() {
@@ -82,14 +85,20 @@ impl RticPass for AsyncPass {
                     None
                 }
             }
-            MainInjectionPoint::BeforeIdle => {
-                let stmts = self.slot_init_stmts.borrow();
-                if stmts.is_empty() {
-                    None
-                } else {
-                    let stmts = &*stmts;
-                    Some(quote::quote! { #(#stmts)* })
+            MainInjectionPoint::EntryStart => {
+                if !*self.has_tasks.borrow() {
+                    return None;
                 }
+                // Allocate this core's executor slots at the very start of its
+                // entry function (before user init), then let the backend emit
+                // an optional startup stack-overflow check right after.
+                let stmts = self.slot_init_stmts.borrow();
+                let core_stmts = stmts.get(&core).map(Vec::as_slice).unwrap_or(&[]);
+                let check = self.backend.generate_stack_overflow_check(core);
+                Some(quote::quote! {
+                    #(#core_stmts)*
+                    #check
+                })
             }
             _ => None,
         }
@@ -97,21 +106,105 @@ impl RticPass for AsyncPass {
 }
 
 pub trait AsyncPassBackend {
+    /// Path to the SPSC queue type used for ready queues and task inputs.
+    ///
+    /// The generated code uses this path as `#queue_path<T, N>` (type
+    /// position) and `#queue_path::new()` (expression position).  The
+    /// concrete type must support the same API as `rticx_spsc::Queue`:
+    /// a const `new()` constructor, `split()` into producer/consumer halves,
+    /// `enqueue` / `dequeue`, and `_unchecked` variants.
+    ///
+    /// Typical implementation for a distribution:
+    /// ```ignore
+    /// fn queue_path(&self) -> syn::Path {
+    ///     parse_quote!(rticx_rp2040::export::Queue)
+    /// }
+    /// ```
     fn queue_path(&self) -> syn::Path;
 
-    fn async_runtime_path(&self) -> syn::Path;
-
+    /// Body of the core-local interrupt-pending function.
+    ///
+    /// The async pass generates an empty function for each core and
+    /// passes it to this method.  The implementation must fill the body
+    /// with code that triggers (pends) the dispatcher interrupt on the
+    /// local core. The resulting function is called by `spawn()` at
+    /// runtime.
+    ///
+    /// # Contract
+    /// * The function is generated per core; `core` is the core index.
+    /// * The generated function takes a single argument `irq_nbr` whose
+    ///   concrete type is the interrupt type for that core (see
+    ///   [`custom_interrupt_path`](Self::custom_interrupt_path)).
+    /// * Write to the pending bit of the corresponding NVIC (or equivalent)
+    ///   register to trigger the interrupt.
+    /// * Do NOT change the function signature.
+    ///
+    /// # Porting
+    ///
+    /// * **Cortex-M**: write to NVIC ISPR register.
+    /// * **RISC-V CLIC**: set the pending bit via `Clic::ip(irq).pend()`.
+    /// * **RISC-V mintthresh**: use a software interrupt or ECLIC API.
     fn generate_local_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn;
 
+    /// Body of the cross-core interrupt-pending function.
+    ///
+    /// The software pass generates an empty function for each target core
+    /// that has cross-core spawners and passes it to this method.  The
+    /// implementation must fill the body with code that signals the target
+    /// core to run an async software task that was spawned remotely.  The resulting
+    /// function is called by `spawn_from()` at runtime.
+    ///
+    /// # Contract
+    /// * `core` is the *target* core index (the core that owns the task).
+    /// * The generated function takes a single argument `irq_nbr` whose
+    ///   concrete type is the interrupt type for the target core.
+    /// * Return `None` if your target is single-core (no cross-core
+    ///   communication is needed).  `spawn_from` will not be available
+    ///   to user code.
+    /// * Do NOT change the function signature.
+    ///
+    /// # Porting
+    ///
+    /// * **Single-core targets**: return `None`.
+    /// * **RP2040**: send the IRQ number through the SIO FIFO.
+    /// * **Generic multicore**: use an IPI (inter-processor interrupt)
+    ///   mechanism (e.g. mailbox, shared-memory + doorbell).
     fn generate_cross_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> Option<syn::ItemFn>;
 
-    fn generate_wake_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn {
-        self.generate_local_pend_fn(core, empty_body_fn)
-    }
-
+    /// Custom path to the interrupt type used for dispatchers on `core`.
+    ///
+    /// The returned path must name a **type** whose enum variants or
+    /// associated constants match the dispatcher names listed in
+    /// `dispatchers = [...]`.  Generated code uses it both for the pend
+    /// function signature (`fn(irq_nbr: #ty)`) and at spawn call sites
+    /// (`#ty::IRQ0`).
+    ///
+    /// Return `None` to use the default path `pac[core]::Interrupt`.
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         None
     }
 
+    /// Subscribe to info_bus
+    /// This method is guaranteed to be called before any other methods in this trait.
     fn subscribe(&mut self, _info_bus: InfoBus) {}
+
+    /// TODO: Add docs here
+    fn generate_wake_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn {
+        self.generate_local_pend_fn(core, empty_body_fn)
+    }
+
+    /// TODO: Add docs here
+    fn async_runtime_path(&self) -> syn::Path;
+
+    /// Optional startup stack-overflow check emitted at the start of the `core`'s entry
+    /// function, immediately after the executor slot allocations.
+    ///
+    /// At this point in the generated code the entry frame holds all of the
+    /// core's future slots, so the current stack pointer can be compared
+    /// against the stack bounds to detect (post-hoc) that the startup
+    /// allocations have already overflowed the stack. No interrupt is unmasked
+    /// yet at this point
+    fn generate_stack_overflow_check(&self, _core: u32) -> Option<TokenStream> {
+        None
+    }
 }
