@@ -183,14 +183,21 @@ pub trait CorePassBackend {
     /// # Contract
     /// * Do NOT change the function signature of `empty_body_fn`.
     /// * The function must re-enable interrupts when done.
+    /// 
+    /// The function must implement a critical section by:
+    /// 1- storing the state of global interrupts
+    /// 2- disable global interrupts
+    /// 3- execute the closure and get the return value
+    /// 4- restore the state of global interrupts
+    /// 5- return the produced by the closure
+    /// 
+    /// The reason for saving and restoring global interrupt state is due to the fact that
+    /// Critical section function can be nested
     ///
     /// # Porting
     ///
-    /// * **Cortex-M**: `cpsid i` / `cpsie i`, or `cortex_m::interrupt::free`.
-    /// * **RISC-V**: disable/enable global interrupt via `mstatus.MIE`.
-    ///
-    /// Reference: `rticx-cortex-m` uses `core::arch::asm!("cpsid i")` /
-    /// `core::arch::asm!("cpsie i")`.
+    /// * **Cortex-M**: `cortex_m::interrupt::free`.
+    /// * **RISC-V**: disable/enable/restore global interrupt via `mstatus.MIE`.
     fn generate_interrupt_free_fn(&self, empty_body_fn: syn::ItemFn) -> syn::ItemFn;
 
     /// Validation hook called after parsing and analysis, but before

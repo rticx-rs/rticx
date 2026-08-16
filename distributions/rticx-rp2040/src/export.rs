@@ -1,4 +1,4 @@
-// Note: most of the code here is taken from rtic repo
+// Note: most of the code here is taken from upstream rtic repo
 #![allow(clippy::inline_always)]
 
 /// Re-export RTICX Single Producer Single Consumer queue to be used by sw and async passes
@@ -133,11 +133,7 @@ pub unsafe fn lock<T, R, const M: usize>(
         if current < ceiling {
             if ceiling >= 4 {
                 // execute closure under protection of a core-local critical section
-                // cortex_m::interrupt::free() is not used because underlying critical section impl uses multicore spinlocks
-                core::arch::asm!("cpsid i"); // critical section begin
-                let r = f(&mut *ptr);
-                core::arch::asm!("cpsie i"); // critical section end
-                r
+                cortex_m::interrupt::free(|_| f(&mut *ptr))
             } else {
                 let mask = compute_mask(current as u8, ceiling as u8, masks);
                 clear_enable_mask(mask);
@@ -228,20 +224,18 @@ pub mod cross_core {
     pub fn pend_irq(irq: u16) -> Result<(), FullFifoErr> {
         unsafe {
             let sio = &(*rp2040_hal::pac::SIO::PTR);
-            // use a core-local critical section to prevent race conditions from occuring between the time
+            // use a core-local critical section to prevent race conditions from occurring between the time
             // of checking that fifo is empty and the time of writing to it. Especially that this function can be called from
             // any core-local context.
-            // cortex_m::interrupt::free() is not used because underlying critical section impl uses multicore spinlocks
-            core::arch::asm!("cpsid i"); // critical section begin
-            let r = if sio.fifo_st().read().rdy().bit() {
-                // TX fifo is not full
-                sio.fifo_wr().write(|wr| wr.bits(irq as u32));
-                Ok(())
-            } else {
-                Err(FullFifoErr)
-            };
-            core::arch::asm!("cpsie i"); // critical section end
-            r
+            cortex_m::interrupt::free(|_| {
+                if sio.fifo_st().read().rdy().bit() {
+                    // TX fifo is not full
+                    sio.fifo_wr().write(|wr| wr.bits(irq as u32));
+                    Ok(())
+                } else {
+                    Err(FullFifoErr)
+                }
+            })
         }
     }
 

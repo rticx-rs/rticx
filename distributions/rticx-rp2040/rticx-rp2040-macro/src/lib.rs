@@ -155,12 +155,8 @@ impl CorePassBackend for Rp2040Rtic {
         let fn_body = parse_quote! {
             {
                 // RTICX multicore model prevents shared resources between multiple cores. As such
-                // We do not need to use multicore aware critical section (cortex_m::interrupt::free() with underlying critical section impl provided by rp2040-hal using spinlocks)
-                // so we only need a core-local critical section.
-                unsafe { core::arch::asm!("cpsid i"); } // critical section begin
-                let r = f();
-                unsafe { core::arch::asm!("cpsie i"); } // critical section end
-                r
+                // We do not need to use multicore aware critical section so we only need a core-local critical section.
+                rticx_rp2040::export::interrupt::free(|_| f())
             }
         };
         empty_body_fn.block = Box::new(fn_body);

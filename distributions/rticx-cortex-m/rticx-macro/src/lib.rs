@@ -139,10 +139,7 @@ impl CorePassBackend for CortexMRtic {
     fn generate_interrupt_free_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
         let fn_body = parse_quote! {
             {
-                unsafe { core::arch::asm!("cpsid i"); } // critical section begin
-                let r = f();
-                unsafe { core::arch::asm!("cpsie i"); } // critical section end
-                r
+                rticx_cortex_m::export::interrupt::free(|_| f())
             }
         };
         empty_body_fn.block = Box::new(fn_body);
