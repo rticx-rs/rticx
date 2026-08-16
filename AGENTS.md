@@ -89,9 +89,10 @@ cd tools/rticx-expand && cargo test
 cargo install --path tools/rticx-expand  # enables `cargo rticx-expand`
 
 # Build distribution examples
-cd distributions/rticx-cortex-m/example-apps/armv7m-app
+cd distributions/rticx-cortex-m/examples-apps
 cargo build --example hello_rtic
 cargo build --example async_ping_pong --features async
+cargo build --target thumbv6m-none-eabi --example hello_rtic
 
 cd distributions/rticx-riscv/examples/esp32c3-examples
 cargo build --example hello_rtic

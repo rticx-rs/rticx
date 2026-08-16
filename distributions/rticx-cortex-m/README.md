@@ -19,9 +19,8 @@ rticx-cortex-m/
 ├── src/                 # `rtic` library: re-exports `app` macro and runtime exports
 ├── rtic-macro/           # proc-macro crate implementing CorePassBackend + SwPassBackend
 ├── qemu-run.sh           # build + boot an example under QEMU
-└── example-apps/
-    ├── armv7m-app/       # thumbv7m example using BASEPRI locking
-    └── armv6m-app/       # thumbv6m example using interrupt source masking
+└── examples-apps/        # one crate for both archs: thumbv7m (BASEPRI) and
+                          # thumbv6m (source masking), selected by `--target`
 ```
 
 
@@ -59,6 +58,11 @@ Or, per-example (the `.cargo/config.toml` wires up the QEMU runner, so `cargo
 run` both builds and boots QEMU):
 
 ```bash
-cd example-apps/armv7m-app && cargo run --example hello_rtic
-cd example-apps/armv7m-app && cargo run --example async_ping_pong --features "async"
+# thumbv7m (BASEPRI locking), default target
+cd examples-apps && cargo run --example hello_rtic
+cd examples-apps && cargo run --example async_ping_pong --features "async"
+
+# thumbv6m (interrupt source masking): the target triple alone selects the
+# `armv6m` lock path, no cargo feature flag needed
+cd examples-apps && cargo run --target thumbv6m-none-eabi --example hello_rtic
 ```

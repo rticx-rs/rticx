@@ -152,13 +152,13 @@ rustup target add thumbv7m-none-eabi thumbv6m-none-eabi
 make qemu-armv7m
 ```
 
-The examples are located in `distributions/rticx-cortex-m/example-apps`. You can modify them, rebuild and run on qemu:
+The examples are located in `distributions/rticx-cortex-m/examples-apps`. You can modify them, rebuild and run on qemu:
 
 ## Examples
 
-- [ARM Cortex-m playground: SysTick hw task + spawned sw task + SRP lock ](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/hello_rtic.rs)
-- [ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_ping_pong.rs)
-- [ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_prio0.rs)
+- [ARM Cortex-m playground: SysTick hw task + spawned sw task + SRP lock ](distributions/rticx-cortex-m/examples-apps/examples/hello_rtic.rs)
+- [ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/examples-apps/examples/async_ping_pong.rs)
+- [ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/examples-apps/examples/async_prio0.rs)
 - [RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
 - [RP2040 multicore ping-pong](distributions/rticx-rp2040/example-apps/src/bin/ping_pong.rs)
 

@@ -1,7 +1,7 @@
 # Placeholder memory.x
 #
-# This file is brought in by examples (see `example-apps/armv7m-app/memory.x` and
-# `example-apps/armv6m-app/memory.x`) which target concrete Cortex-M devices.
+# This file is brought in by examples (see `examples-apps/memory.x`) which
+# target concrete Cortex-M devices.
 # cortex-m-rt picks up the `memory.x` file residing next to the consuming binary crate.
 MEMORY
 {
