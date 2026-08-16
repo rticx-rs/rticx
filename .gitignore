@@ -1,4 +1,5 @@
 .idea
 publish.sh
 release-roadmap.md
+rp2040-emu-plan.md
 target/

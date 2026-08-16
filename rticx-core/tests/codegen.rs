@@ -229,6 +229,7 @@ fn codegen_expands_single_core_app() {
                 struct __rticx__internal__Core0Inner ;
                 pub struct __rticx__internal__Core0 (__rticx__internal__Core0Inner) ;
                 impl __rticx__internal__Core0 {
+                    #[inline(always)]
                     pub const unsafe fn new () -> Self {
                         __rticx__internal__Core0 (__rticx__internal__Core0Inner)
                     }

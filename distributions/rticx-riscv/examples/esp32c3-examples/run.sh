@@ -6,7 +6,7 @@ fi
 
 
 DEBUG_FLAGS=""
-if [ $2 == "debug" ]; then
+if [ "${2:-}" == "debug" ]; then
   DEBUG_FLAGS=" -s -S "
 fi
 
@@ -21,7 +21,7 @@ qemuoutputfile=qemuoutput.log
 # wget https://github.com/espressif/qemu/releases/download/esp-develop-9.2.2-20260417/qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz
 # tar -xf qemu-riscv32-sot....tar.xz
 # TODO: will have docker for this or expect it to be part of path
-qemuexec=qemu-system-riscv32
+qemuexec="${QEMU_SYSTEM_RISCV32:-qemu-system-riscv32}"
 
 # Create a temporary directory for all output files
 tempdir=$(mktemp -d) || exit 1
