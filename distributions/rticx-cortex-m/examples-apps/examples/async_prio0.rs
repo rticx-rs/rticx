@@ -14,6 +14,7 @@ mod app {
     use cortex_m_semihosting::{debug, hprintln};
     use rticx_async::channel::{Receiver, Sender};
     use rticx_async::make_channel;
+    use rticx_async::yield_now::yield_now;
 
     #[shared]
     struct Shared;
@@ -48,6 +49,8 @@ mod app {
         type SpawnInput = ();
         async fn exec(&mut self, _input: ()) {
             loop {
+                hprintln!("running at priority 0 yeilding..");
+                yield_now().await;
                 hprintln!("running at priority 0 each second");
                 Mono::delay(1000.millis()).await;
             }

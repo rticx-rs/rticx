@@ -51,6 +51,7 @@ mod dropper;
 pub mod executor;
 mod wait_queue;
 mod waker_registration;
+pub mod yield_now;
 
 pub use portable_atomic;
 
