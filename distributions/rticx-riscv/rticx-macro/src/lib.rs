@@ -387,4 +387,11 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
     fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
         None
     }
+
+    fn generate_stack_overflow_check(&self, _core: u32) -> Option<TokenStream2> {
+        // Target-specific symbols are handled inside the export helper.
+        Some(quote! {
+            rticx_riscv::export::check_stack_overflow();
+        })
+    }
 }

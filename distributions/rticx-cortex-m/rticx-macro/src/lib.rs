@@ -373,4 +373,24 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
     fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
         None
     }
+
+    fn generate_stack_overflow_check(&self, _core: u32) -> Option<TokenStream2> {
+        Some(quote! {
+            {
+                // Check for stack overflow using symbols from `cortex-m-rt`.
+                unsafe extern "C" {
+                    static _stack_start: u32;
+                    static __ebss: u32;
+                }
+                let stack_start = unsafe { &_stack_start as *const _ as u32 };
+                let ebss = unsafe { &__ebss as *const _ as u32 };
+                if stack_start > ebss {
+                    // No flip-link usage, check the MSP for overflow.
+                    if rticx_cortex_m::export::msp::read() <= ebss {
+                        ::core::panic!("Stack overflow after allocating executors");
+                    }
+                }
+            }
+        })
+    }
 }

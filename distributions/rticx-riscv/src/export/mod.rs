@@ -54,3 +54,41 @@ where
 {
     riscv::interrupt::free(f)
 }
+/// Read the stack pointer.
+#[inline(always)]
+pub fn read_sp() -> u32 {
+    let r;
+    unsafe { core::arch::asm!("mv {}, sp", out(reg) r, options(nomem, nostack, preserves_flags)) };
+    r
+}
+
+/// Startup stack-overflow check.
+///
+/// Compares the current stack pointer against the end of the `.bss` section
+/// (the lowest address the stack may legally grow into) and panics if the
+/// stack has already overflowed into `.bss`. The linker symbol naming the end
+/// of `.bss` differs between the supported targets (`riscv-rt` for SLIC, the
+/// `esp-hal` generated link script for the Espressif targets).
+#[inline(never)]
+pub fn check_stack_overflow() {
+    unsafe extern "C" {
+        static _stack_start: u32;
+        #[cfg(feature = "slic")]
+        static _ebss: u32;
+        #[cfg(any(feature = "esp32c3", feature = "esp32c6"))]
+        static _bss_end: u32;
+    }
+
+    let stack_start = unsafe { &_stack_start as *const _ as u32 };
+    #[cfg(feature = "slic")]
+    let bss_end = unsafe { &_ebss as *const _ as u32 };
+    #[cfg(any(feature = "esp32c3", feature = "esp32c6"))]
+    let bss_end = unsafe { &_bss_end as *const _ as u32 };
+
+    if stack_start > bss_end {
+        // No flip-link usage, check the SP for overflow.
+        if read_sp() <= bss_end {
+            ::core::panic!("Stack overflow after allocating executors");
+        }
+    }
+}

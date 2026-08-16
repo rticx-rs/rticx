@@ -18,6 +18,7 @@ pub use cortex_m::{
     asm::wfi,
     interrupt,
     peripheral::{DWT, NVIC, SCB, SYST, scb::SystemHandler},
+    register::msp,
 };
 
 #[inline]
