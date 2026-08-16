@@ -163,6 +163,12 @@ impl CorePassBackend for Rp2040Rtic {
         empty_body_fn
     }
 
+    fn generate_enable_global_interrupts(&self) -> Option<TokenStream2> {
+        // Cortex-M enables global interrupts by default (PRIMASK is cleared
+        // at reset)
+        None
+    }
+
     fn generate_global_definitions(
         &self,
         app_args: &AppArgs,

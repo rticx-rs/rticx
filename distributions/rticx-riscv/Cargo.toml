@@ -18,8 +18,8 @@ bench = false
 [dependencies]
 rticx-riscv-macro = { version = "0.2.0", path = "rticx-macro" }
 
+riscv = { version = "0.16.1"}
 # Generic RISC-V SLIC backend (`slic` feature)
-riscv = { version = "0.16.1", optional = true }
 riscv-slic = { version = "0.2", optional = true, default-features = false }
 
 # Espressif ESP32-C3 PAC (`esp32c3` feature)
@@ -60,7 +60,7 @@ async = ["rticx-riscv-macro/async", "dep:rticx-async"]
 # Generic RISC-V target using the SLIC (Software-Level Interrupt Controller)
 # abstraction provided by the `riscv-slic` crate. Works with any PAC that
 # exposes a CLINT/PLIC/ECLIC-compatible interrupt interface.
-slic = ["dep:riscv", "dep:riscv-slic", "rticx-riscv-macro/slic"]
+slic = ["dep:riscv-slic", "rticx-riscv-macro/slic"]
 
 mecall-backend = [
     "slic",
@@ -77,7 +77,6 @@ clint-backend = [
 # for the priority threshold and `SYSTEM::cpu_intr_from_cpu{0..3}` as
 # dispatcher software interrupts.
 esp32c3 = [
-    "dep:riscv",
     "dep:esp32c3",
     "dep:critical-section",
     "rticx-riscv-macro/esp32c3",
@@ -87,7 +86,6 @@ esp32c3 = [
 # priority threshold and `INTPRI::cpu_intr_from_cpu{0..3}` as dispatcher
 # software interrupts.
 esp32c6 = [
-    "dep:riscv",
     "dep:esp32c6",
     "dep:critical-section",
     "rticx-riscv-macro/esp32c6",

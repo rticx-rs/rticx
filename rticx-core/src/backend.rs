@@ -171,6 +171,34 @@ pub trait CorePassBackend {
     /// Reference: `rticx-cortex-m` emits `rticx_cortex_m::export::wfi()`.
     fn populate_idle_loop(&self) -> Option<TokenStream2>;
 
+    /// Statement that enables **global system interrupts**, emitted after
+    /// the initialization critical section (after `post_init`) and before
+    /// the idle loop / user `post_init` function.
+    ///
+    /// # Why is this needed?
+    ///
+    /// The initialization critical section restores the global interrupt
+    /// state it found on entry. On targets where global interrupts are
+    /// **disabled by default** at boot (e.g. RISC-V: `mstatus.MIE` starts
+    /// cleared), interrupts remain disabled after initialization unless the
+    /// backend explicitly enables them here.
+    ///
+    /// On targets where global interrupts are **enabled by default** (e.g.
+    /// Cortex-M: PRIMASK cleared at reset), return `None`.
+    ///
+    /// # Contract
+    ///
+    /// Return `None` to emit nothing, or `Some(token_stream)` containing a
+    /// statement (or block) that enables global interrupts. The statement
+    /// is emitted after all interrupt initialization (`post_init`) has run,
+    /// so it may assume the interrupt controller is fully configured.
+    ///
+    /// # Reference
+    ///
+    /// * **Cortex-M**: `None` (interrupts enabled by default).
+    /// * **RISC-V**: `unsafe { <distro>::export::interrupt::enable(); }`.
+    fn generate_enable_global_interrupts(&self) -> Option<TokenStream2>;
+
     /// Body of the global critical-section function.
     ///
     /// RTIC generates a function like:
@@ -183,14 +211,14 @@ pub trait CorePassBackend {
     /// # Contract
     /// * Do NOT change the function signature of `empty_body_fn`.
     /// * The function must re-enable interrupts when done.
-    /// 
+    ///
     /// The function must implement a critical section by:
     /// 1- storing the state of global interrupts
     /// 2- disable global interrupts
     /// 3- execute the closure and get the return value
     /// 4- restore the state of global interrupts
     /// 5- return the produced by the closure
-    /// 
+    ///
     /// The reason for saving and restoring global interrupt state is due to the fact that
     /// Critical section function can be nested
     ///

@@ -204,6 +204,7 @@ impl<'a> CodeGen<'a> {
         let priority_masks = implementation.generate_global_definitions(args, app, analysis);
         let entry_attrs = implementation.entry_attrs();
         let entry_name = implementation.entry_name(app.core);
+        let enable_global_interrupts = implementation.generate_enable_global_interrupts();
 
         let interrupt_free = format_ident!("{}", INTERRUPT_FREE_FN);
 
@@ -264,6 +265,9 @@ impl<'a> CodeGen<'a> {
                     // post initialization code
                     #backend_post_init
                 });
+
+                // enable global interrupts (target specific)
+                #enable_global_interrupts
 
                 // injections before idle
                 #(#before_idle)*

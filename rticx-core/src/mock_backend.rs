@@ -88,6 +88,10 @@ impl CorePassBackend for MockCoreBackend {
     fn pre_codegen_validation(&self, _app: &App, _analysis: &Analysis) -> syn::Result<()> {
         Ok(())
     }
+
+    fn generate_enable_global_interrupts(&self) -> Option<TokenStream2> {
+        None
+    }
 }
 
 impl Default for MockCoreBackend {

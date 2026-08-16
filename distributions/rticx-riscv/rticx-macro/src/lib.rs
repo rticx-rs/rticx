@@ -175,22 +175,28 @@ impl CorePassBackend for BackendImpl {
 
     // ---- global critical section (interrupt disable/enable) ------------------
     //
-    // SLIC and ESP32 targets all use standard RISC-V `mstatus.MIE` to
-    // disable/enable interrupts.  The upstream ESP32 exports re-export
-    // `riscv::interrupt` for this purpose.
+    // All backends expose a nesting-safe `interrupt::free` that saves the
+    // previous interrupt state (`mstatus.MIE`), disables interrupts, runs the
+    // closure and only re-enables interrupts if they were enabled before the
+    // critical section.  This keeps critical sections correct when entered
+    // from interrupt handlers (e.g. software task `spawn`) or from the `init`
+    // context where interrupts are still disabled.
     fn generate_interrupt_free_fn(&self, mut empty_body_fn: ItemFn) -> ItemFn {
-        let fn_body = parse_quote!({
-            unsafe {
-                rticx_riscv::export::interrupt::disable();
-            }
-            let r = f();
+        let fn_body = parse_quote!({ rticx_riscv::export::interrupt_free(f) });
+        empty_body_fn.block = Box::new(fn_body);
+        empty_body_fn
+    }
+
+    /// Statement enabling global interrupts before the idle loop.
+    fn generate_enable_global_interrupts(&self) -> Option<TokenStream2> {
+        Some(quote!({
+            // SAFETY: the runtime is fully initialized at this point (init,
+            // task inits and post_init have all run) and the interrupt
+            // controller is configured, so global interrupts can be enabled.
             unsafe {
                 rticx_riscv::export::interrupt::enable();
             }
-            r
-        });
-        empty_body_fn.block = Box::new(fn_body);
-        empty_body_fn
+        }))
     }
 
     /// Target specific global definitions

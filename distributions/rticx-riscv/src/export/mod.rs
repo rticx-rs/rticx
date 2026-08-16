@@ -39,3 +39,18 @@ pub use esp32c6_export::*;
 #[cfg(feature = "esp32c6")]
 #[allow(clippy::module_inception)]
 mod esp32c6_export;
+
+/// Nesting-safe critical section.
+///
+/// Only the global interrupt enable (`mstatus.MIE`) is toggled and
+/// restored to its previous value: the SLIC controller itself is left
+/// untouched so that entering a critical section from an interrupt
+/// handler (where interrupts are already disabled) does not corrupt the
+/// controller state and does not spuriously re-enable interrupts on exit.
+#[inline]
+pub fn interrupt_free<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    riscv::interrupt::free(f)
+}
