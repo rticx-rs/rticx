@@ -48,6 +48,7 @@ fn is_exception(name: &Ident) -> bool {
     CONFIGURABLE_EXCEPTIONS.iter().any(|e| s == *e)
 }
 
+#[doc = include_str!("../README_lib.md")]
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let sw_pass = SoftwarePass::new(SwPassBackendImpl);

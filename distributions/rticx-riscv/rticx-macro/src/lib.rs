@@ -23,6 +23,7 @@ compile_error!(
 // Entry point – dispatches to the selected backend
 // ============================================================================
 
+#[doc = include_str!("../README_lib.md")]
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let sw_pass = SoftwarePass::new(SwBackendImpl);

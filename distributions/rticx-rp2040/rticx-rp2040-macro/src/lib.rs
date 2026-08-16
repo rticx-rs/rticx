@@ -39,6 +39,7 @@ fn is_exception(name: &Ident) -> bool {
     CONFIGURABLE_EXCEPTIONS.iter().any(|e| s == *e)
 }
 
+#[doc = include_str!("../README_lib.md")]
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     // use the standard software pass provided by rticx-sw-pass crate

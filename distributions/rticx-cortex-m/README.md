@@ -24,9 +24,10 @@ rticx-cortex-m/
     └── armv6m-app/       # thumbv6m example using interrupt source masking
 ```
 
-Both example apps use the *same* `stm32f0::stm32f0x0` PAC and the *same*
-`hello_rtic.rs` source. The only differences between them are the build target
-triple and the `armv6m` RTIC feature.
+
+## Documentation
+
+Full user guide is available in the [project wiki](https://github.com/rticx-rs/rticx/wiki/User-Guide).
 
 ## The QEMU playground
 

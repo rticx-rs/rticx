@@ -26,6 +26,10 @@ or more than one produces a compile error.
 | `esp32c6`   | Espressif ESP32-C6 (machine-mode). Uses `FROM_CPU_INTR{0..3}` as dispatcher software interrupts. |
 
 
+## Documentation
+
+Full user guide is available in the [project wiki](https://github.com/rticx-rs/rticx/wiki/User-Guide).
+
 ## Running examples in QEMU
 ```bash
 make examples
