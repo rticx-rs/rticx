@@ -49,12 +49,12 @@ Three layers:
 | Crate | Feature | Effect |
 |-------|---------|--------|
 | `rticx-cortex-m` | `armv6m` | Source-masking lock (default: BASEPRI) |
-| `rticx-cortex-m` | `async` | Enables async/await software tasks |
 | `rticx-riscv` | `slic` / `esp32c3` / `esp32c6` | Mutually exclusive target selectors |
-| `rticx-riscv` | `async` | Enables async/await software tasks |
-| `rticx-rp2040` | `swtasks` / `autoassign` | Software tasks / auto core assignment |
+| `rticx-rp2040` | `autoassign` | auto core assignment |
+| <all distros> | `async` | Enables async/await software tasks |
+| <all distros> | `swtasks` | Enables lightweight software tasks |
 
-Feature propagation pattern: distro crate feature → forwards to `*-macro` crate feature → macro crate enables `dep:<pass>` via `#[cfg(feature = "...")]`.
+Feature propagation pattern: distro crate feature -> forwards to `*-macro` crate feature → macro crate enables `dep:<pass>` via `#[cfg(feature = "...")]`.
 
 ## Conventions
 

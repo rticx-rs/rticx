@@ -6,22 +6,109 @@
 [![QEMU](https://github.com/rticx-rs/rticx/actions/workflows/qemu.yml/badge.svg)](https://github.com/rticx-rs/rticx/actions/workflows/qemu.yml)
 
 
-This is a from scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic). The goal is to make it more maintainable, extensible, and easily portable to new hardware architectures (including multicore) in order to to reduce the barrier of entry for contributors and maintainers who wish to introduce newer syntax features and hardware ports.
+This is a from-scratch rewrite of the [original RTIC framework](https://github.com/rtic-rs/rtic).
 
-The main idea is to breakdown RTIC's monolithic codebase by separating the generic proc-macro logic (RTIC syntax) from target-specific details (Interrupt handling, system initialization.. etc). Furthermore, the proc-macro logic is split to core and addons, where the core logic captures only the SRP Tasks/Resources model and the rest will be external addons like software tasks and async/await..etc.
+## Motivation
 
-The result is a small core framework (`rticx-core`) plus a growing ecosystem of **compilation passes** and **distributions**:
+[RTIC](https://github.com/rtic-rs/rtic) is arguably one of the best embedded
+Rust frameworks out there, with exceptional guarantees such as **deadlock-free**
+execution and blazing-fast scheduling thanks to SRP and hardware-offloaded
+scheduling. However, its monolithic architecture is showing its limits and 
+is becoming increasingly hard to extend and maintain.
 
-- **Compilation passes** are independent crates that transform and expand user application syntax.
-- **Distributions** are target-specific crates that implement backend traits, register the passes they want, and expose the final `#[<distro>::app]` macro.
+RTIC being a framework that provides the majority of its
+functionality through a Rust proc-macro is by itself a major learning curve
+for any contributor. Furthermore, the amount of parsed, analyzed, validated,
+and generated code is huge compared to other Rust proc-macros, which operate on
+small pieces of code rather than the entire user application. To make matters
+worse, the RTIC proc-macro has to emit hardware-specific code, so each new hardware
+port adds more proc-macro logic. As a result, the RTIC codebase is growing
+uncontrollably, the maintenance burden is becoming much higher, and
+contributing requires a very thorough understanding of this complex codebase.
+It also supports only single-core hardware and doesn't account for **multicore**
+targets, which would enable a vast range of new applications.
 
-In addition, the user application syntax (Referred to now as RTICX syntax) has been refactored to provide less magic and more idiomatic Rust experience while preserving the core concepts of the original RTIC framework (Tasks and Resources model). 
+## Goal
 
-This repository maintains the core framework and a set of reference distributions. New hardware distributions and fancier syntax extensions are developed as out-of-tree crates and are not hosted here.
+This project started as [a research project](#academic-publications)
+with the goal of making RTIC more maintainable, extensible, and easily portable
+to new hardware architectures (including multicore) in order to reduce the
+barrier of entry for contributors and maintainers who wish to introduce new
+syntax features and hardware ports.
+
+The main idea is to break down RTIC's monolithic codebase by separating the
+generic proc-macro logic (RTIC syntax) from target-specific details (interrupt
+handling, system initialization, etc). Furthermore, the proc-macro logic is
+split into core and addons: the core captures only the SRP Tasks/Resources
+model, and everything else (software tasks, async/await, etc..) is implemented
+as external addons.
+
+The result is a small core framework (`rticx-core`) plus a growing ecosystem of
+**compilation passes** and **distributions**:
+
+- **Compilation passes** are independent crates that transform and expand user
+  application syntax.
+- **Distributions** are target-specific crates that implement backend traits,
+  register the passes they want, and expose the final `#[<distro>::app]` macro.
+
+In addition, the user application syntax (henceforth referred to as RTICX
+syntax) has been refactored to provide less magic and a more idiomatic Rust
+experience while preserving the core concepts of the original RTIC framework
+(the Tasks and Resources model).
+
+## Features
+
+Just like the [original RTIC framework](https://github.com/rtic-rs/rtic), the following features are supported:
+
+- **Tasks** as the unit of concurrency:
+    - interrupt-driven (hardware tasks)
+    - spawned on demand (lightweight software tasks or async/await tasks)
+
+- **Message passing** between tasks at spawn time.
+
+- **A timer queue**: async software tasks can delay or schedule themselves for future execution, enabling periodic tasks.
+
+- **Preemptive multitasking** through task priorities.
+
+- **Efficient and data race free memory sharing** through fine-grained *priority based* critical sections.
+
+- **Deadlock free execution** guaranteed at compile time. This is a stronger guarantee than what's provided by [the standard `Mutex` abstraction](https://doc.rust-lang.org/std/sync/struct.Mutex.html)
+
+- **Minimal scheduling overhead**. The task scheduler has minimal software footprint; the hardware does the bulk of the scheduling.
+
+- **Highly efficient memory usage**: All the tasks share a single call stack and there's no hard dependency on a dynamic memory allocator.
+
+- **All Cortex-M devices are supported** (BASEPRI on armv7+, source masking on
+  armv6-m).
+
+- **Most RISC-V microcontrollers are supported** (any SLIC-based MCU, plus
+  ESP32-C3 / ESP32-C6).
+
+- A task model amenable to known WCET (Worst Case Execution Time) analysis and scheduling analysis techniques.
+
+On top of the original framework, RTICX adds:
+
+- **Single-binary multicore support**: Extended Syntax and hardware support for single firmware multicore platforms like the **rp2040** 
+
+- **Simplified, more idiomatic Rust syntax**: less magic, cleaner code, same functionality.
+
+- **Choice of software task flavors**: RTICv1-style lightweight tasks (no
+  async) or RTICv2-style async/await tasks.
+
+- **Easier hardware ports and contributions**: new hardware ports and syntax extensions are easier than ever. The don't require forking the framework nor fully understanding how it works. See the distributor guide in the [project wiki](https://github.com/rticx-rs/rticx/wiki/).
+
+- **`rticx-expand`**: a debug tool that expands any RTICX application into
+  fully executable source (for GDB debugging, security vetting, etc.).
 
 ## Architecture
 
-- **`rticx-core`** provides the parser, resource-ceiling analysis (SRP), code generation for tasks/resources/init/idle, and the `RticMacroBuilder` API for chaining passes.
+- **`rticx-core`** provides the:
+    - parser for the simple Task/Resources model,
+    - resource-ceiling analysis (SRP)
+    - code generation for hardware tasks/resources/init/idle
+    - foundation of multicore-support
+    - `RticMacroBuilder`, `InfoBus` APIs for chaining passes and exchanging information.
+    - Trait definitions for compilation passes and parsing and codegen helpers like `RticAttr`
 - **Compilation passes** implement the `RticPass` trait and run before or after the core pass as pure syntax-to-syntax transformations.
 - **Distributions** provide the low-level hardware bindings via the `CorePassBackend` trait (and optional pass-specific backends), select which passes to use, and re-export the generated `#[<distro>::app]` macro.
 
@@ -29,31 +116,27 @@ This repository maintains the core framework and a set of reference distribution
 
 Full user and distributor guides are available in the [project wiki](https://github.com/rticx-rs/rticx/wiki/).
 
-## Repository layout
-
-| Path | Crate / Directory | Role |
-|------|-------------------|------|
-| `rticx-core/` | `rticx-core` | Core parser, analysis, codegen, and `RticMacroBuilder`. |
-| `rticx-spsc/` | `rticx-spsc` | `no_std` single-producer single-consumer queue used by the software tasks pass. |
-| `rticx-async/` | `rticx-async` | `no_std` async runtime: `ExecSlot` future storage, `make_channel!` macro, MPSC channels, waker infrastructure.  |
-| `compilation-passes/rticx-async-pass/` | `rticx-async-pass` | Async/Await software tasks pass: executors, message queues, `spawn`, `spawn_from`. |
-| `compilation-passes/rticx-sw-pass/` | `rticx-sw-pass` | Vanilla software tasks pass: dispatchers, message queues, `spawn`, `spawn_from`. |
-| `compilation-passes/rticx-auto-assign/` | `rticx-auto-assign` | Automatic `core = N` assignment based on shared resource usage. |
-| `compilation-passes/rticx-deadline-pass/` | `rticx-deadline-pass` | Converts `deadline = D` attributes into RTICX priorities. |
-| `tools/rticx-expand/` | `rticx-expand` | `cargo rticx-expand` subcommand: prints the complete expanded source (user code preserved) to stdout like `cargo expand` (`--merge` splices it into the source file for inspection and GDB stepping, `restore` reverts); `--expand-passes <dir>` snapshots the module after every pass for diffing. |
-| `distributions/rticx-cortex-m/` | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) distribution. |
-| `distributions/rticx-riscv/` | `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 |
-| `distributions/rticx-rp2040/` | `rticx-rp2040` | Raspberry Pi Pico / RP2040 dual-core Cortex-M0+ distribution. |
-
-## Supported distributions
+## Supported distributions (Maintained by RTICX team)
 
 | Distribution | Target | Link |
 |--------------|--------|----------|
 | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-cortex-m |
 | `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-riscv |
 | `rticx-rp2040` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-rp2040 |
-| `rticx-hippo` | Single-core RISC-V Hippomenes MCU | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-hippo |
-| `rticx-atalanta` | Single-core RISC-V Atalanta MCU | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-atalanta |
+
+## Experimental distributions (Research)
+| Distribution | Target | Link |
+|--------------|--------|----------|
+| `rticx-hippo` | Single-core RISC-V Hippomenes MCU | https://github.com/rticx-rs/rticx-hippo |
+| `rticx-atalanta` | Single-core RISC-V Atalanta MCU | https://github.com/rticx-rs/rticx-atalanta |
+
+## Acknowledgements
+
+While RTICX is a from-scratch rewrite of RTIC's macro and core logic, several
+parts of this repository, notably the hardware exports and target backends in
+the cortex-m and riscv distributions, have been backported from the upstream [RTIC](https://github.com/rtic-rs/rtic)
+codebase. Many thanks to the RTIC community; a large share of the credit for
+these parts goes to its maintainers and contributors.
 
 ## Quick start
 
@@ -77,7 +160,7 @@ The examples are located in `distributions/rticx-cortex-m/example-apps`. You can
 - [ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_ping_pong.rs)
 - [ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/example-apps/armv7m-app/examples/async_prio0.rs)
 - [RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
-- [Single binary multicore ping-pong](distributions/rticx-rp2040/example-apps/src/bin/ping_pong.rs)
+- [RP2040 multicore ping-pong](distributions/rticx-rp2040/example-apps/src/bin/ping_pong.rs)
 
 ## Academic Publications
 

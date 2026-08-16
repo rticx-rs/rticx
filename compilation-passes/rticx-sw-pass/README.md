@@ -1,6 +1,6 @@
 # rticx-sw-pass
 
-RTICv1-like Software tasks compilation pass for the [RTICX](https://github.com/rticx-rs/rticx) framework.
+RTICv1-like Lightweight Software tasks compilation pass for the [RTICX](https://github.com/rticx-rs/rticx) framework.
 
 Adds dispatchers, message queues, `spawn`, and `spawn_from` support.
 
