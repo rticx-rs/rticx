@@ -363,15 +363,15 @@ fn codegen_expands_multi_core_sw_app() {
         quote! {
             static mut __rticx_internal__Cross__INPUTS : rticx :: export :: Queue < < Cross as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
             impl Cross {
-                /// Spawn a this task which belongs to `core` from the core specified using `spawn_by`
+                /// Cross-core spawn: enqueue `input` to this task, which executes on
+                /// `core`, from the core specified using `spawn_by`.
                 /// ## Returns:
                 /// - Ok(()), the inputs are enqueued successfully and the task's dispatcher interrupt is successfully pended
                 /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
                 /// Either repend it manually or try at a later time.
                 /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
-                /// If the distribution provides a runtime core check, `Err(Some(input))` is also returned when
-                /// the caller is not executing on the `spawn_by` core.
-                pub fn spawn_from (_spawner : __rticx__internal__Core0 , input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , Option< < Cross as RticSwTask > :: SpawnInput > > {
+                /// `Err(Some(input))` is also returned when the caller is not executing on the `spawn_by` core. (in Multicore)
+                pub fn cross_spawn (input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , Option< < Cross as RticSwTask > :: SpawnInput > > {
                     if mock_current_core_id () != 0 { return Err (Some (input)) ; }
                     let mut inputs_producer = unsafe { __rticx_internal__Cross__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core1Prio3Tasks__RQ . split () . 0 } ;
@@ -384,7 +384,7 @@ fn codegen_expands_multi_core_sw_app() {
                 }
             }
         },
-        "core1 spawn_from() api",
+        "core1 cross_spawn() api",
     );
     // core 1 dispatcher
     assert_section_present(
@@ -425,5 +425,24 @@ fn codegen_expands_multi_core_sw_app() {
             }
         },
         "core1 dispatcher exec",
+    );
+}
+
+#[test]
+fn codegen_cross_core_tasks_require_current_core_id() {
+    let pass = SoftwarePass::new(MockSwBackend {
+        cross: true,
+        core_check: false,
+    });
+    let result = pass.run_pass(
+        common::multi_core_sw_args(),
+        common::multi_core_sw_app_module(),
+    );
+    let Err(err) = result else {
+        panic!("expected an error for cross-core tasks without a runtime core check");
+    };
+    assert!(
+        err.to_string().contains("current_core_id"),
+        "expected an error mentioning `current_core_id`, got: {err}"
     );
 }

@@ -16,7 +16,6 @@ use crate::rticx_traits::get_rticx_traits_mod;
 pub mod hw_task;
 pub mod shared_resources;
 pub mod task_init;
-pub mod utils;
 
 pub struct CodeGen<'a> {
     app: &'a App,
@@ -208,8 +207,6 @@ impl<'a> CodeGen<'a> {
 
         let interrupt_free = format_ident!("{}", INTERRUPT_FREE_FN);
 
-        let core_type_def = generate_core_type(app.core);
-
         let core = app.core;
 
         let entry_start = self
@@ -247,8 +244,6 @@ impl<'a> CodeGen<'a> {
             #(#hw_task_bindings)*
             // proxies for accessing the shared resources
             #resource_proxies
-            // unique type for the specific sub-app/core
-            #core_type_def
             // Computed priority Masks
             #priority_masks
             /// Type holding one value per user task, returned from `#[init]`.
@@ -315,30 +310,6 @@ fn generate_idle_call(idle: Option<&IdleTask>, wfi: Option<TokenStream2>) -> Tok
         unsafe {
             #write
             #idle_instance_name.assume_init_mut().exec();
-        }
-    }
-}
-
-/// Generates a unique type for some core that is unsafe to create by the user.
-/// I.e, it is used for internal purposes only, so the user shouldn't attempt to create it.
-fn generate_core_type(core: u32) -> TokenStream2 {
-    let core_ty = utils::core_type(core);
-    let inner_core_ty = utils::core_type_inner(core);
-    let mod_core_ty = utils::core_type_mod(core);
-    let doc = format!("Unique type for core {core}");
-
-    quote! {
-        #[doc = #doc]
-        pub use #mod_core_ty::#core_ty;
-        mod #mod_core_ty {
-            struct #inner_core_ty;
-            pub struct #core_ty(#inner_core_ty);
-            impl #core_ty {
-                #[inline(always)]
-                pub const unsafe fn new() -> Self {
-                    #core_ty(#inner_core_ty)
-                }
-            }
         }
     }
 }

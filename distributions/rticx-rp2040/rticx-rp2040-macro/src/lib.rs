@@ -475,7 +475,7 @@ impl SwPassBackend for SwPassBackendImpl {
     }
 
     /// Read the numeric id of the core this code is currently executing on
-    /// (0 or 1 on the RP2040).  Injected into `spawn`/`spawn_from` so that
+    /// (0 or 1 on the RP2040).  Injected into `spawn`/`cross_spawn` so that
     /// forged compile-time core tokens are caught at runtime.
     fn current_core_id(&self) -> Option<syn::Expr> {
         Some(parse_quote!(unsafe {
@@ -512,7 +512,7 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
     }
 
     /// Read the numeric id of the core this code is currently executing on
-    /// (0 or 1 on the RP2040).  Injected into `spawn`/`spawn_from` so that
+    /// (0 or 1 on the RP2040).  Injected into `spawn`/`cross_spawn` so that
     /// forged compile-time core tokens are caught at runtime.
     fn current_core_id(&self) -> Option<syn::Expr> {
         Some(parse_quote!(unsafe {

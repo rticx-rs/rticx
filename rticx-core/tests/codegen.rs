@@ -150,11 +150,6 @@ fn codegen_expands_single_core_app() {
         quote! { impl UartTask { pub const fn priority () -> u16 { 2u16 } } },
         "task priority function",
     );
-    assert_section_present(
-        &generated,
-        quote! { impl UartTask { pub const fn current_core () -> __rticx__internal__Core0 { unsafe { __rticx__internal__Core0 :: new () } } } },
-        "task current_core function",
-    );
 
     // ---- shared-resources access struct for `UartTask` ----
     assert_section_present(
@@ -218,25 +213,6 @@ fn codegen_expands_single_core_app() {
             }
         },
         "hw task to irq binding",
-    );
-
-    // ---- core type ----
-    assert_section_present(
-        &generated,
-        quote! {
-            pub use core0_type_mod :: __rticx__internal__Core0 ;
-            mod core0_type_mod {
-                struct __rticx__internal__Core0Inner ;
-                pub struct __rticx__internal__Core0 (__rticx__internal__Core0Inner) ;
-                impl __rticx__internal__Core0 {
-                    #[inline(always)]
-                    pub const unsafe fn new () -> Self {
-                        __rticx__internal__Core0 (__rticx__internal__Core0Inner)
-                    }
-                }
-            }
-        },
-        "core type definition",
     );
 
     // ---- TaskInits struct ----
@@ -358,11 +334,6 @@ fn codegen_expands_multi_core_app() {
     );
     assert_section_present(
         &generated,
-        quote! { impl UartTask0 { pub const fn current_core () -> __rticx__internal__Core0 { unsafe { __rticx__internal__Core0 :: new () } } } },
-        "core0 task current_core function",
-    );
-    assert_section_present(
-        &generated,
         quote! {
             # [allow (non_snake_case)]
             # [unsafe (no_mangle)]
@@ -376,11 +347,6 @@ fn codegen_expands_multi_core_app() {
         &generated,
         quote! { pub struct __counter_mutex < const TASK_PRIORITY : u16 > ; },
         "core0 resource proxy struct",
-    );
-    assert_section_present(
-        &generated,
-        quote! { pub use core0_type_mod :: __rticx__internal__Core0 ; },
-        "core0 type re-export",
     );
     assert_section_present(
         &generated,
@@ -439,11 +405,6 @@ fn codegen_expands_multi_core_app() {
     );
     assert_section_present(
         &generated,
-        quote! { impl UartTask1 { pub const fn current_core () -> __rticx__internal__Core1 { unsafe { __rticx__internal__Core1 :: new () } } } },
-        "core1 task current_core function",
-    );
-    assert_section_present(
-        &generated,
         quote! {
             # [allow (non_snake_case)]
             # [unsafe (no_mangle)]
@@ -452,11 +413,6 @@ fn codegen_expands_multi_core_app() {
             }
         },
         "core1 hw task to irq binding",
-    );
-    assert_section_present(
-        &generated,
-        quote! { pub use core1_type_mod :: __rticx__internal__Core1 ; },
-        "core1 type re-export",
     );
     // The second entry point uses the `main_1` suffix produced by `MockCoreBackend::entry_name`.
     assert_section_present(

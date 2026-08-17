@@ -455,16 +455,16 @@ fn codegen_expands_multi_core_sw_app() {
         "core1 wrapper async fn",
     );
 
-    assert_section_present(&generated, quote! { impl Cross }, "core1 spawn_from impl");
+    assert_section_present(&generated, quote! { impl Cross }, "core1 cross_spawn impl");
     assert_section_present(
         &generated,
-        quote! { pub fn spawn_from },
-        "core1 spawn_from fn",
+        quote! { pub fn cross_spawn },
+        "core1 cross_spawn fn",
     );
     assert_section_present(
         &generated,
         quote! { if mock_current_core_id () != 0 { return Err (Some (input)) ; } },
-        "core1 spawn_from runtime core check",
+        "core1 cross_spawn runtime core check",
     );
 
     assert_section_present(
@@ -672,5 +672,24 @@ fn codegen_expands_prio_0_executor() {
         &generated,
         quote! { #[idle (core = 0 , init = generated)] },
         "idle executor struct attribute",
+    );
+}
+
+#[test]
+fn codegen_cross_core_tasks_require_current_core_id() {
+    let pass = AsyncPass::new(MockAsyncBackend {
+        cross: true,
+        core_check: false,
+    });
+    let result = pass.run_pass(
+        common::multi_core_sw_args(),
+        common::multi_core_sw_app_module(),
+    );
+    let Err(err) = result else {
+        panic!("expected an error for cross-core tasks without a runtime core check");
+    };
+    assert!(
+        err.to_string().contains("current_core_id"),
+        "expected an error mentioning `current_core_id`, got: {err}"
     );
 }

@@ -23,10 +23,3 @@ pub fn priority_queue_ident(prio_ty: &Ident) -> Ident {
 pub fn sw_task_inputs_ident(task_ident: &Ident) -> Ident {
     format_ident!("__rticx_internal__{task_ident}__INPUTS")
 }
-
-/// Type that will be generated in the standard pass for every core
-/// The type will be unsafe for the user to create, so this type can be used to force the user to follow a specific contract
-/// TODO: why are these types generated in standard pass ????? why not here ?
-pub fn core_type(core: u32) -> Ident {
-    format_ident!("__rticx__internal__Core{core}")
-}

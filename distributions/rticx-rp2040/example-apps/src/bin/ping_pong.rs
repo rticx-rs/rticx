@@ -77,13 +77,14 @@ pub mod my_app {
             asm::delay(PING_PONG_DELAY); // add some delay for visualization
             let pong = ping + 1;
             println!("CORE0: Got ping {}, sending pong {}", ping, pong);
-            if let Err(_e) = Core1Task::spawn_from(Self::current_core(), pong) {
+            if let Err(_e) = Core1Task::cross_spawn(pong) {
                 error!("couldn't spawn task on core 1 from core 0")
             }
 
-            // UNCOMMENT NEXT STATEMENT TO SEE THAT IT IS NOT ALLOWED
-            // BECAUSE TASK IS MARKED BY `spawn_by = 1`. I.e only core 1 can spawn this task
-            // let _ = Core0Task::spawn_from(Self::current_core(), 1);
+            // UNCOMMENT NEXT STATEMENT TO SEE THAT THE RUNTIME CHECK REJECTS IT:
+            // this task is marked by `spawn_by = 1`, i.e. only core 1 may spawn
+            // it. `cross_spawn` called from core 0 returns Err(Some(input)).
+            // let _ = Core0Task::cross_spawn(1);
         }
     }
 
@@ -103,7 +104,7 @@ pub mod my_app {
     /// is rejected (tasks are not initialized yet), so this runs in post-init.
     #[post_init(core = 1)]
     fn start_ping_pong() {
-        Core0Task::spawn_from(Core1Task::current_core(), 1).expect("Couldn't start task on core 0");
+        Core0Task::cross_spawn(1).expect("Couldn't start task on core 0");
     }
 
     /// a Core1 task to be spawned by a task on Core0
@@ -116,7 +117,7 @@ pub mod my_app {
             asm::delay(PING_PONG_DELAY); // add some delay for visualization
             let ping = pong + 1;
             println!("CORE1: Got pong {}, sending ping {}", pong, ping);
-            if let Err(_e) = Core0Task::spawn_from(Self::current_core(), ping) {
+            if let Err(_e) = Core0Task::cross_spawn(ping) {
                 error!("couldn't spawn task on core 0 from core 1")
             }
         }

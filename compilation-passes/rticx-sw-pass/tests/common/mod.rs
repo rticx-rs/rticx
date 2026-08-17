@@ -136,7 +136,7 @@ pub fn assert_section_present(generated: &str, expected: TokenStream, label: &st
 ///
 /// When `core_check` is `true`, `current_core_id` returns a
 /// `mock_current_core_id()` expression so tests can assert the runtime core
-/// check is injected into `spawn`/`spawn_from`.
+/// check is injected into `spawn`/`cross_spawn`.
 pub struct MockSwBackend {
     pub cross: bool,
     pub core_check: bool,

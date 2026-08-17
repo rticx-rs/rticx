@@ -2,7 +2,7 @@
 
 RTICv1-like Lightweight Software tasks compilation pass for the [RTICX](https://github.com/rticx-rs/rticx) framework.
 
-Adds dispatchers, message queues, `spawn`, and `spawn_from` support.
+Adds dispatchers, message queues, `spawn`, and `cross_spawn` support.
 
 ## Syntax
 
@@ -33,7 +33,7 @@ mod app {
 |------------|-------|------------|-------------|
 | `priority` | `u16` | `0`        | Dispatcher priority group for this task. |
 | `core`     | `u32` | `0`        | Core the task runs on. |
-| `spawn_by` | `u32` | `core`     | Core allowed to spawn the task; any other value makes it a cross-core task spawnable with `spawn_from`. |
+| `spawn_by` | `u32` | `core`     | Core allowed to spawn the task; any other value makes it a cross-core task spawnable with `cross_spawn`. |
 | `capacity` | `usize` | `1`       | Number of pending spawns the task's input queue can hold. Must be at least 1. |
 
 

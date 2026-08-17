@@ -44,6 +44,16 @@ impl RticPass for AsyncPass {
 
     fn run_pass(&self, args: TokenStream, app_mod: ItemMod) -> syn::Result<(TokenStream, ItemMod)> {
         let parsed = App::parse(&args, app_mod)?;
+        // Cross-core spawning is enforced exclusively by the runtime core check.
+        // Refuse to compile when the application has cross-core tasks but the
+        // distribution backend does not provide `current_core_id`.
+        let has_cross_core_tasks = parsed.sub_apps.iter().any(|s| !s.mc_sw_tasks.is_empty());
+        if has_cross_core_tasks && self.backend.current_core_id().is_none() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "this application has cross-core tasks, but the distribution backend does not implement `AsyncPassBackend::current_core_id`. Multicore distributions must provide a runtime core-id expression to enforce cross-core spawning.",
+            ));
+        }
         let analysis = Analysis::run(&parsed)?;
         let has_any = parsed
             .sub_apps
@@ -152,7 +162,7 @@ pub trait AsyncPassBackend {
     /// that has cross-core spawners and passes it to this method.  The
     /// implementation must fill the body with code that signals the target
     /// core to run an async software task that was spawned remotely.  The resulting
-    /// function is called by `spawn_from()` at runtime.
+    /// function is called by `cross_spawn()` at runtime.
     ///
     /// The cross-pend function returns a Result<(),()>, Ok(()) if cross-core interrupt
     /// was successfully called, or Err(()) if pending failed for any reason (E.g FIFO full)
@@ -165,7 +175,7 @@ pub trait AsyncPassBackend {
     /// * The generated function takes a single argument `irq_nbr` whose
     ///   concrete type is the interrupt type for the target core.
     /// * Return `None` if your target is single-core (no cross-core
-    ///   communication is needed).  `spawn_from` will not be available
+    ///   communication is needed).  `cross_spawn` will not be available
     ///   to user code.
     /// * Do NOT change the function signature.
     ///
@@ -193,16 +203,14 @@ pub trait AsyncPassBackend {
     /// Expression yielding the numeric id (`u32`) of the core this code is
     /// currently executing on.
     ///
-    /// When `Some`, the generated `spawn`/`spawn_from` functions start with a
-    /// runtime check: `if <expression> != <expected core> { return Err(input) }`.
-    /// The expected core is the task's own `core` for `spawn`, and its
-    /// `spawn_by` for `spawn_from`.  This closes the compile-time core-token
-    /// forgery hole at runtime: the caller must genuinely run on the
-    /// configured core for the spawn to succeed.
+    /// The generated `spawn`/`cross_spawn` functions start with a runtime
+    /// check: `if <expression> != <expected core> { return Err(input) }`.  The
+    /// expected core is the task's own `core` for `spawn`, and its `spawn_by`
+    /// for `cross_spawn`.
     ///
     /// The expression must be a safe, side-effect-free read of the actual
     /// hardware state (e.g. the `cpuid` register on the RP2040).  Return
-    /// `None` to disable the runtime check (the default).
+    /// `None` for single-core targets (where cross-core tasks cannot exist).
     fn current_core_id(&self) -> Option<syn::Expr> {
         None
     }

@@ -34,10 +34,6 @@ pub fn exec_wake_ident(task_ident: &Ident) -> Ident {
     format_ident!("__rticx_internal__{}__wake", task_ident)
 }
 
-pub fn core_type(core: u32) -> Ident {
-    format_ident!("__rticx__internal__Core{core}")
-}
-
 pub fn async_wrapper_ident(task_ident: &Ident) -> Ident {
     format_ident!("__rticx_async_{}", task_ident)
 }

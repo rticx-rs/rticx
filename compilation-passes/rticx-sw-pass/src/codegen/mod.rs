@@ -329,11 +329,9 @@ impl SoftwareTask {
         }
         // spawn for cross-core tasks
         else {
-            let spawner_ty = utils::core_type(self.params.spawn_by);
             let pend_fn = cross_pend_fn_ident(self.params.core);
             let spawn_by_lit = LitInt::new(&self.params.spawn_by.to_string(), Span::call_site());
-            // Optional runtime check that the caller runs on this task's `spawn_by` core.
-            // This catches forged compile-time core tokens at runtime.
+            // Multicore-only Runtime check that the caller runs on this task's `spawn_by` core.
             let core_check = backend.current_core_id().map(|current_core_id| {
                 quote! {
                     if #current_core_id != #spawn_by_lit {
@@ -345,15 +343,15 @@ impl SoftwareTask {
                 static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
-                    /// Spawn a this task which belongs to `core` from the core specified using `spawn_by`
+                    /// Cross-core spawn: enqueue `input` to this task, which executes on
+                    /// `core`, from the core specified using `spawn_by`.
                     /// ## Returns:
                     /// - Ok(()), the inputs are enqueued successfully and the task's dispatcher interrupt is successfully pended
                     /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
                     /// Either repend it manually or try at a later time.
                     /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
-                    /// If the distribution provides a runtime core check, `Err(Some(input))` is also returned when
-                    /// the caller is not executing on the `spawn_by` core.
-                    pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), Option<#inputs_ty>> {
+                    /// `Err(Some(input))` is also returned when the caller is not executing on the `spawn_by` core. (in Multicore)
+                    pub fn cross_spawn(input : #inputs_ty) -> Result<(), Option<#inputs_ty>> {
                         #core_check
                         let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};

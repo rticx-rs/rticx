@@ -59,20 +59,19 @@ Spawning:
 
 ```rust
 let _ = Ping::spawn(());                             // same core → Result<(), Input>
-let _ = Pong::spawn_from(Self::current_core(), input); // cross-core (spawn_by)
+let _ = Pong::cross_spawn(input);                    // cross-core (spawn_by)
 // Ok(()) on success; Err(input) if the task's input queue is full.
 // No join handle is returned.
 ```
 
-When the distribution backend provides a `current_core_id` expression
-(`AsyncPassBackend::current_core_id`), `spawn`/`spawn_from` start with a
-runtime check that the caller actually executes on the expected core
-(the task's own `core` for `spawn`, its `spawn_by` for `spawn_from`).
-On mismatch the spawn fails with `Err(input)` / `Err(Some(input))` and the
-input is returned. This catches forged compile-time core tokens at runtime,
-since the expression reads real hardware state (e.g. the `cpuid` register
-on the RP2040) that user code cannot fake. Backends that return `None`
-(e.g. single-core targets) skip the check entirely.
+In multicore, `spawn`/`cross_spawn` start with a runtime check that the caller actually
+executes on the expected core (the task's own `core` for `spawn`, its
+`spawn_by` for `cross_spawn`). The check uses the distribution backend's
+`current_core_id` expression (`AsyncPassBackend::current_core_id`), which
+reads real hardware state (e.g. the `cpuid` register on the RP2040).
+On mismatch the spawn fails with `Err(input)`/`Err(Some(input))` and the
+input is returned. Multicore applications with cross-core tasks fail to compile
+when the backend returns `None`; single-core targets return `None` 
 
 ---
 
@@ -87,7 +86,7 @@ For each **`#[async_task]`** the pass emits:
 | `static __<Task>__PTR: ExecSlotPtr` | Opaque, non-generic pointer to the typed `ExecSlot<F>` |
 | `fn __<Task>__wake()` | Waker: recovers the slot via `recover_slot(wrapper, &PTR)`, sets `pending`, pends the dispatcher |
 | `impl Task { pub fn spawn(…) }` | Enqueues input + pends dispatcher; returns `Err(input)` when the input queue is full |
-| `impl Task { pub fn spawn_from(…) }` | Cross-core variant (only when `spawn_by ≠ core`) |
+| `impl Task { pub fn cross_spawn(…) }` | Cross-core variant (only when `spawn_by ≠ core`) |
 
 The user's `impl RticAsyncTask { async fn exec(&mut self, input) { … } }`
 block is passed through unchanged.
@@ -263,6 +262,7 @@ Distribution proc-macro crates implement `AsyncPassBackend` and pass it to
 | `generate_cross_pend_fn(core, fn) -> Option<ItemFn>` | Fill body of the cross-core pend function; `None` on single-core |
 | `generate_wake_pend_fn(core, fn) -> ItemFn` | Fill body of the pend inside generated waker fns; default delegates to `generate_local_pend_fn` |
 | `custom_interrupt_path(core) -> Option<Path>` | Override the interrupt-type path (default: `pac[core]::Interrupt`) |
+| `current_core_id() -> Option<Expr>` | Expression yielding the executing core's id, injected into `spawn`/`cross_spawn`; required for multicore apps with cross-core tasks |
 | `subscribe(&mut self, InfoBus)` | Default no-op; guaranteed called before any other method |
 
 ---
@@ -274,7 +274,7 @@ The pass inherits the sw-pass multicore model unchanged:
 - `#[async_task(core = C, spawn_by = S)]`: task lives on core `C`, spawnable from core `S`.
 - Each core gets its own dispatchers; cross-core and core-local task priorities must be disjoint (analysis rejects overlap).
 - Dispatcher assignment is deterministic: priority groups are sorted ascending and dispatchers are consumed in declaration order (the first declared dispatcher handles the lowest priority group).
-- `spawn_from(spawner_token, input)` sends the input to the target core's queue and triggers the cross-pend mechanism.
+- `cross_spawn(input)` sends the input to the target core's queue and triggers the cross-pend mechanism, after a runtime core check against `spawn_by`.
 - The future is always created **on the target core** by the target core's dispatcher; only the spawn input travels across cores.
 
 ---
