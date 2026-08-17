@@ -63,3 +63,6 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 opt-level = "s"
+
+# Standalone package: intentionally not part of the root workspace.
+[workspace]

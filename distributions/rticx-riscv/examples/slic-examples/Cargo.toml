@@ -29,3 +29,4 @@ opt-level = "s"
 [features]
 slic-clint-backend = ["rticx-riscv/clint-backend"]
 slic-mecall-backend = ["rticx-riscv/mecall-backend"]
+

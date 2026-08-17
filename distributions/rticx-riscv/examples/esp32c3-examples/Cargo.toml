@@ -49,3 +49,4 @@ opt-level = "s"
 [features]
 swtasks = ["rticx-riscv/swtasks"]
 async = ["rticx-riscv/async", "dep:rticx-async", "dep:rtic-monotonics"]
+

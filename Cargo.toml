@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+# The rticx-riscv and rticx-rp2040 distributions are intentionally NOT
+# members: they are moving to their own repositories and remain standalone
+# (own Cargo.lock) until then.
+members = [
+    "rticx-spsc",
+    "rticx-core",
+    "rticx-async",
+    "compilation-passes/rticx-sw-pass",
+    "compilation-passes/rticx-auto-assign",
+    "compilation-passes/rticx-async-pass",
+    "compilation-passes/rticx-deadline-pass",
+    "tools/rticx-expand",
+    "distributions/rticx-cortex-m",
+    "distributions/rticx-cortex-m/rticx-macro",
+]
+# rticx-cortex-m's lib does not compile for the host target (BASEPRI path is
+# armv7-m only); it is exercised via its own Makefile with real targets.
+default-members = [
+    "rticx-spsc",
+    "rticx-core",
+    "rticx-async",
+    "compilation-passes/rticx-sw-pass",
+    "compilation-passes/rticx-auto-assign",
+    "compilation-passes/rticx-async-pass",
+    "compilation-passes/rticx-deadline-pass",
+    "tools/rticx-expand",
+    "distributions/rticx-cortex-m/rticx-macro",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+
+[workspace.dependencies]
+# --- external (shared across members) ---
+proc-macro2 = "1.0.79"
+quote = "1.0.35"
+syn = { version = "2.0.53", features = ["extra-traits", "full"] }
+thiserror = "1.0.63"
+# --- internal (path + caret version) ---
+rticx-spsc = { path = "rticx-spsc", version = "0.2.0" }
+rticx-core = { path = "rticx-core", version = "0.2.0" }
+rticx-async = { path = "rticx-async", version = "0.2.0" }
+rticx-sw-pass = { path = "compilation-passes/rticx-sw-pass", version = "0.2.0" }
+rticx-auto-assign = { path = "compilation-passes/rticx-auto-assign", version = "0.2.0" }
+rticx-async-pass = { path = "compilation-passes/rticx-async-pass", version = "0.2.0" }
+rticx-cortex-m-macro = { path = "distributions/rticx-cortex-m/rticx-macro", version = "0.2.0" }
+rticx-cortex-m = { path = "distributions/rticx-cortex-m", version = "0.2.0" }

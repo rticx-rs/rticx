@@ -27,3 +27,4 @@ rticx-async-pass = { version = "0.2.0", path = "../../../compilation-passes/rtic
 autoassign = []
 swtasks = []
 async = []
+

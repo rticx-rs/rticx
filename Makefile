@@ -1,13 +1,10 @@
-.PHONY: all ci fmt fmt-check clippy test qemu qemu-armv7m qemu-armv6m qemu-slic qemu-espc3
+.PHONY: all ci fmt fmt-check clippy test distros qemu qemu-armv7m qemu-armv6m qemu-slic qemu-espc3
 
-CRATES := rticx-core \
-          rticx-spsc \
-          rticx-async \
-          compilation-passes/rticx-sw-pass \
-          compilation-passes/rticx-auto-assign \
-          compilation-passes/rticx-deadline-pass \
-          compilation-passes/rticx-async-pass \
-          tools/rticx-expand
+# rticx-cortex-m's lib does not compile for the host target (BASEPRI path is
+# armv7-m only); it is exercised through its own Makefile with real targets
+# (see `distros` and `qemu-*` below).
+WS_EXCLUDES := --exclude rticx-cortex-m --exclude rticx-cortex-m-macro
+
 
 # Default target: run everything CI would run.
 all: fmt-check test clippy distros
@@ -20,35 +17,38 @@ ci: all
 # -----------------------------------------------------------------------------
 
 fmt:
-	@for crate in $(CRATES); do \
-		$(MAKE) -C $$crate fmt || exit 1; \
-	done
-	make -C distributions/rticx-cortex-m fmt
-	make -C distributions/rticx-rp2040 fmt
+	cargo fmt --all
 	make -C distributions/rticx-riscv fmt
+	make -C distributions/rticx-rp2040 fmt
 
 fmt-check:
-	@for crate in $(CRATES); do \
-		$(MAKE) -C $$crate fmt-check || exit 1; \
-	done
+	cargo fmt --all --check
 
 # -----------------------------------------------------------------------------
-# Clippy (warnings treated as errors via RUSTFLAGS in each crate Makefile)
+# Clippy (warnings treated as errors via RUSTFLAGS)
 # -----------------------------------------------------------------------------
 
 clippy:
-	@for crate in $(CRATES); do \
-		$(MAKE) -C $$crate clippy || exit 1; \
-	done
+	RUSTFLAGS="-Dwarnings" cargo clippy --workspace $(WS_EXCLUDES) --all-targets --all-features
+	make -C distributions/rticx-cortex-m clippy
 
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
 
 test:
-	@for crate in $(CRATES); do \
-		$(MAKE) -C $$crate test || exit 1; \
-	done
+	cargo test --workspace $(WS_EXCLUDES) --exclude rticx-auto-assign
+	cargo test -p rticx-auto-assign -- --test-threads=1
+
+# -----------------------------------------------------------------------------
+# Distributions (riscv & rp2040 are standalone crates, not workspace members;
+# cortex-m is a member but its host build is impossible, hence per-dir cmds)
+# -----------------------------------------------------------------------------
+
+distros:
+	make -C distributions/rticx-cortex-m clippy fmt-check
+	make -C distributions/rticx-riscv clippy fmt-check
+	make -C distributions/rticx-rp2040 clippy fmt-check examples # build examples because we don't have qemu for rp2040
 
 # -----------------------------------------------------------------------------
 # QEMU playground (rticx-cortex-m + rticx-riscv)
@@ -70,7 +70,7 @@ test:
 #
 # Not part of `all`/`ci` so a missing QEMU install doesn't break the
 # host-only check/test/clippy jobs.
-qemu: qemu-armv7m qemu-armv6m qemu-slic qemu-espc3 qemu-espc3
+qemu: qemu-armv7m qemu-armv6m qemu-slic qemu-espc3
 
 qemu-armv7m:
 	@$(MAKE) -C distributions/rticx-cortex-m qemu-armv7m
@@ -82,9 +82,4 @@ qemu-slic:
 	@$(MAKE) -C distributions/rticx-riscv/examples/slic-examples
 
 qemu-espc3:
-	make -C distributions/rticx-riscv/examples/esp32c3-examples
-
-distros: 
-	make -C distributions/rticx-cortex-m clippy fmt-check
-	make -C distributions/rticx-riscv clippy fmt-check
-	make -C distributions/rticx-rp2040 clippy fmt-check examples # build examples because we don't have qemu for rp2040
+	@$(MAKE) -C distributions/rticx-riscv/examples/esp32c3-examples all

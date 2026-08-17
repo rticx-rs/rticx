@@ -1,17 +1,22 @@
 [package]
 name = "rticx-deadline-pass"
-version = "0.1.0"
-edition = "2024"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Converts `deadline = D` task arguments into priorities (reference pass, unpublished)"
+keywords = ["rtic", "rticx", "deadline", "embedded", "concurrency"]
+categories = ["no-std", "embedded"]
+publish = false
 
 [dependencies]
 heck = { version = "0.5.0" }
-proc-macro2 = { version = "1.0.79" }
-quote = { version = "1.0.35" }
-syn = { version = "2.0.53", features = ["extra-traits", "full"] }
-rticx-core = { path = "../../rticx-core" }
-# rticx-spsc = { path = "../../rticx-spsc" }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+rticx-core = { workspace = true }
 
 [dev-dependencies]
 proc-macro2 = "1.0"

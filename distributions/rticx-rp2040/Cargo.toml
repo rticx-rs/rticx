@@ -36,3 +36,8 @@ async = [
     "rticx-async/atomic-critical-section",
     "rp2040-hal/critical-section-impl",    # use a critical section implementation that is multicore safe. This is necessary for the atomics used by rticx-async to work correctly
 ]
+
+# Self-contained workspace: intentionally not part of the root workspace.
+# The distro moves to its own repository soon; this structure mirrors that.
+[workspace]
+members = ["rticx-rp2040-macro", "example-apps"]

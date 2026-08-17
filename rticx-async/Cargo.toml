@@ -1,11 +1,12 @@
 [package]
 name = "rticx-async"
-version = "0.2.0"
-edition = "2024"
-authors = ["Zakaria Madaoui"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Async runtime primitives for RTICX: channels, executor slots, and waker infrastructure"
-license = "MIT"
-repository = "https://github.com/rticx-rs/rticx"
 keywords = ["rtic", "rticx", "async", "embedded", "concurrency"]
 categories = ["no-std", "embedded", "asynchronous"]
 

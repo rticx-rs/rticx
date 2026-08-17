@@ -11,8 +11,8 @@ fmt-check:
 	cargo fmt --all --check
 
 clippy:
-	cargo clippy --target thumbv7m-none-eabi
-	cargo clippy --target thumbv6m-none-eabi --features armv6m
+	RUSTFLAGS="-Dwarnings" cargo clippy --target thumbv7m-none-eabi
+	RUSTFLAGS="-Dwarnings" cargo clippy --target thumbv6m-none-eabi --features armv6m
 
 qemu: qemu-armv7m qemu-armv6m
 

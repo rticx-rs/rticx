@@ -1,23 +1,23 @@
 [package]
 name = "rticx-sw-pass"
-version = "0.2.0"
-edition = "2024"
-authors = ["Zakaria Madaoui"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Software tasks compilation pass for the RTICX framework: dispatchers, message queues, spawn, spawn_from"
-license = "MIT"
-repository = "https://github.com/rticx-rs/rticx"
-homepage = "https://github.com/rticx-rs/rticx/wiki"
 keywords = ["rtic", "rticx", "software-tasks", "embedded", "concurrency"]
 categories = ["no-std", "embedded"]
 readme = "README.md"
 
 [dependencies]
 heck = { version = "0.5.0" }
-proc-macro2 = { version = "1.0.79" }
-quote = { version = "1.0.35" }
-syn = { version = "2.0.53", features = ["extra-traits", "full"] }
-rticx-core = { version = "0.2.0", path = "../../rticx-core" }
-rticx-spsc = { version = "0.2.0", path = "../../rticx-spsc" }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+rticx-core = { workspace = true }
+rticx-spsc = { workspace = true }
 
 [dev-dependencies]
 proc-macro2 = "1.0"

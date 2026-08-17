@@ -90,3 +90,9 @@ esp32c6 = [
     "dep:critical-section",
     "rticx-riscv-macro/esp32c6",
 ]
+
+
+# Self-contained workspace: intentionally not part of the root workspace.
+# The distro moves to its own repository soon; this structure mirrors that.
+[workspace]
+members = ["rticx-macro", "examples/slic-examples", "examples/esp32c3-examples"]
