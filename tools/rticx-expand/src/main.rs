@@ -1,4 +1,4 @@
-//! `cargo rticx-expand` — expands RTICX applications into plain Rust for GDB
+//! `cargo rticx-expand`: expands RTICX applications into plain Rust for GDB
 //! step-debugging, code inspection, and security vetting.
 
 use std::path::PathBuf;
@@ -75,7 +75,7 @@ struct ExpandArgs {
 
     /// Directory where the module state is snapshotted after every compilation
     /// pass and after the core pass (`00_original.rs`, `01_<Pass>.rs`, …,
-    /// `NN_core.rs`) — diff consecutive files to see what each stage changed.
+    /// `NN_core.rs`): diff consecutive files to see what each stage changed.
     #[arg(long, value_name = "DIR")]
     expand_passes: Option<PathBuf>,
 

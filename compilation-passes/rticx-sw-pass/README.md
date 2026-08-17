@@ -24,8 +24,8 @@ mod app {
 
 ### `#[app]` arguments consumed by this pass
 
-- `dispatchers = [...]` — single-core: flat list of dispatcher interrupts.
-- `dispatchers = [[...], [...]]` — multicore: one list per core, in core order.
+- `dispatchers = [...]`: single-core: flat list of dispatcher interrupts.
+- `dispatchers = [[...], [...]]`: multicore: one list per core, in core order.
 
 ### `#[sw_task(...)]` arguments
 
@@ -42,7 +42,7 @@ mod app {
 Each distinct task priority level on a core consumes one dispatcher, so the
 number of dispatchers per core must be at least the number of distinct
 priorities. Dispatchers are assigned deterministically: priority groups are
-sorted ascending and the dispatchers are assigned in declaration order — the
+sorted ascending and the dispatchers are assigned in declaration order: the
 first declared dispatcher handles the lowest priority group.
 
 ## License

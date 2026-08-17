@@ -10,7 +10,7 @@
 //! A priority-3 `Spawner` task spawns `Worker` (priority 2, `capacity = 4`)
 //! four times back-to-back. Because the priority-2 dispatcher cannot preempt
 //! the priority-3 dispatcher, all four spawns are buffered before the first
-//! `Worker` future is even installed — with a default queue (`capacity = 1`)
+//! `Worker` future is even installed; with a default queue (`capacity = 1`)
 //! only the first spawn would succeed. A fifth spawn must be rejected. Each
 //! `Worker` instance then runs for 200 ms before the next one is installed,
 //! and the buffered inputs must be processed in FIFO order.

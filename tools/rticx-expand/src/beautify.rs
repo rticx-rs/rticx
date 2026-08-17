@@ -4,7 +4,7 @@
 //! token rendering. This module applies two text-level transformations before
 //! `rustfmt` turns the result into readable code:
 //!
-//! 1. **Identifier shortening** — generated identifiers are prefixed with
+//! 1. **Identifier shortening**: generated identifiers are prefixed with
 //!    `__rticx...` and internal statics use long `__rticx_internal__` names.
 //!    They are shortened to `_...` while preserving uniqueness:
 //!    - `__rticx_internal__Worker__INPUTS` → `_Worker__INPUTS`
@@ -12,7 +12,7 @@
 //!    - `__rticx__internal__Core0` → `_Core0`
 //!    - `__rticx_interrupt_free` → `_interrupt_free`
 //!    - `__shared_resources` → `_shared_resources`
-//! 2. **Doc-attribute conversion** — `#[doc = "..."]` attributes generated as
+//! 2. **Doc-attribute conversion**: `#[doc = "..."]` attributes generated as
 //!    pseudo-comments become real `//` comments; `#[doc(hidden)]` markers are
 //!    dropped.
 //!

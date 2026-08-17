@@ -1,4 +1,4 @@
-//! `rticx-expand` — cargo subcommand that expands RTICX applications into
+//! `rticx-expand`: cargo subcommand that expands RTICX applications into
 //! plain Rust.
 //!
 //! See the wiki page "Debugging and Inspection" for the user-facing docs.

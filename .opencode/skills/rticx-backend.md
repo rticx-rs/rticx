@@ -11,7 +11,7 @@ the wiki at `wiki/`. The wiki contains procedural guides and architecture contex
 
 Inside `RticMacroBuilder::build_rtic_macro2`:
 
-1. Call `core.subscribe(info_bus.clone())` — the target backend receives the `InfoBus` before anyone else.
+1. Call `core.subscribe(info_bus.clone())`: the target backend receives the `InfoBus` before anyone else.
 2. For each **pre-core pass** in insertion order:
    1. Call `pass.subscribe(info_bus.clone())` (guaranteed before `run_pass`).
    2. Call `pass.run_pass(args, app_mod) -> syn::Result<(TokenStream2, ItemMod)>`; on error, emit a compile error mentioning `pass.pass_name()`.
@@ -92,7 +92,7 @@ Defined and fully documented in `compilation-passes/rticx-async-pass/src/lib.rs`
 
 **Conventions:**
 
-- `InfoBus` is `Clone` — every clone shares the same underlying `Arc`.
+- `InfoBus` is `Clone`: every clone shares the same underlying `Arc`.
 - Entry keys are namespace-prefixed: `crate_name::TypeName`. The core pass publishes `rticx_core::App` and `rticx_core::Analysis`; the software-tasks pass publishes `rticx_sw_pass::App` and `rticx_sw_pass::Analysis` (exported as constants `INFO_APP` / `INFO_ANALYSIS`).
 - Entries are **write-once**: a second `publish` to an existing key is an error.
 - Subscribe ordering: core backend first, then each pre-core pass in insertion order, **before** its `run_pass` is invoked.

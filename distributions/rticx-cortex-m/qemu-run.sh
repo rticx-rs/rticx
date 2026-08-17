@@ -27,7 +27,7 @@ fi
 
 echo ">>> building and running $APP examples under QEMU"
 # Run from the app dir so its `.cargo/config.toml` (target triple + QEMU runner)
-# is discovered by Cargo — `--manifest-path` alone would ignore it and fall back
+# is discovered by Cargo; `--manifest-path` alone would ignore it and fall back
 # to the host target. The armv6m build is selected purely by the target triple
 # (see `examples-apps/Cargo.toml`).
 cd ${APP_DIR}

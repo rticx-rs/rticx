@@ -57,7 +57,7 @@ imports, statics, and any code after the module) is preserved and the result sta
 ### 1. Debugging compile errors hidden in macro expansions
 
 When an RTICX application fails to compile, rustc reports the error inside the
-generated code, far away from the attributes that produced it — or, worse,
+generated code, far away from the attributes that produced it, or worse,
 only shows an error at the attribute site with an ambiguous message. Expand
 the application to see the real code and the real error location:
 
@@ -68,7 +68,7 @@ cargo rticx-expand --example hello_rtic --features swtasks > expanded.rs
 The expansion is written even when `cargo check` fails (for example because of
 an error in a task body), so you can inspect exactly what the pipeline
 produced. If the macro itself panics, no expansion can be produced and your
-sources are left untouched — the tool reports the cargo output in that case.
+sources are left untouched: the tool reports the cargo output in that case.
 
 ### 2. Step-debugging with GDB
 
@@ -87,7 +87,7 @@ when you are done.
 
 ### 3. Security and correctness vetting
 
-The expanded file shows *everything* the framework generates — entry point,
+The expanded file shows *everything* the framework generates: entry point,
 interrupt vectors, SRP ceilings and locks, dispatcher queues, resource
 proxies, and the exact code paths that run on the device. Nothing is hidden
 behind macro expansion, so the code can be audited line by line, diffed
@@ -95,8 +95,8 @@ against previous releases, or fed to static analysis tools.
 
 ## For distribution and pass maintainers
 
-Snapshot the module after **every** pipeline stage — each compilation pass and
-the core pass — into a directory of your choice:
+Snapshot the module after **every** pipeline stage (each compilation pass and
+the core pass) into a directory of your choice:
 
 ```bash
 cargo rticx-expand --example hello_rtic --features swtasks --expand-passes target/passes
@@ -111,7 +111,7 @@ target/passes/01_SoftwareTasks.rs   # after the software tasks pass
 target/passes/02_core.rs            # after the core pass (the final expansion)
 ```
 
-Diff consecutive snapshots to see exactly what each stage changed — this is
+Diff consecutive snapshots to see exactly what each stage changed: this is
 the fastest way to debug your own compilation passes or verify that a
 distribution expands the syntax you expect:
 

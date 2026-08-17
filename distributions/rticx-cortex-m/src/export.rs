@@ -38,7 +38,7 @@ where
 }
 
 // ============================================================================
-// BASEPRI locking (armv7-m and above) — default path
+// BASEPRI locking (armv7-m and above): default path
 // ============================================================================
 #[cfg(not(feature = "armv6m"))]
 pub use basepri::*;

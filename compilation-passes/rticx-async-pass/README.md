@@ -66,13 +66,13 @@ let _ = Pong::spawn_from(Self::current_core(), input); // cross-core (spawn_by)
 
 ---
 
-## Architecture — what the pass generates
+## Architecture: what the pass generates
 
 For each **`#[async_task]`** the pass emits:
 
 | Artifact | Description |
 |----------|-------------|
-| Rewritten `#[task]` attr | `#[task(priority, shared, core, task_trait = RticAsyncTask)]` — parsed by the core pass for init, resource proxies, and SRP analysis |
+| Rewritten `#[task]` attr | `#[task(priority, shared, core, task_trait = RticAsyncTask)]`: parsed by the core pass for init, resource proxies, and SRP analysis |
 | Wrapper `async fn __rticx_async_<Task>(&mut T, input)` | Type witness: calls `T::exec(task, input).await`; used by the compiler to infer the concrete future type `F` |
 | `static __<Task>__PTR: ExecSlotPtr` | Opaque, non-generic pointer to the typed `ExecSlot<F>` |
 | `fn __<Task>__wake()` | Waker: recovers the slot via `recover_slot(wrapper, &PTR)`, sets `pending`, pends the dispatcher |
@@ -90,7 +90,7 @@ pass generates a **wrapper async fn** whose return type IS known to the
 compiler:
 
 ```rust
-// Generated wrapper — serves ONLY as a type witness, never called directly
+// Generated wrapper: serves ONLY as a type witness, never called directly
 async fn __rticx_async_Ping(task: &mut Ping, input: ()) {
     <Ping as RticAsyncTask>::exec(task, input).await;
 }
@@ -108,7 +108,7 @@ slot.spawn(future);                                       // inline MaybeUninit<
 slot.poll(__ping_wake);                                   // monomorphized, no vtable
 ```
 
-The actual `ExecSlot<F>` lives as a local in `main()` — injected via the
+The actual `ExecSlot<F>` lives as a local in `main()`, injected via the
 `RticPass::main_injection` hook at `BeforeIdle`.  Since `main() -> !`, the
 local is never dropped:
 
@@ -123,7 +123,7 @@ fn main() -> ! {
 }
 ```
 
-**Zero heap, zero `extern crate alloc`, fully monomorphized — on stable Rust.**
+**Zero heap, zero `extern crate alloc`, fully monomorphized on stable Rust.**
 
 ### `ExecSlot<F>` struct
 
@@ -140,8 +140,8 @@ Methods: `new()`, `new_from_witness(fn)`, `try_allocate()`, `spawn(f)`,
 
 ### Dispatcher
 
-For each **(core, priority)** group the pass emits an **executor dispatcher**
-— a hardware task bound to a dispatcher IRQ:
+For each **(core, priority)** group the pass emits an **executor dispatcher**,
+a hardware task bound to a dispatcher IRQ:
 
 ```rust
 #[task(binds = TIM6, priority = 2, core = 0, init = generated)]
@@ -151,7 +151,7 @@ impl RticTask for Core0Priority2Dispatcher {
     fn exec(&mut self) {
         // 1. Install newly-spawned futures
         //    dequeue task ident → dequeue input → spawn(future) into ExecSlot<F>
-        // 2. Poll every slot once (when pending) — monomorphized, no dyn dispatch
+        // 2. Poll every slot once (when pending): monomorphized, no dyn dispatch
         // 3. On Poll::Ready: drop the future, free the slot (running ← false)
     }
 }
@@ -191,12 +191,12 @@ same core, cross pend when called from another core).
 
 Each priority level gets its own dispatcher interrupt, and each task's waker
 pends only its own dispatcher.  A high-priority dispatcher can starve lower
-ones — this is normal NVIC priority-preemptive behavior, identical to
+ones; this is normal NVIC priority-preemptive behavior, identical to
 hardware tasks in vanilla RTIC.
 
 Within the same priority: all tasks share one dispatcher.  The dispatcher
 polls all tasks in its group each invocation.  If TaskA's poll wakes TaskB
-(same prio), the dispatcher ISR is re-pended and re-enters after returning —
+(same prio), the dispatcher ISR is re-pended and re-enters after returning,
 effectively round-robin.
 
 ---
@@ -230,7 +230,7 @@ The async pass **does not change** SRP analysis:
 - The generated `shared()` proxy and its `lock(|r| …)` body use the same
   BASEPRI / source-masking backend hooks.
 - The future is polled inside the dispatcher ISR at the **task's hardware
-  priority** — ceiling elevation works identically to a sync task's `exec()`.
+  priority**: ceiling elevation works identically to a sync task's `exec()`.
 - The closure-based `lock` API makes it structurally impossible to hold a
   resource guard across an `.await` point.
 
@@ -261,21 +261,21 @@ Distribution proc-macro crates implement `AsyncPassBackend` and pass it to
 
 The pass inherits the sw-pass multicore model unchanged:
 
-- `#[async_task(core = C, spawn_by = S)]` — task lives on core `C`, spawnable from core `S`.
+- `#[async_task(core = C, spawn_by = S)]`: task lives on core `C`, spawnable from core `S`.
 - Each core gets its own dispatchers; cross-core and core-local task priorities must be disjoint (analysis rejects overlap).
 - Dispatcher assignment is deterministic: priority groups are sorted ascending and dispatchers are consumed in declaration order (the first declared dispatcher handles the lowest priority group).
 - `spawn_from(spawner_token, input)` sends the input to the target core's queue and triggers the cross-pend mechanism.
-- The future is always created **on the target core** by the target core's dispatcher — only the spawn input travels across cores.
+- The future is always created **on the target core** by the target core's dispatcher; only the spawn input travels across cores.
 
 ---
 
 ## Testing strategy
 
-- **Token-level tests** (in `tests/`) — parse, analysis, and codegen assertions
+- **Token-level tests** (in `tests/`): parse, analysis, and codegen assertions
   driven by `AsyncPass::run_pass` with a mock backend.  Fast, no hardware.
-- **`rticx-async` unit tests** — channel send/recv/try/full/drop, executor
+- **`rticx-async` unit tests**: channel send/recv/try/full/drop, executor
   slot poll/wake/completion cycles (host-side, requiring only `std`).
-- **QEMU end-to-end** — `async_ping_pong` example in `rticx-cortex-m` under
+- **QEMU end-to-end**: `async_ping_pong` example in `rticx-cortex-m` under
   `lm3s6965evb`; the example terminates with `debug::exit(EXIT_SUCCESS)` when
   the async tasks complete a handshake through the channel.
 
@@ -322,8 +322,8 @@ The reference `rticx-rp2040` distribution ships exactly this configuration.
 
 ## Limitations & future work
 
-- **No join handles** — `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.
-- **No cancellation** — an in-flight future cannot be cancelled; the slot must complete naturally.
+- **No join handles**: `spawn()` returns `Result<(), Input>`; a spawned task cannot be awaited from the spawner.
+- **No cancellation**: an in-flight future cannot be cancelled; the slot must complete naturally.
 - **Cross-core channel waking** requires the backend to implement `generate_wake_pend_fn` with a runtime core check; works automatically on single-core.
 
 ---

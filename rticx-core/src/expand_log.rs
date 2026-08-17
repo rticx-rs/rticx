@@ -10,11 +10,11 @@
 //!
 //! # Environment variables
 //!
-//! - `RTICX_EXPAND` — trigger. When unset, no expansion logging happens.
-//! - `RTICX_EXPAND_PATH` — optional directory override. Defaults to
+//! - `RTICX_EXPAND`: trigger. When unset, no expansion logging happens.
+//! - `RTICX_EXPAND_PATH`: optional directory override. Defaults to
 //!   `$CARGO_TARGET_DIR/rticx-expand`, falling back to
 //!   `$CARGO_MANIFEST_DIR/target/rticx-expand`.
-//! - `RTICX_EXPAND_PASS_DIR` — optional directory for ordered per-stage
+//! - `RTICX_EXPAND_PASS_DIR`: optional directory for ordered per-stage
 //!   snapshots of the module. One snapshot is written after every pipeline
 //!   stage (`00_original.rs`, `01_<PassName>.rs`, …, `NN_core.rs`) so that
 //!   consecutive files can be diffed to see exactly what each pass (and the

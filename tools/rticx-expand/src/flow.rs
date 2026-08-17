@@ -84,7 +84,7 @@ pub fn expand(opts: &ExpandOptions<'_>) -> Result<ExpandReport, String> {
     let status = run_check(&check_opts)?;
     if !status.success() {
         eprintln!(
-            "[rticx-expand] `cargo check` finished with errors — expanding as far as the pipeline reached."
+            "[rticx-expand] `cargo check` finished with errors; expanding as far as the pipeline reached."
         );
     }
 

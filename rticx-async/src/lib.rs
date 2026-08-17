@@ -10,10 +10,10 @@
 //! `set_pending()` may be called from a different core than the one that
 //! polls it. It therefore relies on two synchronization primitives:
 //!
-//! - **Atomics** via [`portable_atomic`] — the `ExecSlot` `running`/`pending`
-//!   flags and `ExecSlotPtr`.
-//! - **Critical sections** via [`critical_section`] — channel queues, wait
-//!   queues, waker registration, and the `make_channel!` one-shot guard.
+//! - **Atomics** via [`portable_atomic`] (the `ExecSlot` `running`/`pending`
+//!   flags and `ExecSlotPtr`).
+//! - **Critical sections** via [`critical_section`] (channel queues, wait
+//!   queues, waker registration, and the `make_channel!` one-shot guard).
 //!
 //! ## Targets without native atomics
 //!
