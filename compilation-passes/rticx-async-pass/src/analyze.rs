@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::parse::{App, SubApp};
-use proc_macro2::Span;
+use rticx_sw_pass::common::analyze::{
+    assign_dispatchers, check_disjoint_priorities, check_uniform_spawn_by,
+};
 
 #[derive(Clone)]
 pub struct Analysis {
@@ -76,37 +78,18 @@ impl SubAnalysis {
             ));
         }
 
-        Self::check_disjoint_priorities(&sw_tasks_pgroups, &mc_tasks_pgroups, sub_app.core)?;
-        Self::check_uniform_spawn_by(&mc_tasks_pgroups)?;
+        check_disjoint_priorities(&sw_tasks_pgroups, &mc_tasks_pgroups, sub_app.core)?;
+        check_uniform_spawn_by(&mc_tasks_pgroups)?;
 
         // now we can merge all priority groups together since we know they are disjoint and no overlap exists
         let mut tasks_priority_map = sw_tasks_pgroups;
         tasks_priority_map.extend(mc_tasks_pgroups);
 
-        // check if the number of dispatchers meets the number of sw task priority groups
-        let n_dispatchers = sub_app.dispatchers.len();
-        let n_priority_groups = tasks_priority_map.len();
-        if n_dispatchers < n_priority_groups {
-            return Err(syn::Error::new(
-                sub_app.dispatchers_span.unwrap_or_else(Span::call_site),
-                format!("Expected {n_priority_groups} dispatchers, but found {n_dispatchers}."),
-            ));
-        }
-
-        // map dispatchers to priorities: one dispatcher per priority group,
-        // assigned in declaration order.  BTreeMap iteration yields the
-        // priorities in ascending order, so the first dispatcher handles the
-        // lowest priority group.
-        let mut dispatchers = sub_app.dispatchers.iter();
-        let dispatcher_priority_map = tasks_priority_map
-            .keys()
-            .map(|&priority| {
-                let dispatcher = dispatchers
-                    .next()
-                    .expect("checked above: enough dispatchers for every priority group");
-                (priority, dispatcher.clone())
-            })
-            .collect();
+        let dispatcher_priority_map = assign_dispatchers(
+            &tasks_priority_map,
+            &sub_app.dispatchers,
+            sub_app.dispatchers_span,
+        )?;
 
         Ok(Self {
             core: sub_app.core,
@@ -114,49 +97,5 @@ impl SubAnalysis {
             dispatcher_priority_map,
             prio_0_tasks,
         })
-    }
-
-    /// Ensure that the multi-core tasks do not have overlapping priorities
-    /// with core-local software tasks.
-    fn check_disjoint_priorities(
-        sw_tasks: &BTreeMap<u16, Vec<(syn::Ident, u32, usize)>>,
-        mc_tasks: &BTreeMap<u16, Vec<(syn::Ident, u32, usize)>>,
-        core: u32,
-    ) -> syn::Result<()> {
-        for priority in mc_tasks.keys() {
-            if sw_tasks.contains_key(priority) {
-                let task = &mc_tasks[priority][0].0;
-                return Err(syn::Error::new(
-                    task.span(),
-                    format!(
-                        "The priority of some tasks with `spawn_by` argument in core {core} have overlapping priority with other core-local software tasks, which is forbidden."
-                    ),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Ensure that multi-core tasks in the same priority group are all
-    /// spawned by the same core.
-    fn check_uniform_spawn_by(
-        mc_tasks: &BTreeMap<u16, Vec<(syn::Ident, u32, usize)>>,
-    ) -> syn::Result<()> {
-        for priority_group in mc_tasks.values() {
-            let Some((task_1, spawn_by1, _)) = priority_group.first() else {
-                continue;
-            };
-            for (task_x, spawn_byx, _) in priority_group {
-                if spawn_by1 != spawn_byx {
-                    return Err(syn::Error::new(
-                        task_x.span(),
-                        format!(
-                            "{task_1} and {task_x} have the same priority but they are spawned by different cores which is forbidden."
-                        ),
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 }

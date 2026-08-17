@@ -56,8 +56,7 @@ fn is_exception(name: &Ident) -> bool {
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     // use the standard software pass provided by rticx-sw-pass crate
     let sw_pass = SoftwarePass::new(SwPassBackendImpl);
-
-    let async_pass = AsyncPass::new(AsyncPassBackendImpl);
+    let async_pass = AsyncPass::new(SwPassBackendImpl);
 
     #[allow(unused_mut)]
     let mut builder = RticMacroBuilder::new(Rp2040Rtic::new());
@@ -440,6 +439,11 @@ impl CorePassBackend for Rp2040Rtic {
     }
 }
 
+/// Backend shared by the software-tasks and async-tasks passes.
+///
+/// Implements both [`SwPassBackend`] and [`AsyncPassBackend`]; the async trait
+/// inherits the common methods (queue path, pend bodies, runtime core check)
+/// from the software-tasks trait, and only adds the async-specific pieces.
 struct SwPassBackendImpl;
 impl SwPassBackend for SwPassBackendImpl {
     /// Path to the SPSC queue type re-exported by this distribution.
@@ -484,40 +488,9 @@ impl SwPassBackend for SwPassBackendImpl {
     }
 }
 
-struct AsyncPassBackendImpl;
-impl AsyncPassBackend for AsyncPassBackendImpl {
-    fn queue_path(&self) -> Path {
-        parse_quote!(rticx_rp2040::export::Queue)
-    }
-
+impl AsyncPassBackend for SwPassBackendImpl {
     fn async_runtime_path(&self) -> Path {
         parse_quote!(rticx_rp2040::export::async_rt)
-    }
-
-    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
-        let body = parse_quote!({
-            rticx_rp2040::export::NVIC::pend(irq_nbr);
-        });
-        empty_body_fn.block = Box::new(body);
-        empty_body_fn
-    }
-
-    fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
-        let body = parse_quote!({
-            use rticx_rp2040::export::InterruptNumber;
-            rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number())
-        });
-        empty_body_fn.block = Box::new(body);
-        Some(empty_body_fn)
-    }
-
-    /// Read the numeric id of the core this code is currently executing on
-    /// (0 or 1 on the RP2040).  Injected into `spawn`/`cross_spawn` so that
-    /// forged compile-time core tokens are caught at runtime.
-    fn current_core_id(&self) -> Option<syn::Expr> {
-        Some(parse_quote!(unsafe {
-            (*rp2040_hal::pac::SIO::PTR).cpuid().read().bits() as u32
-        }))
     }
 
     fn generate_wake_pend_fn(&self, core: u32, mut empty_body_fn: ItemFn) -> ItemFn {

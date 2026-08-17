@@ -52,8 +52,8 @@ fn is_exception(name: &Ident) -> bool {
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let sw_pass = SoftwarePass::new(SwPassBackendImpl);
-    let async_pass = AsyncPass::new(AsyncPassBackendImpl);
 
+    let async_pass = AsyncPass::new(SwPassBackendImpl);
     #[allow(unused_mut)]
     let mut builder = RticMacroBuilder::new(CortexMRtic::new());
     if cfg!(feature = "swtasks") {
@@ -324,7 +324,8 @@ fn generate_source_mask_globals(app_args: &AppArgs, app_info: &SubApp) -> Option
     })
 }
 
-// =========================================== Software pass backend ===========================================
+// =========================================== Software/Async pass backend ===========================================
+/// Backend shared by the software-tasks and async-tasks passes.
 struct SwPassBackendImpl;
 
 impl SwPassBackend for SwPassBackendImpl {
@@ -350,28 +351,9 @@ impl SwPassBackend for SwPassBackendImpl {
     }
 }
 
-// =========================================== Async pass backend ===========================================
-struct AsyncPassBackendImpl;
-
-impl AsyncPassBackend for AsyncPassBackendImpl {
-    fn queue_path(&self) -> Path {
-        parse_quote!(rticx_cortex_m::export::Queue)
-    }
-
+impl AsyncPassBackend for SwPassBackendImpl {
     fn async_runtime_path(&self) -> Path {
         parse_quote!(rticx_cortex_m::export::async_rt)
-    }
-
-    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
-        let body = parse_quote!({
-            rticx_cortex_m::export::NVIC::pend(irq_nbr);
-        });
-        empty_body_fn.block = Box::new(body);
-        empty_body_fn
-    }
-
-    fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
-        None
     }
 
     fn generate_stack_overflow_check(&self, _core: u32) -> Option<TokenStream2> {

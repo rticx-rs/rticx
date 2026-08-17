@@ -1,8 +1,9 @@
+use crate::common::parse::{get_task_implementor, item_attrs, take_impl_for};
 use crate::parse::ast::{AppParameters, SoftwareTask, TaskParams, into_task_attr};
 use proc_macro2::{Ident, Span, TokenStream};
 use rticx_core::parse_utils::RticAttr;
 use std::collections::HashMap;
-use syn::{Attribute, Item, ItemImpl, ItemMod, Type, Visibility, spanned::Spanned};
+use syn::{Attribute, Item, ItemImpl, ItemMod, Visibility, spanned::Spanned};
 
 pub mod ast;
 
@@ -77,11 +78,11 @@ impl App {
             // The `impl RticSwTask for <struct>` is optional at this stage: it
             // may also live outside the `#[app]` module.  The core pass
             // generates static checks that the trait is implemented.
-            let task_impl = take_impl_for(&mut sw_task_impls, &task_struct.ident)?;
+            let task_impl = take_impl_for(&mut sw_task_impls, &task_struct.ident, SWT_TRAIT_TY)?;
 
             let mut attrs = RticAttr::parse_from_attr(&task_struct.attrs[attr_idx])?;
             let params = TaskParams::from_attr(&mut attrs)?;
-            let task_attr = into_task_attr(attrs);
+            let task_attr = into_task_attr(attrs, Ident::new(SWT_TRAIT_TY, Span::call_site()));
             // Consume the original `#[sw_task]` attribute: the reconstructed
             // `#[task(...)]` attribute replaces it in the generated code.
             task_struct.attrs.remove(attr_idx);
@@ -164,67 +165,9 @@ fn find_sw_task_attr(attrs: &[Attribute]) -> Option<usize> {
         .position(|attr| attr.path().is_ident("sw_task"))
 }
 
-/// Attributes attached to `item`, if the item kind carries attributes.
-fn item_attrs(item: &Item) -> Option<&[Attribute]> {
-    Some(match item {
-        Item::Const(item) => &item.attrs,
-        Item::Enum(item) => &item.attrs,
-        Item::ExternCrate(item) => &item.attrs,
-        Item::Fn(item) => &item.attrs,
-        Item::ForeignMod(item) => &item.attrs,
-        Item::Macro(item) => &item.attrs,
-        Item::Mod(item) => &item.attrs,
-        Item::Static(item) => &item.attrs,
-        Item::Struct(item) => &item.attrs,
-        Item::Trait(item) => &item.attrs,
-        Item::TraitAlias(item) => &item.attrs,
-        Item::Type(item) => &item.attrs,
-        Item::Union(item) => &item.attrs,
-        Item::Use(item) => &item.attrs,
-        _ => return None,
-    })
-}
-
 /// The implementor of an `impl <trait> for <type>` block whose trait name ends
 /// with `RticSwTask`.  The last path segment is matched so that qualified
 /// paths (e.g. `crate::RticSwTask`) are recognized too.
 fn get_sw_task_implementor(impl_item: &ItemImpl) -> Option<&Ident> {
-    let (_, path, _) = impl_item.trait_.as_ref()?;
-    if !path
-        .segments
-        .last()?
-        .ident
-        .to_string()
-        .ends_with(SWT_TRAIT_TY)
-    {
-        return None;
-    }
-    if let Type::Path(struct_type) = impl_item.self_ty.as_ref() {
-        return Some(&struct_type.path.segments.last()?.ident);
-    }
-    None
-}
-
-/// Removes the `impl RticSwTask for <ident>` block from `impls`, erroring if
-/// the task has more than one such implementation.
-fn take_impl_for(
-    impls: &mut Vec<(Ident, ItemImpl)>,
-    ident: &Ident,
-) -> syn::Result<Option<ItemImpl>> {
-    let mut found = None;
-    let mut i = 0;
-    while i < impls.len() {
-        if &impls[i].0 == ident {
-            let (_, impl_) = impls.remove(i);
-            if found.replace(impl_).is_some() {
-                return Err(syn::Error::new(
-                    ident.span(),
-                    format!("Multiple `RticSwTask` implementations found for task `{ident}`."),
-                ));
-            }
-        } else {
-            i += 1;
-        }
-    }
-    Ok(found)
+    get_task_implementor(impl_item, SWT_TRAIT_TY)
 }

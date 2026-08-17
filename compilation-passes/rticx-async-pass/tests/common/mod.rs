@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::ToTokens;
 use quote::quote;
 use rticx_async_pass::AsyncPassBackend;
+use rticx_sw_pass::SwPassBackend;
 use syn::{ItemFn, parse_quote};
 
 pub fn single_core_args() -> TokenStream {
@@ -110,13 +111,9 @@ pub struct MockAsyncBackend {
     pub core_check: bool,
 }
 
-impl AsyncPassBackend for MockAsyncBackend {
+impl SwPassBackend for MockAsyncBackend {
     fn queue_path(&self) -> syn::Path {
         parse_quote!(rticx::export::Queue)
-    }
-
-    fn async_runtime_path(&self) -> syn::Path {
-        parse_quote!(rticx_async)
     }
 
     fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
@@ -144,6 +141,12 @@ impl AsyncPassBackend for MockAsyncBackend {
         } else {
             None
         }
+    }
+}
+
+impl AsyncPassBackend for MockAsyncBackend {
+    fn async_runtime_path(&self) -> syn::Path {
+        parse_quote!(rticx_async)
     }
 }
 

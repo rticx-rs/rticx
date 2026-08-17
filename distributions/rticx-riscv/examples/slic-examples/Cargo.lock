@@ -438,6 +438,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rticx-core",
+ "rticx-sw-pass",
  "syn",
 ]
 

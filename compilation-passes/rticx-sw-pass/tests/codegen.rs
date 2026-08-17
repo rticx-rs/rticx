@@ -99,6 +99,7 @@ fn codegen_expands_single_core_sw_app() {
             static mut __rticx_internal__Foo__INPUTS : rticx :: export :: Queue < < Foo as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
             impl Foo {
                 pub fn spawn (input : < Foo as RticSwTask > :: SpawnInput) -> Result < () , < Foo as RticSwTask > :: SpawnInput > {
+                    #[allow(static_mut_refs)]
                     let mut inputs_producer = unsafe { __rticx_internal__Foo__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Foo as RticSwTask > :: SpawnInput > {
@@ -292,6 +293,7 @@ fn codegen_expands_multi_core_sw_app() {
             impl Task0 {
                 pub fn spawn (input : < Task0 as RticSwTask > :: SpawnInput) -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
                     if mock_current_core_id () != 0 { return Err (input) ; }
+                    #[allow(static_mut_refs)]
                     let mut inputs_producer = unsafe { __rticx_internal__Task0__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
@@ -373,6 +375,7 @@ fn codegen_expands_multi_core_sw_app() {
                 /// `Err(Some(input))` is also returned when the caller is not executing on the `spawn_by` core. (in Multicore)
                 pub fn cross_spawn (input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , Option< < Cross as RticSwTask > :: SpawnInput > > {
                     if mock_current_core_id () != 0 { return Err (Some (input)) ; }
+                    #[allow(static_mut_refs)]
                     let mut inputs_producer = unsafe { __rticx_internal__Cross__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core1Prio3Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () ,Option< < Cross as RticSwTask > :: SpawnInput> > {

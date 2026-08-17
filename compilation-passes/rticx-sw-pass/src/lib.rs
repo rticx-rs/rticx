@@ -1,5 +1,7 @@
 pub mod analyze;
 mod codegen;
+/// Shared infrastructure for the software-task passes.  
+pub mod common;
 pub mod parse;
 
 use crate::codegen::CodeGen;
@@ -110,7 +112,7 @@ pub trait SwPassBackend {
 
     /// Body of the core-local interrupt-pending function.
     ///
-    /// The software pass generates an empty function for each core and
+    /// The pass generates an empty function for each core and
     /// passes it to this method.  The implementation must fill the body
     /// with code that triggers (pends) the dispatcher interrupt on the
     /// local core.  The resulting function is called by `spawn()` at
@@ -134,7 +136,7 @@ pub trait SwPassBackend {
 
     /// Body of the cross-core interrupt-pending function.
     ///
-    /// The software pass generates an empty function for each target core
+    /// The pass generates an empty function for each target core
     /// that has cross-core spawners and passes it to this method.  The
     /// implementation must fill the body with code that signals the target
     /// core to run a software task that was spawned remotely.  The resulting

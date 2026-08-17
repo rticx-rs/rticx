@@ -17,6 +17,7 @@ proc-macro2 = { version = "1.0.79" }
 quote = { version = "1.0.35" }
 syn = { version = "2.0.53", features = ["extra-traits", "full"] }
 rticx-core = { version = "0.2.0", path = "../../rticx-core" }
+rticx-sw-pass = { version = "0.2.0", path = "../rticx-sw-pass" }
 
 [dev-dependencies]
 proc-macro2 = "1.0"

@@ -9,6 +9,7 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use rticx_core::parse_utils::RticAttr;
 use rticx_core::{InfoBus, MainInjectionPoint, RticPass};
+pub use rticx_sw_pass::SwPassBackend;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use syn::ItemMod;
@@ -115,110 +116,13 @@ impl RticPass for AsyncPass {
     }
 }
 
-pub trait AsyncPassBackend {
-    /// Path to the SPSC queue type used for ready queues and task inputs.
-    ///
-    /// The generated code uses this path as `#queue_path<T, N>` (type
-    /// position) and `#queue_path::new()` (expression position).  The
-    /// concrete type must support the same API as `rticx_spsc::Queue`:
-    /// a const `new()` constructor, `split()` into producer/consumer halves,
-    /// `enqueue` / `dequeue`, and `_unchecked` variants.
-    ///
-    /// Typical implementation for a distribution:
-    /// ```ignore
-    /// fn queue_path(&self) -> syn::Path {
-    ///     parse_quote!(rticx_rp2040::export::Queue)
-    /// }
-    /// ```
-    fn queue_path(&self) -> syn::Path;
-
-    /// Body of the core-local interrupt-pending function.
-    ///
-    /// The async pass generates an empty function for each core and
-    /// passes it to this method.  The implementation must fill the body
-    /// with code that triggers (pends) the dispatcher interrupt on the
-    /// local core. The resulting function is called by `spawn()` at
-    /// runtime.
-    ///
-    /// # Contract
-    /// * The function is generated per core; `core` is the core index.
-    /// * The generated function takes a single argument `irq_nbr` whose
-    ///   concrete type is the interrupt type for that core (see
-    ///   [`custom_interrupt_path`](Self::custom_interrupt_path)).
-    /// * Write to the pending bit of the corresponding NVIC (or equivalent)
-    ///   register to trigger the interrupt.
-    /// * Do NOT change the function signature.
-    ///
-    /// # Porting
-    ///
-    /// * **Cortex-M**: write to NVIC ISPR register.
-    /// * **RISC-V CLIC**: set the pending bit via `Clic::ip(irq).pend()`.
-    /// * **RISC-V mintthresh**: use a software interrupt or ECLIC API.
-    fn generate_local_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> syn::ItemFn;
-
-    /// Body of the cross-core interrupt-pending function.
-    ///
-    /// The software pass generates an empty function for each target core
-    /// that has cross-core spawners and passes it to this method.  The
-    /// implementation must fill the body with code that signals the target
-    /// core to run an async software task that was spawned remotely.  The resulting
-    /// function is called by `cross_spawn()` at runtime.
-    ///
-    /// The cross-pend function returns a Result<(),()>, Ok(()) if cross-core interrupt
-    /// was successfully called, or Err(()) if pending failed for any reason (E.g FIFO full)
-    /// ```ignore
-    /// pub fn __rticx_internal_cross_pend(irq_nbr: #interrupt_type_path) -> Result<(), ()> { /* you code here */}
-    /// ```
-    ///
-    /// # Contract
-    /// * `core` is the *target* core index (the core that owns the task).
-    /// * The generated function takes a single argument `irq_nbr` whose
-    ///   concrete type is the interrupt type for the target core.
-    /// * Return `None` if your target is single-core (no cross-core
-    ///   communication is needed).  `cross_spawn` will not be available
-    ///   to user code.
-    /// * Do NOT change the function signature.
-    ///
-    /// # Porting
-    ///
-    /// * **Single-core targets**: return `None`.
-    /// * **RP2040**: send the IRQ number through the SIO FIFO.
-    /// * **Generic multicore**: use an IPI (inter-processor interrupt)
-    ///   mechanism (e.g. mailbox, shared-memory + doorbell).
-    fn generate_cross_pend_fn(&self, core: u32, empty_body_fn: syn::ItemFn) -> Option<syn::ItemFn>;
-
-    /// Custom path to the interrupt type used for dispatchers on `core`.
-    ///
-    /// The returned path must name a **type** whose enum variants or
-    /// associated constants match the dispatcher names listed in
-    /// `dispatchers = [...]`.  Generated code uses it both for the pend
-    /// function signature (`fn(irq_nbr: #ty)`) and at spawn call sites
-    /// (`#ty::IRQ0`).
-    ///
-    /// Return `None` to use the default path `pac[core]::Interrupt`.
-    fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
-        None
-    }
-
-    /// Expression yielding the numeric id (`u32`) of the core this code is
-    /// currently executing on.
-    ///
-    /// The generated `spawn`/`cross_spawn` functions start with a runtime
-    /// check: `if <expression> != <expected core> { return Err(input) }`.  The
-    /// expected core is the task's own `core` for `spawn`, and its `spawn_by`
-    /// for `cross_spawn`.
-    ///
-    /// The expression must be a safe, side-effect-free read of the actual
-    /// hardware state (e.g. the `cpuid` register on the RP2040).  Return
-    /// `None` for single-core targets (where cross-core tasks cannot exist).
-    fn current_core_id(&self) -> Option<syn::Expr> {
-        None
-    }
-
-    /// Subscribe to info_bus
-    /// This method is guaranteed to be called before any other methods in this trait.
-    fn subscribe(&mut self, _info_bus: InfoBus) {}
-
+/// Backend interface for the async-tasks compilation pass.
+///
+/// Extends [`SwPassBackend`]: everything the software-tasks pass needs from a
+/// distribution backend (queue path, pend-function bodies, custom interrupt
+/// path, runtime core-id check) is inherited, so a single backend type can
+/// serve both passes. This trait only adds the async-specific pieces.
+pub trait AsyncPassBackend: SwPassBackend {
     /// Body of the interrupt-pending function used to wake an executor's dispatcher.
     /// For single core targets, keep the default implementation.
     /// For multicore, the`generate_wake_pend_fn` backend should implement a runtime core check to decide if this is a local or cross-core pend

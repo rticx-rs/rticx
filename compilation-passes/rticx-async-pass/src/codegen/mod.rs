@@ -6,21 +6,13 @@ use crate::parse::ast::AsyncTask;
 use crate::parse::{ASYNC_TASK_TRAIT_TY, App};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
+use rticx_sw_pass::common::codegen::{
+    SpawnApiParams, cross_pend_fn_ident, generate_cross_pend_fns, generate_local_pend_fns,
+    generate_spawn_api, get_interrupt_path, local_pend_fn_ident,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use syn::{ItemMod, LitInt, Path, parse_quote};
-
-fn local_pend_fn_ident(core: u32, num_cores: usize) -> Ident {
-    if num_cores == 1 {
-        format_ident!("{SC_PEND_FN_NAME}")
-    } else {
-        format_ident!("{SC_PEND_FN_NAME}_core{core}")
-    }
-}
-
-fn cross_pend_fn_ident(core: u32) -> Ident {
-    format_ident!("{MC_PEND_FN_NAME}_core{core}")
-}
 
 fn wake_pend_fn_ident(core: u32, num_cores: usize) -> Ident {
     if num_cores == 1 {
@@ -120,52 +112,27 @@ impl<'a> CodeGen<'a> {
     }
 
     fn get_interrupt_path(&self, core: u32) -> Path {
-        let pac = &self.app.app_params.pacs[core as usize];
-        self.backend
-            .custom_interrupt_path(core)
-            .unwrap_or_else(|| parse_quote!(#pac::Interrupt))
+        get_interrupt_path(self.backend, &self.app.app_params.pacs, core)
     }
 
     fn get_local_pend_fns(&self) -> TokenStream {
         let num_cores = self.app.sub_apps.len();
-        let fns: Vec<TokenStream> = self
+        let cores = self
             .app
             .sub_apps
             .iter()
-            .map(|sub_app| {
-                let core = sub_app.core;
-                let interrupt_ty = self.get_interrupt_path(core);
-                let fn_ident = local_pend_fn_ident(core, num_cores);
-                let empty_body_fn = parse_quote! {
-                    #[doc(hidden)]
-                    #[inline]
-                    pub fn #fn_ident(irq_nbr: #interrupt_ty) {}
-                };
-                let fn_def = self.backend.generate_local_pend_fn(core, empty_body_fn);
-                quote!(#fn_def)
-            })
-            .collect();
-        quote!(#(#fns)*)
+            .map(|sub_app| (sub_app.core, self.get_interrupt_path(sub_app.core)));
+        generate_local_pend_fns(self.backend, cores, num_cores)
     }
 
     fn get_cross_pend_fns(&self) -> TokenStream {
-        let fns = self
+        let cores = self
             .app
             .sub_apps
             .iter()
             .filter(|sub_app| !sub_app.mc_sw_tasks.is_empty())
-            .filter_map(|sub_app| {
-                let core = sub_app.core;
-                let interrupt_ty = self.get_interrupt_path(core);
-                let fn_ident = cross_pend_fn_ident(core);
-                let empty_body_fn = parse_quote! {
-                    #[doc(hidden)]
-                    #[inline]
-                    pub fn #fn_ident(irq_nbr: #interrupt_ty) -> Result<(), ()> {}
-                };
-                self.backend.generate_cross_pend_fn(core, empty_body_fn)
-            });
-        quote!(#(#fns)*)
+            .map(|sub_app| (sub_app.core, self.get_interrupt_path(sub_app.core)));
+        generate_cross_pend_fns(self.backend, cores)
     }
 
     fn get_wake_pend_fns(&self) -> TokenStream {
@@ -663,9 +630,7 @@ fn generate_idle_executor(
     }
 }
 
-pub const SC_PEND_FN_NAME: &str = "__rticx_async_local_irq_pend";
-pub const MC_PEND_FN_NAME: &str = "__rticx_async_cross_irq_pend";
-pub const WAKE_PEND_FN_NAME: &str = "__rticx_async_wake_irq_pend";
+pub const WAKE_PEND_FN_NAME: &str = "__rticx_wake_irq_pend";
 
 impl AsyncTask {
     fn generate_spawn_api_prio_0(
@@ -674,14 +639,11 @@ impl AsyncTask {
         backend: &dyn AsyncPassBackend,
     ) -> TokenStream {
         let task_name = self.name();
-        let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
         let inputs_ty = quote!(<#task_name as #task_trait_name>::SpawnInput);
         let prio_ty = utils::priority_ty_ident(0, self.params.core);
         let ready_queue_name = utils::priority_queue_ident(&prio_ty);
 
-        let critical_section_fn =
-            format_ident!("{}", rticx_core::rticx_functions::INTERRUPT_FREE_FN);
         // ring buffer holds one slot more than the queue capacity
         let queue_buffer_size = self.params.capacity + 1;
 
@@ -695,28 +657,21 @@ impl AsyncTask {
             }
         });
 
-        quote! {
-            static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
-
-            impl #task_name {
-                pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
-                    #core_check
-                    #[allow(static_mut_refs)]
-                    let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
-                    let mut ready_producer = unsafe { #ready_queue_name.split().0 };
-                    #critical_section_fn(|| -> Result<(), #inputs_ty> {
-                        if unsafe { !__rticx_async_system_initialized } {
-                            return Err(input);
-                        }
-                        inputs_producer.enqueue(input)?;
-                        unsafe { ready_producer.enqueue_unchecked(#prio_ty::#task_name) };
-                        // The priority-0 idle executor busy-polls its queues,
-                        // so no interrupt needs to be pended here.
-                        Ok(())
-                    })
-                }
-            }
-        }
+        let system_initialized_flag = format_ident!("__rticx_async_system_initialized");
+        generate_spawn_api(&SpawnApiParams {
+            task_name,
+            inputs_ty: &inputs_ty,
+            prio_ty: &prio_ty,
+            ready_queue_name: &ready_queue_name,
+            queue_path,
+            queue_buffer_size,
+            system_initialized_flag: &system_initialized_flag,
+            cross: false,
+            // The priority-0 idle executor busy-polls its queues, so no
+            // interrupt needs to be pended here.
+            pend_stmt: None,
+            core_check,
+        })
     }
 
     fn generate_spawn_api(
@@ -728,91 +683,61 @@ impl AsyncTask {
         queue_path: &Path,
     ) -> TokenStream {
         let task_name = self.name();
-        let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
         let inputs_ty = quote!(<#task_name as #task_trait_name>::SpawnInput);
         let prio_ty = utils::priority_ty_ident(self.params.priority, self.params.core);
         let ready_queue_name = utils::priority_queue_ident(&prio_ty);
 
-        let critical_section_fn =
-            format_ident!("{}", rticx_core::rticx_functions::INTERRUPT_FREE_FN);
         let interrupt_ty = backend
             .custom_interrupt_path(self.params.core)
             .unwrap_or(parse_quote!(#peripheral_crate::Interrupt));
         // ring buffer holds one slot more than the queue capacity
         let queue_buffer_size = self.params.capacity + 1;
 
-        if self.params.core == self.params.spawn_by {
-            let pend_fn = local_pend_fn_ident(self.params.core, num_cores);
-            // Optional runtime check that the caller runs on this task's core.
-            let core_lit = LitInt::new(&self.params.core.to_string(), Span::call_site());
-            let core_check = backend.current_core_id().map(|current_core_id| {
-                quote! {
-                    if #current_core_id != #core_lit {
-                        return Err(input);
-                    }
-                }
-            });
-            quote! {
-                static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
-
-                impl #task_name {
-                    pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
-                        #core_check
-                        #[allow(static_mut_refs)]
-                        let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
-                        let mut ready_producer = unsafe { #ready_queue_name.split().0 };
-                        #critical_section_fn(|| -> Result<(), #inputs_ty> {
-                            if unsafe { !__rticx_async_system_initialized } {
-                                return Err(input);
-                            }
-                            inputs_producer.enqueue(input)?;
-                            unsafe { ready_producer.enqueue_unchecked(#prio_ty::#task_name) };
-                            #pend_fn(#interrupt_ty::#dispatcher_irq_name);
-                            Ok(())
-                        })
-                    }
-                }
-            }
-        } else {
+        let cross = self.params.core != self.params.spawn_by;
+        let pend_stmt = if cross {
             let pend_fn = cross_pend_fn_ident(self.params.core);
+            quote!(#pend_fn(#interrupt_ty::#dispatcher_irq_name).map_err(|_| None))
+        } else {
+            let pend_fn = local_pend_fn_ident(self.params.core, num_cores);
+            quote!(#pend_fn(#interrupt_ty::#dispatcher_irq_name);)
+        };
+        let pend_stmt = Some(pend_stmt);
+
+        let core_check = if cross {
             // Multicore-only Runtime check that the caller runs on this task's `spawn_by` core.
             let spawn_by_lit = LitInt::new(&self.params.spawn_by.to_string(), Span::call_site());
-            let core_check = backend.current_core_id().map(|current_core_id| {
+            backend.current_core_id().map(|current_core_id| {
                 quote! {
                     if #current_core_id != #spawn_by_lit {
                         return Err(Some(input));
                     }
                 }
-            });
-            quote! {
-                static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
-
-                impl #task_name {
-                    /// Cross-core spawn: enqueue `input` to this task, which executes on
-                    /// `core`, from the core specified using `spawn_by`.
-                    /// ## Returns:
-                    /// - Ok(()), the inputs are enqueued successfully and the task's dispatcher interrupt is successfully pended
-                    /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
-                    /// Either repend it manually or try at a later time.
-                    /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
-                    /// `Err(Some(input))` is also returned when the caller is not executing on the `spawn_by` core. (in Multicore)
-                    pub fn cross_spawn(input: #inputs_ty) -> Result<(), Option<#inputs_ty>> {
-                        #core_check
-                        #[allow(static_mut_refs)]
-                        let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
-                        let mut ready_producer = unsafe { #ready_queue_name.split().0 };
-                        #critical_section_fn(|| -> Result<(), Option<#inputs_ty>> {
-                            if unsafe { !__rticx_async_system_initialized } {
-                                return Err(Some(input));
-                            }
-                            inputs_producer.enqueue(input).map_err(Option::Some)?;
-                            unsafe { ready_producer.enqueue_unchecked(#prio_ty::#task_name) };
-                            #pend_fn(#interrupt_ty::#dispatcher_irq_name).map_err(|_| None)
-                        })
+            })
+        } else {
+            // Optional runtime check that the caller runs on this task's core.
+            let core_lit = LitInt::new(&self.params.core.to_string(), Span::call_site());
+            backend.current_core_id().map(|current_core_id| {
+                quote! {
+                    if #current_core_id != #core_lit {
+                        return Err(input);
                     }
                 }
-            }
-        }
+            })
+        };
+
+        let system_initialized_flag = format_ident!("__rticx_async_system_initialized");
+        generate_spawn_api(&SpawnApiParams {
+            task_name,
+            inputs_ty: &inputs_ty,
+            prio_ty: &prio_ty,
+            ready_queue_name: &ready_queue_name,
+            queue_path,
+            queue_buffer_size,
+            system_initialized_flag: &system_initialized_flag,
+            cross,
+            pend_stmt,
+            core_check,
+        })
     }
 }

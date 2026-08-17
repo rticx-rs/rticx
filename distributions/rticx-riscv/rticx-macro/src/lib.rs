@@ -26,8 +26,8 @@ compile_error!(
 #[doc = include_str!("../README_lib.md")]
 #[proc_macro_attribute]
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
-    let sw_pass = SoftwarePass::new(SwBackendImpl);
-    let async_pass = AsyncPass::new(AsyncPassBackendImpl);
+    let sw_pass = SoftwarePass::new(SwPassBackendImpl);
+    let async_pass = AsyncPass::new(SwPassBackendImpl);
 
     let mut builder = RticMacroBuilder::new(BackendImpl::default());
     if cfg!(feature = "swtasks") {
@@ -325,12 +325,13 @@ impl CorePassBackend for BackendImpl {
 }
 
 // ============================================================================
-// Software-tasks pass backend
+// Software/Async-tasks pass backend
 // ============================================================================
 
-struct SwBackendImpl;
+/// Backend shared by the software-tasks and async-tasks passes.
+struct SwPassBackendImpl;
 
-impl SwPassBackend for SwBackendImpl {
+impl SwPassBackend for SwPassBackendImpl {
     /// Path to the SPSC queue type re-exported by this distribution.
     fn queue_path(&self) -> Path {
         parse_quote!(rticx_riscv::export::Queue)
@@ -361,31 +362,9 @@ impl SwPassBackend for SwBackendImpl {
     }
 }
 
-// ============================================================================
-// Async-tasks pass backend
-// ============================================================================
-
-struct AsyncPassBackendImpl;
-
-impl AsyncPassBackend for AsyncPassBackendImpl {
-    fn queue_path(&self) -> Path {
-        parse_quote!(rticx_riscv::export::Queue)
-    }
-
+impl AsyncPassBackend for SwPassBackendImpl {
     fn async_runtime_path(&self) -> Path {
         parse_quote!(rticx_riscv::export::async_rt)
-    }
-
-    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> ItemFn {
-        let body = parse_quote!({
-            rticx_riscv::export::pend(irq_nbr);
-        });
-        empty_body_fn.block = Box::new(body);
-        empty_body_fn
-    }
-
-    fn generate_cross_pend_fn(&self, _core: u32, _empty_body_fn: ItemFn) -> Option<ItemFn> {
-        None
     }
 
     fn generate_stack_overflow_check(&self, _core: u32) -> Option<TokenStream2> {
