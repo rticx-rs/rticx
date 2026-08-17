@@ -125,6 +125,8 @@ Full user and distributor guides are available in the [project wiki](https://git
 | `rticx-rp2040` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-rp2040 |
 
 ## Experimental distributions (Research)
+RTICX has been actively used in academic research since its early experimental days. Its modular architecture makes porting to new hardware and custom SoCs straightforward, and lets researchers experiment with exotic syntax extensions without modifying the core, or even fully understanding how it works.
+
 | Distribution | Target | Link |
 |--------------|--------|----------|
 | `rticx-hippo` | Single-core RISC-V Hippomenes MCU | https://github.com/rticx-rs/rticx-hippo |
