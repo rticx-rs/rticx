@@ -133,8 +133,13 @@ pub fn assert_section_present(generated: &str, expected: TokenStream, label: &st
 /// core). When `cross` is `true`, it returns a cross-core pend function whose
 /// body calls a `mock_cross_pend` stub, allowing tests to assert the cross-core
 /// pending path was emitted.
+///
+/// When `core_check` is `true`, `current_core_id` returns a
+/// `mock_current_core_id()` expression so tests can assert the runtime core
+/// check is injected into `spawn`/`spawn_from`.
 pub struct MockSwBackend {
     pub cross: bool,
+    pub core_check: bool,
 }
 
 impl SwPassBackend for MockSwBackend {
@@ -159,6 +164,14 @@ impl SwPassBackend for MockSwBackend {
         });
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)
+    }
+
+    fn current_core_id(&self) -> Option<syn::Expr> {
+        if self.core_check {
+            Some(parse_quote!(mock_current_core_id()))
+        } else {
+            None
+        }
     }
 }
 

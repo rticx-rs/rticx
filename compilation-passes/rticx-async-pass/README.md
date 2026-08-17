@@ -64,6 +64,16 @@ let _ = Pong::spawn_from(Self::current_core(), input); // cross-core (spawn_by)
 // No join handle is returned.
 ```
 
+When the distribution backend provides a `current_core_id` expression
+(`AsyncPassBackend::current_core_id`), `spawn`/`spawn_from` start with a
+runtime check that the caller actually executes on the expected core
+(the task's own `core` for `spawn`, its `spawn_by` for `spawn_from`).
+On mismatch the spawn fails with `Err(input)` / `Err(Some(input))` and the
+input is returned. This catches forged compile-time core tokens at runtime,
+since the expression reads real hardware state (e.g. the `cpuid` register
+on the RP2040) that user code cannot fake. Backends that return `None`
+(e.g. single-core targets) skip the check entirely.
+
 ---
 
 ## Architecture: what the pass generates

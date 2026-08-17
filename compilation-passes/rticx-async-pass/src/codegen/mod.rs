@@ -228,7 +228,7 @@ impl<'a> CodeGen<'a> {
                         let is_prio_0 = task.params.priority == 0;
 
                         let spawn_impl = if is_prio_0 {
-                            task.generate_spawn_api_prio_0(&queue_path)
+                            task.generate_spawn_api_prio_0(&queue_path, self.backend)
                         } else {
                             let dispatcher_irq = sub_analysis
                                 .dispatcher_priority_map
@@ -668,7 +668,11 @@ pub const MC_PEND_FN_NAME: &str = "__rticx_async_cross_irq_pend";
 pub const WAKE_PEND_FN_NAME: &str = "__rticx_async_wake_irq_pend";
 
 impl AsyncTask {
-    fn generate_spawn_api_prio_0(&self, queue_path: &Path) -> TokenStream {
+    fn generate_spawn_api_prio_0(
+        &self,
+        queue_path: &Path,
+        backend: &dyn AsyncPassBackend,
+    ) -> TokenStream {
         let task_name = self.name();
         let task_inputs_queue = utils::sw_task_inputs_ident(task_name);
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
@@ -681,11 +685,22 @@ impl AsyncTask {
         // ring buffer holds one slot more than the queue capacity
         let queue_buffer_size = self.params.capacity + 1;
 
+        // Optional runtime check that the caller runs on this task's core.
+        let core_lit = LitInt::new(&self.params.core.to_string(), Span::call_site());
+        let core_check = backend.current_core_id().map(|current_core_id| {
+            quote! {
+                if #current_core_id != #core_lit {
+                    return Err(input);
+                }
+            }
+        });
+
         quote! {
             static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
             impl #task_name {
                 pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
+                    #core_check
                     #[allow(static_mut_refs)]
                     let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                     let mut ready_producer = unsafe { #ready_queue_name.split().0 };
@@ -729,11 +744,21 @@ impl AsyncTask {
 
         if self.params.core == self.params.spawn_by {
             let pend_fn = local_pend_fn_ident(self.params.core, num_cores);
+            // Optional runtime check that the caller runs on this task's core.
+            let core_lit = LitInt::new(&self.params.core.to_string(), Span::call_site());
+            let core_check = backend.current_core_id().map(|current_core_id| {
+                quote! {
+                    if #current_core_id != #core_lit {
+                        return Err(input);
+                    }
+                }
+            });
             quote! {
                 static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
                     pub fn spawn(input: #inputs_ty) -> Result<(), #inputs_ty> {
+                        #core_check
                         #[allow(static_mut_refs)]
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
@@ -752,6 +777,16 @@ impl AsyncTask {
         } else {
             let spawner_ty = utils::core_type(self.params.spawn_by);
             let pend_fn = cross_pend_fn_ident(self.params.core);
+            // Optional runtime check that the caller runs on this task's `spawn_by` core.
+            // This catches forged compile-time core tokens at runtime.
+            let spawn_by_lit = LitInt::new(&self.params.spawn_by.to_string(), Span::call_site());
+            let core_check = backend.current_core_id().map(|current_core_id| {
+                quote! {
+                    if #current_core_id != #spawn_by_lit {
+                        return Err(Some(input));
+                    }
+                }
+            });
             quote! {
                 static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
@@ -762,10 +797,13 @@ impl AsyncTask {
                     /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
                     /// Either repend it manually or try at a later time.
                     /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
+                    /// If the distribution provides a runtime core check, `Err(Some(input))` is also returned when
+                    /// the caller is not executing on the `spawn_by` core.
                     pub fn spawn_from(
                         _spawner: #spawner_ty,
                         input: #inputs_ty,
                     ) -> Result<(), Option<#inputs_ty>> {
+                        #core_check
                         #[allow(static_mut_refs)]
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };

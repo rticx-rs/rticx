@@ -464,7 +464,7 @@ impl SwPassBackend for SwPassBackendImpl {
     fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
         // #[doc(hidden)]
         // #[inline]
-        // pub fn __rticx_cross_irq_coreN(irq_nbr : rp2040::Interrupt) -> Result<(),()>{
+        // pub fn __rticx_cross_irq_coreN(irq_nbr : rp2040::Interrupt) -> Result<(), ()>{
         let body = parse_quote!({
             use rticx_rp2040::export::InterruptNumber;
             rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number())
@@ -472,6 +472,15 @@ impl SwPassBackend for SwPassBackendImpl {
         // }
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)
+    }
+
+    /// Read the numeric id of the core this code is currently executing on
+    /// (0 or 1 on the RP2040).  Injected into `spawn`/`spawn_from` so that
+    /// forged compile-time core tokens are caught at runtime.
+    fn current_core_id(&self) -> Option<syn::Expr> {
+        Some(parse_quote!(unsafe {
+            (*rp2040_hal::pac::SIO::PTR).cpuid().read().bits() as u32
+        }))
     }
 }
 
@@ -500,6 +509,15 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
         });
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)
+    }
+
+    /// Read the numeric id of the core this code is currently executing on
+    /// (0 or 1 on the RP2040).  Injected into `spawn`/`spawn_from` so that
+    /// forged compile-time core tokens are caught at runtime.
+    fn current_core_id(&self) -> Option<syn::Expr> {
+        Some(parse_quote!(unsafe {
+            (*rp2040_hal::pac::SIO::PTR).cpuid().read().bits() as u32
+        }))
     }
 
     fn generate_wake_pend_fn(&self, core: u32, mut empty_body_fn: ItemFn) -> ItemFn {

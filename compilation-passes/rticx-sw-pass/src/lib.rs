@@ -166,6 +166,23 @@ pub trait SwPassBackend {
         None
     }
 
+    /// Expression yielding the numeric id (`u32`) of the core this code is
+    /// currently executing on.
+    ///
+    /// When `Some`, the generated `spawn`/`spawn_from` functions start with a
+    /// runtime check: `if <expression> != <expected core> { return Err(input) }`.
+    /// The expected core is the task's own `core` for `spawn`, and its
+    /// `spawn_by` for `spawn_from`.  This closes the compile-time core-token
+    /// forgery hole at runtime: the caller must genuinely run on the
+    /// configured core for the spawn to succeed.
+    ///
+    /// The expression must be a safe, side-effect-free read of the actual
+    /// hardware state (e.g. the `cpuid` register on the RP2040).  Return
+    /// `None` to disable the runtime check (the default).
+    fn current_core_id(&self) -> Option<syn::Expr> {
+        None
+    }
+
     /// Subscribe to info_bus
     /// This method is guaranteed to be called before any other methods in this trait.
     fn subscribe(&mut self, _info_bus: InfoBus) {}

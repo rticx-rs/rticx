@@ -16,8 +16,8 @@ mod common;
 use common::{MockSwBackend, assert_section_present, mod_to_string};
 
 /// Run the software pass end-to-end and return the generated module string.
-fn run_pass(args: TokenStream, app_mod: syn::ItemMod, cross: bool) -> String {
-    let pass = SoftwarePass::new(MockSwBackend { cross });
+fn run_pass(args: TokenStream, app_mod: syn::ItemMod, cross: bool, core_check: bool) -> String {
+    let pass = SoftwarePass::new(MockSwBackend { cross, core_check });
     let (_, module) = pass.run_pass(args, app_mod).expect("pass succeeds");
     mod_to_string(&module)
 }
@@ -31,6 +31,7 @@ fn codegen_expands_single_core_sw_app() {
     let generated = run_pass(
         common::single_core_sw_args(),
         common::single_core_sw_app_module(),
+        false,
         false,
     );
 
@@ -113,6 +114,12 @@ fn codegen_expands_single_core_sw_app() {
         "spawn() api",
     );
 
+    // ---- runtime core check is not injected when the backend returns None ----
+    assert!(
+        !generated.contains("mock_current_core_id"),
+        "no runtime core check expected when the backend provides none:\n{generated}"
+    );
+
     // ---- dispatcher: priority enum, ready queue, hw task, exec match ----
     assert_section_present(
         &generated,
@@ -178,7 +185,12 @@ fn capacity_app_module() -> syn::ItemMod {
 
 #[test]
 fn codegen_sizes_input_and_ready_queues_from_capacity() {
-    let generated = run_pass(common::single_core_sw_args(), capacity_app_module(), false);
+    let generated = run_pass(
+        common::single_core_sw_args(),
+        capacity_app_module(),
+        false,
+        false,
+    );
 
     // Input queue of `Big`: ring buffer of capacity + 1 = 4 slots.
     assert_section_present(
@@ -217,6 +229,7 @@ fn codegen_expands_multi_core_sw_app() {
     let generated = run_pass(
         common::multi_core_sw_args(),
         common::multi_core_sw_app_module(),
+        true,
         true,
     );
 
@@ -278,6 +291,7 @@ fn codegen_expands_multi_core_sw_app() {
             static mut __rticx_internal__Task0__INPUTS : rticx :: export :: Queue < < Task0 as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
             impl Task0 {
                 pub fn spawn (input : < Task0 as RticSwTask > :: SpawnInput) -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
+                    if mock_current_core_id () != 0 { return Err (input) ; }
                     let mut inputs_producer = unsafe { __rticx_internal__Task0__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core0Prio2Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () , < Task0 as RticSwTask > :: SpawnInput > {
@@ -355,7 +369,10 @@ fn codegen_expands_multi_core_sw_app() {
                 /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
                 /// Either repend it manually or try at a later time.
                 /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
+                /// If the distribution provides a runtime core check, `Err(Some(input))` is also returned when
+                /// the caller is not executing on the `spawn_by` core.
                 pub fn spawn_from (_spawner : __rticx__internal__Core0 , input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , Option< < Cross as RticSwTask > :: SpawnInput > > {
+                    if mock_current_core_id () != 0 { return Err (Some (input)) ; }
                     let mut inputs_producer = unsafe { __rticx_internal__Cross__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core1Prio3Tasks__RQ . split () . 0 } ;
                     __rticx_interrupt_free (| | -> Result < () ,Option< < Cross as RticSwTask > :: SpawnInput> > {

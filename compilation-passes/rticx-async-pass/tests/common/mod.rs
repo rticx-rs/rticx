@@ -107,6 +107,7 @@ pub fn assert_section_present(generated: &str, expected: TokenStream, label: &st
 
 pub struct MockAsyncBackend {
     pub cross: bool,
+    pub core_check: bool,
 }
 
 impl AsyncPassBackend for MockAsyncBackend {
@@ -135,6 +136,14 @@ impl AsyncPassBackend for MockAsyncBackend {
         });
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)
+    }
+
+    fn current_core_id(&self) -> Option<syn::Expr> {
+        if self.core_check {
+            Some(parse_quote!(mock_current_core_id()))
+        } else {
+            None
+        }
     }
 }
 

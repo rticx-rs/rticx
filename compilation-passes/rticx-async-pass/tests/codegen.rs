@@ -7,8 +7,8 @@ mod common;
 
 use common::{MockAsyncBackend, assert_section_present, mod_to_string};
 
-fn run_pass(args: TokenStream, app_mod: syn::ItemMod, cross: bool) -> String {
-    let pass = AsyncPass::new(MockAsyncBackend { cross });
+fn run_pass(args: TokenStream, app_mod: syn::ItemMod, cross: bool, core_check: bool) -> String {
+    let pass = AsyncPass::new(MockAsyncBackend { cross, core_check });
     let (_, module) = pass.run_pass(args, app_mod).expect("pass succeeds");
     mod_to_string(&module)
 }
@@ -18,6 +18,7 @@ fn codegen_expands_single_core_sw_app() {
     let generated = run_pass(
         common::single_core_sw_args(),
         common::single_core_sw_app_module(),
+        false,
         false,
     );
 
@@ -31,6 +32,11 @@ fn codegen_expands_single_core_sw_app() {
     assert!(
         !generated.contains("async_task"),
         "the original `#[async_task]` attribute leaked into the generated code:\n{generated}"
+    );
+    // No runtime core check when the backend provides none.
+    assert!(
+        !generated.contains("mock_current_core_id"),
+        "no runtime core check expected when the backend provides none:\n{generated}"
     );
 
     assert_section_present(
@@ -263,6 +269,7 @@ fn codegen_sizes_queues_from_capacity() {
                     }
                 }),
         false,
+        false,
     );
 
     // Input queue of `Big`: ring buffer of capacity + 1 = 4 slots.
@@ -318,6 +325,7 @@ fn codegen_expands_multi_core_sw_app() {
     let generated = run_pass(
         common::multi_core_sw_args(),
         common::multi_core_sw_app_module(),
+        true,
         true,
     );
 
@@ -391,6 +399,11 @@ fn codegen_expands_multi_core_sw_app() {
 
     assert_section_present(&generated, quote! { impl Task0 }, "core0 spawn impl");
     assert_section_present(&generated, quote! { pub fn spawn }, "core0 spawn fn");
+    assert_section_present(
+        &generated,
+        quote! { if mock_current_core_id () != 0 { return Err (input) ; } },
+        "core0 spawn runtime core check",
+    );
 
     assert_section_present(
         &generated,
@@ -448,6 +461,11 @@ fn codegen_expands_multi_core_sw_app() {
         quote! { pub fn spawn_from },
         "core1 spawn_from fn",
     );
+    assert_section_present(
+        &generated,
+        quote! { if mock_current_core_id () != 0 { return Err (Some (input)) ; } },
+        "core1 spawn_from runtime core check",
+    );
 
     assert_section_present(
         &generated,
@@ -500,6 +518,7 @@ fn codegen_expands_prio_0_executor() {
     let generated = run_pass(
         common::single_core_sw_args(),
         common::single_core_prio_0_app_module(),
+        false,
         false,
     );
 
