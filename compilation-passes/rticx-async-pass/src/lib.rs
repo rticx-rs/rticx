@@ -154,6 +154,12 @@ pub trait AsyncPassBackend {
     /// core to run an async software task that was spawned remotely.  The resulting
     /// function is called by `spawn_from()` at runtime.
     ///
+    /// The cross-pend function returns a Result<(),()>, Ok(()) if cross-core interrupt
+    /// was successfully called, or Err(()) if pending failed for any reason (E.g FIFO full)
+    /// ```ignore
+    /// pub fn __rticx_internal_cross_pend(irq_nbr: #interrupt_type_path) -> Result<(), ()> { /* you code here */}
+    /// ```
+    ///
     /// # Contract
     /// * `core` is the *target* core index (the core that owns the task).
     /// * The generated function takes a single argument `irq_nbr` whose

@@ -130,7 +130,7 @@ impl<'a> CodeGen<'a> {
                 let empty_body_fn = parse_quote! {
                     #[doc(hidden)]
                     #[inline]
-                    pub fn #fn_ident(irq_nbr: #interrupt_ty) { // TODO: this function should return a result, as pending can fail in multicore !
+                    pub fn #fn_ident(irq_nbr: #interrupt_ty) -> Result<(), ()>{
                         // To be implemented by distributor
                         // How do you pend an interrupt on the other core ?
                     }
@@ -325,21 +325,26 @@ impl SoftwareTask {
                 static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
-                    pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), #inputs_ty> {
+                    /// Spawn a this task which belongs to `core` from the core specified using `spawn_by`
+                    /// ## Returns:
+                    /// - Ok(()), the inputs are enqueued successfully and the task's dispatcher interrupt is successfully pended
+                    /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
+                    /// Either repend it manually or try at a later time.
+                    /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
+                    pub fn spawn_from(_spawner: #spawner_ty , input : #inputs_ty) -> Result<(), Option<#inputs_ty>> {
                         let mut inputs_producer = unsafe {#task_inputs_queue.split().0};
                         let mut ready_producer = unsafe {#ready_queue_name.split().0};
                         // need to protect by a critical section because many producers of different priorities can spawn/enqueue this task
-                        #critical_section_fn(|| -> Result<(), #inputs_ty>  {
+                        #critical_section_fn(|| -> Result<(), Option<#inputs_ty>>  {
                             if unsafe { !__rticx_sw_system_initialized } {
-                                return Err(input);
+                                return Err(Some(input));
                             }
                             // enqueue inputs
-                            inputs_producer.enqueue(input)?;
+                            inputs_producer.enqueue(input).map_err(Option::Some)?;
                             // enqueue task to ready queue
                             unsafe {ready_producer.enqueue_unchecked(#prio_ty::#task_name)};
                             // pend dispatcher
-                            #pend_fn(#interrupt_ty::#dispatcher_irq_name);
-                            Ok(())
+                            #pend_fn(#interrupt_ty::#dispatcher_irq_name).map_err(|_| None)
                         })
                     }
                 }

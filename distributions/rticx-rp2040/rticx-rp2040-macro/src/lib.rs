@@ -464,10 +464,10 @@ impl SwPassBackend for SwPassBackendImpl {
     fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
         // #[doc(hidden)]
         // #[inline]
-        // pub fn __rticx_cross_irq_coreN(irq_nbr : rp2040::Interrupt) {
+        // pub fn __rticx_cross_irq_coreN(irq_nbr : rp2040::Interrupt) -> Result<(),()>{
         let body = parse_quote!({
             use rticx_rp2040::export::InterruptNumber;
-            let _ = rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number());
+            rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number())
         });
         // }
         empty_body_fn.block = Box::new(body);
@@ -496,7 +496,7 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
     fn generate_cross_pend_fn(&self, _core: u32, mut empty_body_fn: ItemFn) -> Option<ItemFn> {
         let body = parse_quote!({
             use rticx_rp2040::export::InterruptNumber;
-            let _ = rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number());
+            rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number())
         });
         empty_body_fn.block = Box::new(body);
         Some(empty_body_fn)
@@ -510,6 +510,7 @@ impl AsyncPassBackend for AsyncPassBackendImpl {
                 rticx_rp2040::export::NVIC::pend(irq_nbr);
             } else {
                 use rticx_rp2040::export::InterruptNumber;
+                // FIXME: cross-core pending can fail. The rticx-async-pass should be able to handle that
                 let _ = rticx_rp2040::export::cross_core::pend_irq(irq_nbr.number());
             }
         });

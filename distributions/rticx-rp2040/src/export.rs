@@ -219,9 +219,10 @@ pub const fn compute_mask_chunks<const L: usize>(ids: [u32; L]) -> usize {
 /// Cross pending interrupts
 pub mod cross_core {
 
-    pub struct FullFifoErr;
+    pub type FullFifoErr = ();
 
     #[inline]
+    #[allow(clippy::result_unit_err)]
     pub fn pend_irq(irq: u16) -> Result<(), FullFifoErr> {
         unsafe {
             let sio = &(*rp2040_hal::pac::SIO::PTR);
@@ -234,7 +235,7 @@ pub mod cross_core {
                     sio.fifo_wr().write(|wr| wr.bits(irq as u32));
                     Ok(())
                 } else {
-                    Err(FullFifoErr)
+                    Err(())
                 }
             })
         }

@@ -249,7 +249,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
+            pub fn __rticx_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) -> Result<(),()>{
                 mock_cross_pend (irq_nbr) ;
             }
         },
@@ -349,15 +349,20 @@ fn codegen_expands_multi_core_sw_app() {
         quote! {
             static mut __rticx_internal__Cross__INPUTS : rticx :: export :: Queue < < Cross as RticSwTask > :: SpawnInput , 2usize > = rticx :: export :: Queue :: new () ;
             impl Cross {
-                pub fn spawn_from (_spawner : __rticx__internal__Core0 , input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , < Cross as RticSwTask > :: SpawnInput > {
+                /// Spawn a this task which belongs to `core` from the core specified using `spawn_by`
+                /// ## Returns:
+                /// - Ok(()), the inputs are enqueued successfully and the task's dispatcher interrupt is successfully pended
+                /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
+                /// Either repend it manually or try at a later time.
+                /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
+                pub fn spawn_from (_spawner : __rticx__internal__Core0 , input : < Cross as RticSwTask > :: SpawnInput) -> Result < () , Option< < Cross as RticSwTask > :: SpawnInput > > {
                     let mut inputs_producer = unsafe { __rticx_internal__Cross__INPUTS . split () . 0 } ;
                     let mut ready_producer = unsafe { __rticx_internal__Core1Prio3Tasks__RQ . split () . 0 } ;
-                    __rticx_interrupt_free (| | -> Result < () , < Cross as RticSwTask > :: SpawnInput > {
-                        if unsafe { ! __rticx_sw_system_initialized } { return Err (input) ; }
-                        inputs_producer . enqueue (input) ? ;
+                    __rticx_interrupt_free (| | -> Result < () ,Option< < Cross as RticSwTask > :: SpawnInput> > {
+                        if unsafe { ! __rticx_sw_system_initialized } { return Err (Some(input)) ; }
+                        inputs_producer . enqueue (input).map_err(Option::Some) ? ;
                         unsafe { ready_producer . enqueue_unchecked (Core1Prio3Tasks :: Cross) } ;
-                        __rticx_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1) ;
-                        Ok (())
+                        __rticx_cross_irq_pend_core1 (mypac :: Interrupt :: IRQ1).map_err(|_| None)
                     })
                 }
             }

@@ -487,7 +487,7 @@ fn codegen_expands_multi_core_sw_app() {
     assert_section_present(
         &generated,
         quote! {
-            pub fn __rticx_async_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) {
+            pub fn __rticx_async_cross_irq_pend_core1 (irq_nbr : mypac :: Interrupt) -> Result<(),()>{
                 mock_cross_pend (irq_nbr) ;
             }
         },

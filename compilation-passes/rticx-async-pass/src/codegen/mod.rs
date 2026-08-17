@@ -149,7 +149,7 @@ impl<'a> CodeGen<'a> {
     }
 
     fn get_cross_pend_fns(&self) -> TokenStream {
-        let fns: Vec<TokenStream> = self
+        let fns = self
             .app
             .sub_apps
             .iter()
@@ -161,13 +161,10 @@ impl<'a> CodeGen<'a> {
                 let empty_body_fn = parse_quote! {
                     #[doc(hidden)]
                     #[inline]
-                    pub fn #fn_ident(irq_nbr: #interrupt_ty) {}
+                    pub fn #fn_ident(irq_nbr: #interrupt_ty) -> Result<(), ()> {}
                 };
-                self.backend
-                    .generate_cross_pend_fn(core, empty_body_fn)
-                    .map(|fn_def| quote!(#fn_def))
-            })
-            .collect();
+                self.backend.generate_cross_pend_fn(core, empty_body_fn)
+            });
         quote!(#(#fns)*)
     }
 
@@ -759,21 +756,26 @@ impl AsyncTask {
                 static mut #task_inputs_queue: #queue_path<#inputs_ty, #queue_buffer_size> = #queue_path::new();
 
                 impl #task_name {
+                    /// Spawn a this task which belongs to `core` from the core specified using `spawn_by`
+                    /// ## Returns:
+                    /// - Ok(()), the inputs are enqueued successfully and the task's dispatcher interrupt is successfully pended
+                    /// - Err(None), the inputs are enqueued the inputs are enqueued successfully but and the task's dispatcher interrupt pendeding failed.
+                    /// Either repend it manually or try at a later time.
+                    /// - Err(Some(input)), the inputs failed to be enqueued. Consider increasing the channel capacity using `capacity = N`.
                     pub fn spawn_from(
                         _spawner: #spawner_ty,
                         input: #inputs_ty,
-                    ) -> Result<(), #inputs_ty> {
+                    ) -> Result<(), Option<#inputs_ty>> {
                         #[allow(static_mut_refs)]
                         let mut inputs_producer = unsafe { #task_inputs_queue.split().0 };
                         let mut ready_producer = unsafe { #ready_queue_name.split().0 };
-                        #critical_section_fn(|| -> Result<(), #inputs_ty> {
+                        #critical_section_fn(|| -> Result<(), Option<#inputs_ty>> {
                             if unsafe { !__rticx_async_system_initialized } {
-                                return Err(input);
+                                return Err(Some(input));
                             }
-                            inputs_producer.enqueue(input)?;
+                            inputs_producer.enqueue(input).map_err(Option::Some)?;
                             unsafe { ready_producer.enqueue_unchecked(#prio_ty::#task_name) };
-                            #pend_fn(#interrupt_ty::#dispatcher_irq_name);
-                            Ok(())
+                            #pend_fn(#interrupt_ty::#dispatcher_irq_name).map_err(|_| None)
                         })
                     }
                 }
