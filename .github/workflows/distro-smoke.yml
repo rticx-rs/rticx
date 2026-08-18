@@ -28,7 +28,7 @@ jobs:
       # using the distro qemu-system-riscv32 from PATH.
       QEMU_SYSTEM_RISCV32: ${{ github.workspace }}/qemu-espressif/bin/qemu-system-riscv32
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv6m-none-eabi,riscv32imc-unknown-none-elf

@@ -15,6 +15,6 @@ jobs:
     name: Generation (major.minor) consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.100
       - run: make check-versions
