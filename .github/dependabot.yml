@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Root workspace only (riscv/rp2040 get their own dependabot.yml in their
+  # own repositories when they split out — see the release roadmap).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: monthly        # first of each month by default
+    groups:
+      cargo:
+        patterns: ["*"]        # single PR, updated in place each month
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
