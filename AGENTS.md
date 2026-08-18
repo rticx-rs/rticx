@@ -125,6 +125,7 @@ Load these with the `skill` tool for detailed reference on specific tasks:
 | `rticx-backend` | Full trait signatures, pipeline order, InfoBus API, syntax attributes |
 | `rticx-create-pass` | How to write a new compilation pass (references wiki) |
 | `rticx-create-distribution` | How to create a new distribution (references wiki) |
+| `rticv2-to-rticx-migration` | Comprehensive guide and reference for porting RTIC v2 code to RTICX |
 
 
 *Last oriented: 2026-08-18*
