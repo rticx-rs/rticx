@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7m-none-eabi,thumbv6m-none-eabi
       - name: Install QEMU
