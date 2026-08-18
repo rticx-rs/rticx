@@ -30,7 +30,9 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+# Note: no `version` here on purpose: each crate owns its version, while
+# the shared generation (major.minor) is enforced by `make check-versions`
+# (see COMPATIBILITY.md).
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 license = "MIT"

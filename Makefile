@@ -1,4 +1,4 @@
-.PHONY: all ci fmt fmt-check clippy test distros qemu qemu-armv7m qemu-armv6m qemu-slic qemu-espc3
+.PHONY: all ci fmt fmt-check clippy test distros qemu qemu-armv7m qemu-armv6m qemu-slic qemu-espc3 check-versions
 
 # rticx-cortex-m's lib does not compile for the host target (BASEPRI path is
 # armv7-m only); it is exercised through its own Makefile with real targets
@@ -11,6 +11,13 @@ all: fmt-check test clippy distros
 
 # Alias for CI.
 ci: all
+
+# -----------------------------------------------------------------------------
+# Versioning
+# -----------------------------------------------------------------------------
+
+check-versions:
+	./tools/check-versions.sh
 
 # -----------------------------------------------------------------------------
 # Formatting

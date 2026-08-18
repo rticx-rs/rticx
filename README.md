@@ -112,6 +112,13 @@ On top of the original framework, RTICX adds:
 - **Compilation passes** implement the `RticPass` trait and run before or after the core pass as pure syntax-to-syntax transformations.
 - **Distributions** provide the low-level hardware bindings via the `CorePassBackend` trait (and optional pass-specific backends), select which passes to use, and re-export the generated `#[<distro>::app]` macro.
 
+## API compatibility and versioning
+
+The backend traits, pass API, user-facing syntax, and the crate versioning
+scheme form a documented contract, what may change, how it may change, how
+it is versioned, and how breaking changes are coordinated across crates and
+distributions. See [`COMPATIBILITY.md`](COMPATIBILITY.md).
+
 ## Documentation
 
 Full user and distributor guides are available in the [project wiki](https://github.com/rticx-rs/rticx/wiki/).

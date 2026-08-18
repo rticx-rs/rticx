@@ -1,6 +1,6 @@
 [package]
 name = "rticx-rp2040-macro"
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "Proc-macro crate for the RTICX RP2040 distribution"

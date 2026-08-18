@@ -1,6 +1,6 @@
 [package]
 name = "rticx-riscv"
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 authors = ["Zakaria Madaoui"]
 description = "RTICX distribution for single-core RISC-V targets (generic SLIC, ESP32-C3, ESP32-C6)"
@@ -96,3 +96,7 @@ esp32c6 = [
 # The distro moves to its own repository soon; this structure mirrors that.
 [workspace]
 members = ["rticx-macro", "examples/slic-examples", "examples/esp32c3-examples"]
+
+[workspace.package]
+# distro + macro pair is version-locked together (see COMPATIBILITY.md)
+version = "0.2.0"
