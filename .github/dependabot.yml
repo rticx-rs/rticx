@@ -1,7 +1,5 @@
 version: 2
 updates:
-  # Root workspace only (riscv/rp2040 get their own dependabot.yml in their
-  # own repositories when they split out — see the release roadmap).
   - package-ecosystem: cargo
     directory: "/"
     schedule:

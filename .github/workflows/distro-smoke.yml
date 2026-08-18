@@ -1,0 +1,94 @@
+name: Distro smoke
+
+on:
+  # Called from ci.yml (every PR/push, advisory via continue-on-error) and
+  # from release-plz.yml (pre-publish check).
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  QEMU_ESP_VERSION: esp-develop-9.2.2-20260417
+  QEMU_ESP_URL: https://github.com/espressif/qemu/releases/download/esp-develop-9.2.2-20260417/qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz
+
+jobs:
+  smoke:
+    name: Smoke ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    # Advisory by default: red is EXPECTED during a core generation bump
+    # (0.2 -> 0.3), until the distro repos opt in — see COMPATIBILITY.md.
+    continue-on-error: true
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [rticx-rp2040, rticx-riscv]
+    env:
+      # Espressif QEMU fork for the ESP32-C3 examples; the SLIC examples keep
+      # using the distro qemu-system-riscv32 from PATH.
+      QEMU_SYSTEM_RISCV32: ${{ github.workspace }}/qemu-espressif/bin/qemu-system-riscv32
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi,riscv32imc-unknown-none-elf
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm qemu-system-misc
+      - name: Install espflash
+        uses: taiki-e/install-action@v2
+        with:
+          tool: espflash
+      - name: Install esptool
+        run: pipx install esptool
+      - name: Download Espressif QEMU ${{ env.QEMU_ESP_VERSION }}
+        run: |
+          mkdir -p qemu-espressif
+          wget "${{ env.QEMU_ESP_URL }}" -O qemu-esp.tar.xz
+          tar --strip-components=1 -xJf qemu-esp.tar.xz -C qemu-espressif
+          qemu-espressif/bin/qemu-system-riscv32 --version
+      - name: Clone distro repo (default branch)
+        run: git clone --depth 1 https://github.com/rticx-rs/${{ matrix.distro }}.git "${{ runner.temp }}/${{ matrix.distro }}"
+      - name: Patch distro deps to core main
+        # [patch.crates-io] only resolves while the local core version still
+        # satisfies the distro's caret requirement. During a generation bump
+        # (0.2 -> 0.3) this step fails with a resolution error — the intended
+        # signal to open the distro-repo opt-in PRs.
+        run: |
+          cat >> "${{ runner.temp }}/${{ matrix.distro }}/Cargo.toml" <<'EOF'
+          [patch.crates-io]
+          rticx-core = { path = "CORE_CHECKOUT/rticx-core" }
+          rticx-spsc = { path = "CORE_CHECKOUT/rticx-spsc" }
+          rticx-async = { path = "CORE_CHECKOUT/rticx-async" }
+          rticx-sw-pass = { path = "CORE_CHECKOUT/compilation-passes/rticx-sw-pass" }
+          rticx-auto-assign = { path = "CORE_CHECKOUT/compilation-passes/rticx-auto-assign" }
+          rticx-async-pass = { path = "CORE_CHECKOUT/compilation-passes/rticx-async-pass" }
+          EOF
+          sed -i "s|CORE_CHECKOUT|${{ github.workspace }}|g" "${{ runner.temp }}/${{ matrix.distro }}/Cargo.toml"
+      - name: Check distro workspace
+        run: |
+          case "${{ matrix.distro }}" in
+            rticx-rp2040)
+              cargo check --workspace
+              ;;
+            rticx-riscv)
+              # Host check with the esp32c3 path (the lib compile_error!s
+              # until a target selector is on).
+              cargo check --features esp32c3
+              ;;
+          esac
+        working-directory: ${{ runner.temp }}/${{ matrix.distro }}
+      - name: Build + run curated examples
+        run: |
+          case "${{ matrix.distro }}" in
+            rticx-rp2040)
+              # Build-only for now: no RP2040 emulator yet (QEMU 9.0
+              # `rp2040` machine or Renode is future work).
+              make -C example-apps all
+              ;;
+            rticx-riscv)
+              # SLIC examples under qemu-system-riscv32 (sifive_e) and the
+              # ESP32-C3 examples under the Espressif QEMU fork.
+              make examples
+              ;;
+          esac
+        working-directory: ${{ runner.temp }}/${{ matrix.distro }}

@@ -1,6 +1,0 @@
-{
-    "rust-analyzer.cargo.features": [
-        "swtasks",
-        // "async", # enabel if you are developing on an async app
-    ]
-}

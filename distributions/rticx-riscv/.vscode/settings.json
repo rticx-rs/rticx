@@ -1,9 +1,0 @@
-{
-    "rust-analyzer.cargo.features": [
-        "slic",
-        "clint-backend",
-        // "mecall-backend",
-        // "esp32c3",
-        // "esp32c6",
-    ]
-}

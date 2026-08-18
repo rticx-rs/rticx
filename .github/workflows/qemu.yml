@@ -7,38 +7,20 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  QEMU_ESP_VERSION: esp-develop-9.2.2-20260417
-  QEMU_ESP_URL: https://github.com/espressif/qemu/releases/download/esp-develop-9.2.2-20260417/qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz
 
 jobs:
   qemu:
-    name: QEMU playground (cortex-m + riscv + esp32c3)
+    name: QEMU playground (cortex-m)
     runs-on: ubuntu-latest
     # Guard against a guest that never reaches its semihosting exit
     timeout-minutes: 15
-    env:
-      # Espressif QEMU fork for the ESP32-C3 examples; the SLIC examples keep
-      # using the distro qemu-system-riscv32 from PATH.
-      QEMU_SYSTEM_RISCV32: ${{ github.workspace }}/qemu-espressif/bin/qemu-system-riscv32
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97
         with:
-          targets: thumbv7m-none-eabi,thumbv6m-none-eabi,riscv32imc-unknown-none-elf
+          targets: thumbv7m-none-eabi,thumbv6m-none-eabi
       - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm qemu-system-misc
-      - name: Install espflash
-        uses: taiki-e/install-action@v2
-        with:
-          tool: espflash
-      - name: Install esptool
-        run: pipx install esptool
-      - name: Download Espressif QEMU ${{ env.QEMU_ESP_VERSION }}
-        run: |
-          mkdir -p qemu-espressif
-          wget "${{ env.QEMU_ESP_URL }}" -O qemu-esp.tar.xz
-          tar --strip-components=1 -xJf qemu-esp.tar.xz -C qemu-espressif
-          qemu-espressif/bin/qemu-system-riscv32 --version
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
       - uses: Swatinem/rust-cache@v2
-      - name: Run examples under QEMU (cortex-m, riscv SLIC, esp32c3)
+      - name: Run examples under QEMU (cortex-m)
         run: make qemu

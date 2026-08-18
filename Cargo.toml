@@ -1,8 +1,5 @@
 [workspace]
 resolver = "2"
-# The rticx-riscv and rticx-rp2040 distributions are intentionally NOT
-# members: they are moving to their own repositories and remain standalone
-# (own Cargo.lock) until then.
 members = [
     "rticx-spsc",
     "rticx-core",

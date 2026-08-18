@@ -4,12 +4,6 @@
 release_always = false
 repo_url = "https://github.com/rticx-rs/rticx"
 
-# Only the root workspace is managed here (9 publishable crates).
-# rticx-riscv / rticx-rp2040 live in their own mini-workspaces and get their
-# own release-plz when they split into separate repos (Phase 6). The riscv
-# special-case (publish_features = ["esp32c3"], semver_check = false) moves
-# to that repo's release-plz.toml at that point.
-
 [[package]]
 name = "rticx-cortex-m"
 publish_features = ["armv6m"]   # armv6m path compiles on host -> real verification

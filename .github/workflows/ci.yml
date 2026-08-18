@@ -41,3 +41,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97
       - uses: Swatinem/rust-cache@v2
       - run: make test
+
+  # Compiles the out-of-tree distributions (rticx-riscv / rticx-rp2040)
+  # against this core checkout. Advisory: red during a generation bump is
+  # expected until the distro repos opt in (see COMPATIBILITY.md).
+  distro-smoke:
+    name: Distro smoke (advisory)
+    continue-on-error: true
+    uses: ./.github/workflows/distro-smoke.yml

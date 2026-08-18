@@ -4,10 +4,6 @@
 #
 # All crates of the root workspace must share the same major.minor pair
 # ("generation"); micro (patch) versions are per-crate. See COMPATIBILITY.md.
-#
-# The riscv/rp2040 distributions are not root-workspace members (they live in
-# their own mini-workspaces and lock distro+macro together via
-# `version.workspace = true`), so they are not covered by this check.
 
 set -euo pipefail
 

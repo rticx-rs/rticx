@@ -1,8 +1,0 @@
-{
-    "lldb.displayFormat": "auto",
-    "lldb.showDisassembly": "auto",
-    "lldb.dereferencePointers": true,
-    "rust-analyzer.cargo.features": [
-        "async"
-    ]
-}

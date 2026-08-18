@@ -128,8 +128,8 @@ Full user and distributor guides are available in the [project wiki](https://git
 | Distribution | Target | Link |
 |--------------|--------|----------|
 | `rticx-cortex-m` | Single-core Cortex-M (armv6-m and armv7-m and above) | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-cortex-m |
-| `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-riscv |
-| `rticx-rp2040` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | https://github.com/rticx-rs/rticx/tree/main/distributions/rticx-rp2040 |
+| `rticx-riscv` | Single-core riscv with generic SLIC interrupt controller/ esp32c3/ esp32c6 | https://github.com/rticx-rs/rticx-riscv |
+| `rticx-rp2040` | Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+) | https://github.com/rticx-rs/rticx-rp2040 |
 
 ## Experimental distributions (Research)
 RTICX has been actively used in academic research since its early experimental days. Its modular architecture makes porting to new hardware and custom SoCs straightforward, and lets researchers experiment with exotic syntax extensions without modifying the core, or even fully understanding how it works.
@@ -168,8 +168,8 @@ The examples are located in `distributions/rticx-cortex-m/examples-apps`. You ca
 - [ARM Cortex-m playground: SysTick hw task + spawned sw task + SRP lock ](distributions/rticx-cortex-m/examples-apps/examples/hello_rtic.rs)
 - [ARM Cortex-m playground: Async and Monotonics example](distributions/rticx-cortex-m/examples-apps/examples/async_ping_pong.rs)
 - [ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/examples-apps/examples/async_prio0.rs)
-- [RISCV playground: Async Ping Pong](distributions/rticx-riscv/examples/esp32c3-examples/examples/async_ping_pong.rs)
-- [RP2040 multicore ping-pong](distributions/rticx-rp2040/example-apps/src/bin/ping_pong.rs)
+- [RISCV playground: Async Ping Pong](https://github.com/rticx-rs/rticx-riscv/blob/main/examples/esp32c3-examples/examples/async_ping_pong.rs)
+- [RP2040 multicore ping-pong](https://github.com/rticx-rs/rticx-rp2040/blob/main/example-apps/src/bin/ping_pong.rs)
 
 ## Academic Publications
 
