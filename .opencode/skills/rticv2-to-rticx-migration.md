@@ -2,7 +2,7 @@
 
 Comprehensive reference and step-by-step procedure for porting applications from **RTIC v2** (`rtic` v2.x) to **RTICX** (`rticx-*`).
 
-This skill serves as both an automated reference for AI coding agents and an authoritative porting guide for human developers.
+This skill serves as both an automated reference for AI coding agents and an authoritative porting guide for developers.
 
 ---
 

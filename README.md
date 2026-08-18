@@ -170,6 +170,7 @@ The examples are located in `distributions/rticx-cortex-m/examples-apps`. You ca
 - [ARM Cortex-m playground: Async Priority 0 tasks](distributions/rticx-cortex-m/examples-apps/examples/async_prio0.rs)
 - [RISCV playground: Async Ping Pong](https://github.com/rticx-rs/rticx-riscv/blob/main/examples/esp32c3-examples/examples/async_ping_pong.rs)
 - [RP2040 multicore ping-pong](https://github.com/rticx-rs/rticx-rp2040/blob/main/example-apps/src/bin/ping_pong.rs)
+- [RTICv2 Examples Migrated To RTICX ](https://github.com/rticx-rs/rticx-examples)
 
 ## Academic Publications
 
