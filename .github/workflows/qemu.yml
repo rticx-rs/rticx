@@ -19,8 +19,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7m-none-eabi,thumbv6m-none-eabi
-      - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: Ensure QEMU
+        run: |
+          if ! command -v qemu-system-arm >/dev/null 2>&1; then
+            sudo apt-get update -o Acquire::Retries=5 -o Acquire::ForceIPv4=true
+            sudo apt-get install -y --no-install-recommends qemu-system-arm
+          fi
       - uses: Swatinem/rust-cache@v2
       - name: Run examples under QEMU (cortex-m)
         run: make qemu
