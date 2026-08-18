@@ -43,9 +43,9 @@ jobs:
       - run: make test
 
   # Compiles the out-of-tree distributions (rticx-riscv / rticx-rp2040)
-  # against this core checkout. Advisory: red during a generation bump is
-  # expected until the distro repos opt in (see COMPATIBILITY.md).
+  # against this core checkout. Advisory: the smoke job inside
+  # distro-smoke.yml has continue-on-error, and red during a generation bump
+  # is expected until the distro repos opt in (see COMPATIBILITY.md).
   distro-smoke:
     name: Distro smoke (advisory)
-    continue-on-error: true
     uses: ./.github/workflows/distro-smoke.yml
