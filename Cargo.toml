@@ -40,8 +40,8 @@ homepage = "https://github.com/rticx-rs/rticx/wiki"
 # --- external (shared across members) ---
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
-syn = { version = "2.0.53", features = ["extra-traits", "full"] }
-thiserror = "1.0.63"
+syn = { version = "3.0.3", features = ["extra-traits", "full"] }
+thiserror = "2.0.20"
 # --- internal (path + caret version) ---
 rticx-spsc = { path = "rticx-spsc", version = "0.2.0" }
 rticx-core = { path = "rticx-core", version = "0.2.0" }
