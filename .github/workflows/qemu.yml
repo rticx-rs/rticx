@@ -15,7 +15,7 @@ jobs:
     # Guard against a guest that never reaches its semihosting exit
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7m-none-eabi,thumbv6m-none-eabi
