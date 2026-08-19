@@ -66,6 +66,8 @@ impl<'a> CodeGen<'a> {
         // Push slot init statements for main_injection
         self.push_slot_inits();
 
+        let async_prio_limit = self.generate_async_prio_limit();
+
         parse_quote! {
             #mod_visibility mod #mod_ident {
                 #(#rest_of_code)*
@@ -74,9 +76,45 @@ impl<'a> CodeGen<'a> {
                 #local_pend_fns
                 #wake_pend_fns
                 #cross_pend_fns
+                #async_prio_limit
                 /// Flag set to true after system initialization completes
                 static mut __rticx_async_system_initialized: bool = false;
             }
+        }
+    }
+
+    /// Emits the `RTIC_ASYNC_MAX_LOGICAL_PRIO` symbol consumed by
+    /// `rtic-monotonics` (and other async HAL drivers) to set their timer
+    /// interrupt priority so it strictly preempts async tasks.
+    ///
+    /// The value is `max(async task priority) + 1`, or `u8::MAX` when there
+    /// are no async tasks. `rtic-monotonics` clamps it to the device's max
+    /// logical priority (`1 << NVIC_PRIO_BITS`) itself as it is target aware
+    fn generate_async_prio_limit(&self) -> TokenStream {
+        let max_async_prio = self
+            .analysis
+            .sub_analysis
+            .iter()
+            .flat_map(|sa| sa.tasks_priority_map.keys())
+            .copied()
+            .max();
+
+        // `+1` so the timer strictly preempts async tasks; saturating so it
+        // can't wrap. `u8::MAX` is the "no limit" sentinel, clamped by
+        // `rtic-monotonics`.
+        let timer_prio = max_async_prio
+            .map(|p| p.saturating_add(1))
+            .unwrap_or(u16::MAX)
+            .min(u8::MAX as u16) as u8;
+
+        quote! {
+            #[doc(hidden)]
+            #[unsafe(no_mangle)]
+            // FIXME: rtic-monotonics is not multicore-aware, so this single
+            // symbol is shared by all cores (max async priority over all
+            // cores). Once it gains per-core support, emit one symbol per
+            // core instead.
+            static RTIC_ASYNC_MAX_LOGICAL_PRIO: u8 = #timer_prio;
         }
     }
 

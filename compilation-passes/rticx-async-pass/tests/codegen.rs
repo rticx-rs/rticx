@@ -693,3 +693,45 @@ fn codegen_cross_core_tasks_require_current_core_id() {
         "expected an error mentioning `current_core_id`, got: {err}"
     );
 }
+
+#[test]
+fn codegen_emits_async_prio_limit() {
+    // Single async task at priority 2 -> timer priority = 2 + 1 = 3.
+    let single = run_pass(
+        common::single_core_sw_args(),
+        common::single_core_sw_app_module(),
+        false,
+        false,
+    );
+    assert_section_present(
+        &single,
+        quote! { static RTIC_ASYNC_MAX_LOGICAL_PRIO : u8 = 3u8 ; },
+        "async prio limit = max async prio + 1 (single core)",
+    );
+
+    // Two cores, priorities 2 and 3 -> max over all cores (3) + 1 = 4.
+    let multi = run_pass(
+        common::multi_core_sw_args(),
+        common::multi_core_sw_app_module(),
+        true,
+        true,
+    );
+    assert_section_present(
+        &multi,
+        quote! { static RTIC_ASYNC_MAX_LOGICAL_PRIO : u8 = 4u8 ; },
+        "async prio limit = max over all cores + 1 (multicore)",
+    );
+
+    // Only priority-0 tasks -> no async dispatchers -> `u8::MAX` sentinel.
+    let prio0 = run_pass(
+        common::single_core_sw_args(),
+        common::single_core_prio_0_app_module(),
+        false,
+        false,
+    );
+    assert_section_present(
+        &prio0,
+        quote! { static RTIC_ASYNC_MAX_LOGICAL_PRIO : u8 = 255u8 ; },
+        "async prio limit = u8::MAX when no async dispatchers exist",
+    );
+}
