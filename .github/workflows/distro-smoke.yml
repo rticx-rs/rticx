@@ -32,20 +32,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv6m-none-eabi,riscv32imc-unknown-none-elf
-      - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm qemu-system-misc
+      - name: Cache apt QEMU packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: qemu-system-arm qemu-system-misc
+          version: 1.0
       - name: Install espflash
         uses: taiki-e/install-action@v2
         with:
           tool: espflash
       - name: Install esptool
         run: pipx install esptool
+      - name: Cache Espressif QEMU
+        id: qemu-esp-cache
+        uses: actions/cache@v4
+        with:
+          path: qemu-espressif
+          key: qemu-esp-${{ env.QEMU_ESP_VERSION }}
+
       - name: Download Espressif QEMU ${{ env.QEMU_ESP_VERSION }}
+        if: steps.qemu-esp-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p qemu-espressif
           wget "${{ env.QEMU_ESP_URL }}" -O qemu-esp.tar.xz
           tar --strip-components=1 -xJf qemu-esp.tar.xz -C qemu-espressif
-          qemu-espressif/bin/qemu-system-riscv32 --version
+
+      - name: Verify Espressif QEMU
+        run: qemu-espressif/bin/qemu-system-riscv32 --version
       - name: Clone distro repo (default branch)
         run: git clone --depth 1 https://github.com/rticx-rs/${{ matrix.distro }}.git "${{ runner.temp }}/${{ matrix.distro }}"
       - name: Patch distro deps to core main
