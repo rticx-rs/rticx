@@ -48,6 +48,6 @@ rticx-core = { path = "rticx-core", version = "0.2.0" }
 rticx-async = { path = "rticx-async", version = "0.2.0" }
 rticx-sw-pass = { path = "compilation-passes/rticx-sw-pass", version = "0.2.0" }
 rticx-auto-assign = { path = "compilation-passes/rticx-auto-assign", version = "0.2.0" }
-rticx-async-pass = { path = "compilation-passes/rticx-async-pass", version = "0.2.0" }
-rticx-cortex-m-macro = { path = "distributions/rticx-cortex-m/rticx-macro", version = "0.2.0" }
-rticx-cortex-m = { path = "distributions/rticx-cortex-m", version = "0.2.0" }
+rticx-async-pass = { path = "compilation-passes/rticx-async-pass", version = "0.2.1" }
+rticx-cortex-m-macro = { path = "distributions/rticx-cortex-m/rticx-macro", version = "0.2.1" }
+rticx-cortex-m = { path = "distributions/rticx-cortex-m", version = "0.2.1" }
