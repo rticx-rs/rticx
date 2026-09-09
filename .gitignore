@@ -3,3 +3,6 @@ publish.sh
 release-roadmap.md
 rp2040-emu-plan.md
 target/
+
+# Content production. not part of the repo
+content/
