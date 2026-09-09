@@ -1,3 +1,8 @@
+---
+name: rticv2-to-rticx-migration
+description: Comprehensive guide and reference for porting RTIC v2 code to RTICX
+---
+
 # RTICv2 to RTICX Migration Guide
 
 Comprehensive reference and step-by-step procedure for porting applications from **RTIC v2** (`rtic` v2.x) to **RTICX** (`rticx-*`).

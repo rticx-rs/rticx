@@ -1,3 +1,8 @@
+---
+name: rticx-backend
+description: Full trait signatures, pipeline order, InfoBus API, syntax attributes
+---
+
 # RTICX Backend Reference
 
 Detailed API reference for writing compilation passes and distribution backends.

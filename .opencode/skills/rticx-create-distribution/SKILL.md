@@ -1,3 +1,8 @@
+---
+name: rticx-create-distribution
+description: How to create a new distribution (references wiki)
+---
+
 # Create a Distribution
 
 Prerequisite: run `git submodule update --init` from the repo root to fetch

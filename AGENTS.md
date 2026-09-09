@@ -68,7 +68,7 @@ Feature propagation pattern: distro crate feature -> forwards to `*-macro` crate
 ## Conventions
 
 - **Attribute args** are parsed via `rticx_core::parse_utils::RticAttr` (typed accessors + supported-key checks). Unknown `#[app]` args produce warnings in the generated code; unknown task-level args are compile errors. Passes must strip the args they consume before returning from `run_pass` — see wiki "Writing Compilation Passes".
-- **API compatibility + versioning**: `COMPATIBILITY.md` at the repo root is the compatibility contract (frozen backend/pass trait surface, additive-only rules, shared version generation, cross-repo coordination with the out-of-tree distributions). Read it before touching backend/pass APIs.
+- **API compatibility + versioning**: `COMPATIBILITY.md` at the repo root is the compatibility contract (frozen backend/pass trait surface, additive-only rules, shared version generation, cross-repo coordination with the out-of-tree distributions). Read it before touching backend/pass APIs. Every root-workspace crate must share the same major.minor ("generation"); `make check-versions` (and the `version-check` CI job) fail otherwise. Breaking changes bump the generation of **all** crates in one PR.
 - **Distro-smoke**: the `distro-smoke` CI job (advisory, `continue-on-error`) compiles the out-of-tree distro repos against this checkout via `[patch.crates-io]`. Red is expected during a generation bump until the distro repos opt in.
 
 ## GOTCHAS
@@ -79,6 +79,8 @@ Feature propagation pattern: distro crate feature -> forwards to `*-macro` crate
   build-std = ["alloc", "core"]
   ```
 - **`rticx-cortex-m` does not compile for the host target** (BASEPRI path is armv7-m only); it is exercised via its own `Makefile` with real targets (`make -C distributions/rticx-cortex-m ...`).
+- **`examples-apps` is a standalone workspace**, deliberately outside the root workspace (its own `[workspace]` section). Its `.cargo/config.toml` pins `build.target = "thumbv7m-none-eabi"` and configures a QEMU runner, so plain `cargo run --example …` boots QEMU. Examples declare `required-features`: `hello_rtic`/`sw_queue_depth` need `--features swtasks`; `async_*` need `--features async`. Omitting them fails at build time.
+- **The wiki is a git submodule** (`wiki/`, pointing at `…/rtic-mc-experiments.wiki.git`); the wiki pages referenced by the skills are in-tree there.
 
 ## Build & Test
 
@@ -101,9 +103,9 @@ cargo install --path tools/rticx-expand  # enables `cargo rticx-expand`
 
 # Build the in-tree cortex-m distribution examples
 cd distributions/rticx-cortex-m/examples-apps
-cargo build --example hello_rtic
+cargo build --example hello_rtic --features swtasks
 cargo build --example async_ping_pong --features async
-cargo build --target thumbv6m-none-eabi --example hello_rtic
+cargo build --target thumbv6m-none-eabi --example hello_rtic --features swtasks
 
 # Run cortex-m examples under QEMU
 make qemu
@@ -115,6 +117,8 @@ cd rticx-riscv && make all          # fmt-check, clippy (target matrix), QEMU ex
 git clone https://github.com/rticx-rs/rticx-rp2040
 cd rticx-rp2040 && make all         # fmt-check, clippy, example builds (thumbv6m)
 ```
+
+Releases are handled by release-plz (release PR flow, `cargo-semver-checks`).
 
 ## Available Skills
 
@@ -128,4 +132,4 @@ Load these with the `skill` tool for detailed reference on specific tasks:
 | `rticv2-to-rticx-migration` | Comprehensive guide and reference for porting RTIC v2 code to RTICX |
 
 
-*Last oriented: 2026-08-18*
+*Last oriented: 2026-08-29*

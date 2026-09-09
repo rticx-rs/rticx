@@ -1,3 +1,8 @@
+---
+name: rticx-create-pass
+description: How to write a new compilation pass (references wiki)
+---
+
 # Create a Compilation Pass
 
 Prerequisite: run `git submodule update --init` from the repo root to fetch
