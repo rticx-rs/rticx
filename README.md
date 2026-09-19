@@ -31,11 +31,11 @@ mod app {
     #[init]
     fn system_init() -> (Shared, TaskInits) {
         /* start SysTick */
-        (Shared { counter: 0 }, TaskInits {})
+        (Shared { counter: 0 }, TaskInits { tick: Tick { ticks : 0 } })
     }
 
     /// Hardware task, runs on every SysTick interrupt
-    #[task(binds = SysTick, priority = 1, shared = [counter], init = generated)]
+    #[task(binds = SysTick, priority = 1, shared = [counter])]
     struct Tick {
       ticks: u32;
     }

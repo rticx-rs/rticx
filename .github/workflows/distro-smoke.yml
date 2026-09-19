@@ -32,11 +32,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv6m-none-eabi,riscv32imc-unknown-none-elf
-      - name: Cache apt QEMU packages
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: qemu-system-arm qemu-system-misc
-          version: 1.0
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm qemu-system-misc
       - name: Install espflash
         uses: taiki-e/install-action@v2
         with:
