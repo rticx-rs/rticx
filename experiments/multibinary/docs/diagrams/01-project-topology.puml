@@ -1,0 +1,35 @@
+@startuml 01-project-topology
+' Diagram 1 — Project topology: two binaries, global core ids, IPC regions.
+' Source of truth: rticx.toml (see docs/user-guide.md §3).
+' Render: plantuml -tsvg 01-project-topology.puml
+
+title Project topology (rticx.toml)
+
+
+
+package "app-m7 (binary)" as app_m7 {
+  component "core 0\nglobal id 0" as core0
+}
+
+package "app-m4 (binary)" as app_m4 {
+  component "core 1\nglobal id 1" as core1
+}
+
+rectangle "IPC region 0->1\nbase_from_source = 0x30040000\nbase_from_target = 0x30040000\nsize = 4096" as region01
+rectangle "IPC region 1->0\nbase_from_source = 0x30041000\nbase_from_target = 0x30041000\nsize = 4096" as region10
+
+core0 --> region01 : "enqueue\n(per-task FIFO)"
+region01 --> core1 : "drain\n(dispatcher)"
+core1 --> region10 : "enqueue\n(per-task FIFO)"
+region10 --> core0 : "drain\n(dispatcher)"
+
+note right of region10
+  One region per ordered core pair.
+  cargo xbin sync allocates one FIFO
+  per cross-binary task inside a region.
+  Doorbells are distribution IRQs
+  (per source, target, priority) and are
+  not declared in rticx.toml.
+end note
+
+@enduml

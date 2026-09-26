@@ -1,0 +1,18 @@
+[package]
+name = "rticx-xbin-pass"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Compilation pass for cross-binary tasks in the RTICX multi-binary extension"
+keywords = ["rtic", "rticx", "ipc", "proc-macro", "multicore"]
+categories = ["embedded", "no-std"]
+publish = false
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+rticx-core = { workspace = true }
+syn = { workspace = true }

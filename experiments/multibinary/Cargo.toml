@@ -1,0 +1,43 @@
+# Standalone experimental workspace for the multi-binary / heterogeneous
+# multi-core extension.
+#
+# Deliberately kept OUTSIDE the root workspace (see
+# `multibinary-multicore-plan.md` §5) so release-plz, the shared-generation
+# check and root CI are untouched. It path-depends on the root crates and is
+# intended to be extracted into its own repository later (M6-T3).
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/rticx-xbin-proto",
+    "crates/rticx-xbin-pass",
+    "crates/rticx-xbin-rt",
+    "crates/rticx-xbin-driver",
+    "crates/rticx-xbin-mock",
+]
+
+[workspace.package]
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+license = "MIT"
+repository = "https://github.com/rticx-rs/rticx"
+homepage = "https://github.com/rticx-rs/rticx/wiki"
+
+[workspace.dependencies]
+# --- external ---
+clap = { version = "4.5", features = ["derive"] }
+heck = "0.5.0"
+proc-macro2 = "1.0.79"
+quote = "1.0.35"
+syn = { version = "2.0.53", features = ["extra-traits", "full"] }
+thiserror = "1.0.63"
+# `preserve_order`: message field declaration order must be preserved by the
+# parser -- the canonical layout depends on it.
+toml = { version = "0.8.23", features = ["preserve_order"] }
+# --- root workspace crates (path + caret version; the version requirement
+#     tracks the root generation and is bumped together with out-of-tree
+#     distro opt-ins) ---
+rticx-core = { path = "../../rticx-core", version = "0.2.0" }
+# --- experimental crates ---
+rticx-xbin-proto = { path = "crates/rticx-xbin-proto", version = "0.1.0" }
+rticx-xbin-rt = { path = "crates/rticx-xbin-rt", version = "0.1.0" }

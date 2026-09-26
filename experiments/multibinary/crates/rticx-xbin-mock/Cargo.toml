@@ -1,0 +1,15 @@
+[package]
+name = "rticx-xbin-mock"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Mock distribution/backend for the RTICX multi-binary extension host tests"
+keywords = ["rtic", "rticx", "ipc", "mock", "testing"]
+categories = ["embedded", "development-tools::testing"]
+publish = false
+
+[dependencies]
+rticx-xbin-rt = { workspace = true }

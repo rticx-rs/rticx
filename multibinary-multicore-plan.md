@@ -146,7 +146,7 @@ core CI untouched). It path-depends on the root crates.
 | `rticx-xbin-driver` | `crates/rticx-xbin-driver/` | `cargo-xbin` subcommand (`sync`, `build`, later `visualize`) |
 | `rticx-xbin-mock` | `crates/rticx-xbin-mock/` | Mock distro/backend for host tests |
 | fixtures | `fixtures/` | Two-app fixture project for in-tree end-to-end tests |
-| docs | `docs/` | User guide, architecture doc, PlantUML sources + rendered SVG |
+| docs | `docs/` | User guide, architecture doc, PlantUML diagram sources (rendered manually) |
 
 Conventions:
 
@@ -442,7 +442,8 @@ mock backend.
   errors and fixes.
 - **Architecture doc:** phases, JSON schema, memory/priority rules, locking, boot and
   reset, failure modes, cache/MPU notes.
-- **PlantUML diagrams** (each small, `.puml` sources + rendered SVG in `docs/`):
+- **PlantUML diagrams** (each small, `.puml` sources in `docs/diagrams/`; rendering
+  is manual, done by the reviewer):
   1. Project topology — two binaries, global core ids, IPC regions.
   2. `sync` → merge/validate/allocate → `build` pipeline.
   3. Spawn flow timeline A→B — producer, FIFO, doorbell, ISR, dispatcher, exec.
@@ -468,30 +469,31 @@ Work proceeds one task at a time. Each task should be committed separately with 
 
 ### M0 — Skeleton, IDL, layout, generated crate
 
-- [ ] **M0-T1** Create `experiments/multibinary/` standalone workspace with empty
+- [x] **M0-T1** Create `experiments/multibinary/` standalone workspace with empty
       crates (`proto`, `pass`, `rt`, `driver`, `mock`) and path deps on root crates.
       *Acceptance:* `cargo build` and `cargo test` succeed in the new workspace; root
       workspace untouched.
-- [ ] **M0-T2** Implement `ipc-types.toml` parser and 32-bit-safe type subset
+- [x] **M0-T2** Implement `ipc-types.toml` parser and 32-bit-safe type subset
       validation in `rticx-xbin-proto`.
       *Acceptance:* golden tests for accepted/rejected schemas with clear errors.
-- [ ] **M0-T3** Implement canonical layout engine (size/align/field offsets, LE,
+- [x] **M0-T3** Implement canonical layout engine (size/align/field offsets, LE,
       align cap 4) in `rticx-xbin-proto`.
       *Acceptance:* unit tests for nested structs, arrays, enums; host `size_of`
       agrees for the supported subset.
-- [ ] **M0-T4** Implement the `ipc-types` crate generator (types, marker impls,
+- [x] **M0-T4** Implement the `ipc-types` crate generator (types, marker impls,
       consts, asserts, `LAYOUT_HASH`).
       *Acceptance:* generated crate compiles on host and at least two embedded
       targets; assertions pass.
-- [ ] **M0-T5** Parse `rticx.toml` (`[[application]]`, `[ipc.regions]`) in
+- [x] **M0-T5** Parse `rticx.toml` (`[[application]]`, `[ipc.regions]`) in
       `rticx-xbin-proto`; deterministic error messages.
       *Acceptance:* round-trip and error tests.
-- [ ] **M0-T6** Driver CLI skeleton: `cargo-xbin sync` and `cargo-xbin build`
+- [x] **M0-T6** Driver CLI skeleton: `cargo-xbin sync` and `cargo-xbin build`
       dispatch; create `target/rticx-xbin/` layout.
       *Acceptance:* `cargo xbin --help` works; no-op sync/build succeed.
-- [ ] **M0-T7** Docs skeleton: user guide outline, architecture outline, diagram
+- [x] **M0-T7** Docs skeleton: user guide outline, architecture outline, diagram
       stubs; first PlantUML source (project topology).
-      *Acceptance:* `docs/` present with at least one rendered diagram.
+      *Acceptance:* `docs/` present with user guide/architecture outlines and the
+      project-topology `.puml` source (rendering is manual, see §12).
 
 ### M1 — Metadata phase, merge, validation, allocation
 
@@ -574,8 +576,8 @@ Work proceeds one task at a time. Each task should be committed separately with 
       *Acceptance:* tests for not-ready and post-reset spawns.
 - [ ] **M5-T3** Complete user guide and architecture doc.
       *Acceptance:* a fresh reader can build the fixture following only the docs.
-- [ ] **M5-T4** Complete PlantUML set (diagrams 1–5) with rendered SVGs.
-      *Acceptance:* diagrams reviewed for small size/clarity.
+- [ ] **M5-T4** Complete PlantUML set (diagrams 1–5) as `.puml` sources.
+      *Acceptance:* diagrams reviewed for small size/clarity (rendering is manual).
 - [ ] **M5-T5** Separate advisory CI workflow for the experimental workspace.
       *Acceptance:* fmt, clippy, tests, mock e2e green.
 

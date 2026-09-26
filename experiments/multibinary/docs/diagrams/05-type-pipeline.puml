@@ -1,0 +1,14 @@
+@startuml 05-type-pipeline
+' Diagram 5 — Type pipeline: IDL -> generated crate -> layout asserts.
+' Source of truth: docs/user-guide.md §4, plan §6.2–6.3.
+' TODO(M5-T4): author this diagram.
+
+title IDL -> generated crate -> layout asserts (stub)
+
+skinparam shadowing false
+skinparam monochrome true
+skinparam defaultFontName monospace
+
+note "TODO(M5-T4): author this diagram" as todo
+
+@enduml
