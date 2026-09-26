@@ -24,8 +24,10 @@
 //! distinguish a full FIFO from an empty one, and the dispatcher drains the
 //! FIFO directly, so the effective capacity is exact.
 //!
-//! TODO(M2-T1): implement the runtime queue against this image and keep
-//! [`FIFO_HEADER`] / [`FIFO_ALIGN`] in sync if the index layout changes.
+//! The runtime mirror of this image is `rticx_xbin_rt::Fifo<T, DEPTH>` (crate
+//! `rticx-xbin-rt`, `src/fifo.rs`). Its integration tests pin
+//! [`FIFO_HEADER`] / [`FIFO_INDEX_STRIDE`] / [`FIFO_ALIGN`] against the
+//! constants here, so the two definitions must be changed together.
 
 /// Alignment of every FIFO inside its region, in bytes.
 pub const FIFO_ALIGN: u64 = 8;

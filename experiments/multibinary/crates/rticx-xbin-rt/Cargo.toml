@@ -12,3 +12,20 @@ categories = ["no-std", "embedded"]
 publish = false
 
 [dependencies]
+portable-atomic = { version = "1.15.0", default-features = false }
+
+[dev-dependencies]
+# Layout drift guard: the runtime ring must mirror the canonical image computed
+# by the host-side allocator.
+rticx-xbin-proto = { workspace = true }
+
+[features]
+# On by default: the ready bitmap and the epoch counter need
+# read-modify-write atomics (`fetch_or`/`fetch_and`/`fetch_add`), which
+# targets without native CAS (e.g. Cortex-M0 / thumbv6m, riscv32imc) can only
+# provide through `critical-section`. Targets with native CAS ignore the
+# fallback. Distributions on CAS-less targets must link a `critical-section`
+# implementation; builds using `default-features = false` must re-enable this
+# on such targets.
+default = ["atomic-critical-section"]
+atomic-critical-section = ["portable-atomic/critical-section"]

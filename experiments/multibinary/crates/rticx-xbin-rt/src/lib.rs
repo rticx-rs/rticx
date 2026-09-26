@@ -1,15 +1,33 @@
 //! Runtime support for the RTICX multi-binary extension.
 //!
-//! This crate is deliberately kept separate from [`rticx_spsc`]: the
+//! This crate is deliberately kept separate from `rticx-spsc`: the
 //! single-binary software-task queue has frozen, non-atomic semantics, while
 //! cross-core FIFOs must use atomics with `Release`/`Acquire` ordering to
 //! publish data across cores.
 //!
-//! Milestone M0 only needs the [`CrossCoreMessage`] marker so that the
-//! generated `ipc-types` crate can compile. The atomic SPSC ring, FIFO views
-//! and ready/epoch helpers are implemented in M2.
+//! Contents:
+//!
+//! - [`CrossCoreMessage`] — marker trait implemented only by the generated
+//!   `ipc-types`;
+//! - [`Fifo`] — the atomic SPSC ring placed at fixed addresses inside the
+//!   IPC regions, with its [`Producer`]/[`Consumer`] endpoints. See
+//!   [`fifo`] for the in-region image and the memory/ordering rules;
+//! - [`SharedState`] — the shared ready bitmap and epoch word used for boot
+//!   coordination and peer-reset detection. See [`state`] for the protocol;
+//! - [`backend`] — the [`CrossBinBackend`] contract a distribution
+//!   implements for its IPC regions, doorbells, core identity and
+//!   cache/MPU policy; the in-tree `rticx-xbin-mock` implements it for host
+//!   tests.
 
 #![no_std]
+
+pub mod backend;
+pub mod fifo;
+pub mod state;
+
+pub use backend::{CrossBinBackend, DoorbellError, IpcRegion};
+pub use fifo::{Consumer, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer};
+pub use state::{MAX_CORES, SharedState};
 
 /// Marker trait for data types that may travel through cross-core shared
 /// memory.

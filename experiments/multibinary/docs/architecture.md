@@ -48,13 +48,13 @@ core
      rticx-xbin-driver: cargo-xbin sync/build (M0 skeleton, M1 pipeline)
 ```
 
-| Crate | State (M1) |
+| Crate | State (M2) |
 |---|---|
 | `rticx-xbin-proto` | IDL parse/validate, layout engine, crate generator with change-detecting write (`GeneratedCrate::write_if_changed`), `rticx.toml` parse/validate, `Hash64`, `system.json` / manifest schemas, merge + validation + FIFO allocation, `system_view` emission and the canonical FIFO image (`fifo`) |
 | `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `ipc-types` generation with change detection; `build` = `sync` for now (app builds in M4) |
 | `rticx-xbin-pass` | metadata mode: `#[app]` additions and `#[cross_bin_task]`/`#[cross_bin_spawn]` syntax confirmed and stripped (M1-T3), `<target>.xbin.json` emit (codegen lands in M3) |
-| `rticx-xbin-rt` | marker trait `CrossCoreMessage` (FIFO lands in M2) |
-| `rticx-xbin-mock` | empty (M2) |
+| `rticx-xbin-rt` | marker trait `CrossCoreMessage`; `Fifo<T, DEPTH>` atomic SPSC ring mirroring the canonical image (Vyukov, `Release`/`Acquire`, cache-line-padded indices, `view_at`/`init`/`split`), with a drift guard against `rticx-xbin-proto` and a threaded hand-off test; `SharedState` magic/ready-bitmap/epoch helpers (M2-T2) with stale-epoch reset tests; `backend::CrossBinBackend` + `IpcRegion`/`DoorbellError` contract (M2-T3) with no-op `configure_shared_memory`/`clean_range`/`invalidate_range` hooks and the Normal/Non-cacheable/Shareable + Device-forbidden rules documented in rustdoc (M2-T4) |
+| `rticx-xbin-mock` | `MockSystem`: aligned, zeroed in-process IPC regions, condvar mock doorbells (`ring` through the trait, `wait`/`take` for the simulated dispatcher ISR), per-handle `current_global_core_id`, ready/epoch defaults over one `SharedState`; two-thread spawn→drain over a raw `Fifo` (M2-T3) |
 
 No public API of the root workspace changes in v1; the generated code only
 uses the frozen external `task_trait` surface.
@@ -152,12 +152,15 @@ dep-info rebuilds when the file changes.
   region.
 - Canonical layout: `repr(C)`, little-endian, natural alignment capped at 4;
   `bool`/pointers/64-bit scalars rejected by the IDL subset.
-- Runtime FIFO: atomic SPSC ring, head/tail as `AtomicUsize` (Release publish
-  / Acquire consume), element in place, `Copy` payload, cache-line-padded
-  indices, `view_at(addr)` placement.
-- Cache/MPU: regions configured Normal, Non-cacheable, Shareable; Device/
-  Strongly-ordered forbidden (`ldrex`/`strex` invalid there); optional
-  `clean_range`/`invalidate_range` for cacheable fallback.
+- Runtime FIFO (`rticx_xbin_rt::Fifo<T, DEPTH>`, M2-T1): atomic SPSC ring,
+  head/tail as `AtomicUsize` (Release publish / Acquire consume), element in
+  place, `Copy` payload, cache-line-padded indices, `view_at(addr)` placement,
+  `split()` producer/consumer endpoints; deliberately `!Sync` so safe code
+  cannot alias the FIFO.
+- Cache/MPU: `CrossBinBackend::configure_shared_memory` maps the regions
+  Normal, Non-cacheable, Shareable; Device/Strongly-ordered is forbidden
+  (`ldrex`/`strex` invalid there). `clean_range`/`invalidate_range` are no-op
+  fallback hooks for a cacheable mapping (M2-T4).
 
 *TODO(M5-T3): byte-layout worked example (message → size/align/offsets) and
 cache-maintenance decision tree.*
@@ -176,18 +179,25 @@ cache-maintenance decision tree.*
 ## 8. Boot, ready/epoch and reset
 
 Boot sequencing is distribution-owned (H7: CM7 initializes shared memory,
-then releases CM4). The extension supplies an atomic ready bitmap and an
-epoch word; `cross_spawn` returns `Err` while the target is not ready, and a
-peer reset is detected through the epoch. `init_shared` zeroes indices and
-sets magic/epoch; `mark_ready(core)` runs at the end of each core's
-`post_init` after arming the doorbell.
+then releases CM4). `rticx_xbin_rt::SharedState` (M2-T2) supplies the magic
+word, the atomic ready bitmap (one bit per global core id, Release/Acquire)
+and the wrapping epoch counter: `init()` clears every ready bit and bumps the
+epoch, `mark_ready(core)` runs at the end of each core's `post_init` after
+arming the doorbell, and a peer boot does `clear_ready(own)` + `bump_epoch()`
+before re-marking. `cross_spawn` caches the epoch and checks
+`is_ready_at(target, epoch)`: it returns `Err(Some(input))` while the target
+is not ready, and a reset invalidates the cached epoch until the spawner
+refreshes its observation.
 
 ## 9. Distribution/backend contract
 
-`CrossBinBackend` (owned by the extension; implemented out-of-tree and by the
-mock): `ipc_regions()`, `configure_shared_memory()`, optional cache range ops,
-`doorbell_setup/ring`, dispatcher IRQ paths, `current_global_core_id()`,
-`init_shared()`, `mark_ready()`, `is_ready()`, `epoch()`.
+`rticx_xbin_rt::backend::CrossBinBackend` (owned by the extension; defined in
+M2-T3/T4, implemented by the out-of-tree H7 distribution and by the in-tree
+mock): `ipc_region()`, `configure_shared_memory()` plus the no-op
+`clean_range`/`invalidate_range` fallback hooks, `doorbell_setup/ring`,
+`current_global_core_id()`, `shared_state()` with default
+`init_shared()`/`mark_ready()`/`is_ready()`/`epoch()`. Dispatcher IRQ type
+paths are code-generation configuration (M3), not a runtime method.
 
 ## 10. Failure modes
 

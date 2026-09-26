@@ -527,16 +527,16 @@ Work proceeds one task at a time. Each task should be committed separately with 
 
 ### M2 — Runtime atomic FIFO and mock backend
 
-- [ ] **M2-T1** Implement `rticx-xbin-rt`: atomic SPSC ring, `CrossCoreMessage`,
+- [x] **M2-T1** Implement `rticx-xbin-rt`: atomic SPSC ring, `CrossCoreMessage`,
       `view_at`, cache-line-padded indices.
       *Acceptance:* host tests for wrap, full/empty, `Copy` payloads; Release/Acquire
       correctness under threads.
-- [ ] **M2-T2** Ready/epoch helpers and tests, including peer-reset simulation.
+- [x] **M2-T2** Ready/epoch helpers and tests, including peer-reset simulation.
       *Acceptance:* stale-epoch detection test.
-- [ ] **M2-T3** Mock backend: IPC regions over an `mmap`/array, mock doorbell,
+- [x] **M2-T3** Mock backend: IPC regions over an `mmap`/array, mock doorbell,
       `current_global_core_id`.
       *Acceptance:* two threads exercise spawn→drain via raw FIFO.
-- [ ] **M2-T4** Cache/MPU documentation note in the backend trait and fallback hooks
+- [x] **M2-T4** Cache/MPU documentation note in the backend trait and fallback hooks
       (no-op on host).
       *Acceptance:* rustdoc documents the Normal-Non-cacheable-Shareable rule and the
       Device-memory restriction.
