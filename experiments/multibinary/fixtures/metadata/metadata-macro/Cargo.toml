@@ -1,0 +1,15 @@
+[package]
+name = "metadata-macro"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Minimal `#[app]` stand-in for the rticx-xbin metadata fixture"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+rticx-xbin-pass = { path = "../../../crates/rticx-xbin-pass" }
+syn = { version = "2", features = ["full"] }

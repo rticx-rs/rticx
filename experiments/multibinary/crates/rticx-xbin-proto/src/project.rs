@@ -39,6 +39,8 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{ProjectError, kind_of};
 
 /// Schema version of `rticx.toml` understood by this crate.
@@ -223,7 +225,8 @@ impl Target {
 }
 
 /// The kind of Cargo target an application builds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     /// A binary target.
     Bin,

@@ -1,0 +1,9 @@
+# Shared data types of the metadata fixture (type-only IDL).
+#
+# The fixture apps reference `EncryptReq` by name; phase 1 merge/validation
+# (M1-T5) checks that the name exists here and is cross-core safe.
+
+schema = 1
+
+[message.EncryptReq]
+fields = { addr = "u32", len = "u32", key = "u32" }

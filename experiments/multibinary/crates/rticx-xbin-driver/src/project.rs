@@ -5,12 +5,19 @@ use std::path::{Path, PathBuf};
 /// Manifest file identifying the root of a multi-binary project.
 pub const PROJECT_MANIFEST: &str = "rticx.toml";
 
+/// Type-only IDL file at the project root (see
+/// `multibinary-multicore-plan.md` §6.2).
+pub const IDL_MANIFEST: &str = "ipc-types.toml";
+
 /// Driver-owned output directory, relative to the project root.
 ///
-/// Eventually holds `<app>.xbin.json` per-application metadata,
-/// `system.json` and generated artifacts (see
+/// Holds `<app>.xbin.json` per-application metadata, the emitted
+/// `system.json` system view and generated artifacts (see
 /// `multibinary-multicore-plan.md` §7).
 pub const OUTPUT_DIR: &str = "target/rticx-xbin";
+
+/// Driver-generated system view inside [`OUTPUT_DIR`] (M1-T6).
+pub const SYSTEM_FILE: &str = "system.json";
 
 /// Returns the driver output directory below `project_root`.
 pub fn output_dir(project_root: &Path) -> PathBuf {

@@ -15,4 +15,8 @@ publish = false
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 rticx-core = { workspace = true }
+rticx-xbin-proto = { workspace = true }
 syn = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"

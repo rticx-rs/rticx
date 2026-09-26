@@ -252,7 +252,7 @@ const _: () = {
 Both keys are consumed (stripped) by the new pass before the core pass parses the
 module, so other distributions only see unknown-key warnings.
 
-### 6.5 Task syntax (proposal — confirm in M1)
+### 6.5 Task syntax (confirmed in M1-T3)
 
 Receiver binary (task actually runs here):
 
@@ -273,7 +273,11 @@ Sender binary (lightweight stub; name must match the receiver task):
 struct EncryptTask;
 ```
 
-- `core` / `spawned_by` use **global** core ids.
+- Sender `core` and receiver `spawned_by` use **global** core ids. Receiver `core` is a
+  **local** core index (`0..cores`, default `0`, matching RTIC's task `core`).
+- Defaults: `priority = 1`, `capacity = 1` (minimum 1). Unknown, duplicate and
+  multi-segment keys, malformed values, an out-of-range receiver `core` and
+  `external_cores` overlapping the application's own `core_ids` are hard errors.
 - Both sides declare the task so phase 1 knows who spawns what and can validate the
   match. A later relaxation may auto-generate sender stubs from receiver
   declarations.
@@ -497,27 +501,27 @@ Work proceeds one task at a time. Each task should be committed separately with 
 
 ### M1 — Metadata phase, merge, validation, allocation
 
-- [ ] **M1-T1** Define the `system.json` schema in `rticx-xbin-proto` (serde types,
+- [x] **M1-T1** Define the `system.json` schema in `rticx-xbin-proto` (serde types,
       `schema_version`, generation, hashes).
       *Acceptance:* serialization round-trip; determinism test.
-- [ ] **M1-T2** Implement the pass metadata mode: `RTICX_XBIN_META_OUT` detection at
+- [x] **M1-T2** Implement the pass metadata mode: `RTICX_XBIN_META_OUT` detection at
       the macro level; parse `#[app]` additions and cross-binary task declarations;
       write `<app>.xbin.json`.
       *Acceptance:* fixture app produces the expected manifest.
-- [ ] **M1-T3** Confirm and implement the task attribute syntax (`#[cross_bin_task]`,
+- [x] **M1-T3** Confirm and implement the task attribute syntax (`#[cross_bin_task]`,
       `#[cross_bin_spawn]`); strip args before core parse.
       *Acceptance:* attributes parsed; unknown/malformed keys produce precise errors;
       other distros only warn.
-- [ ] **M1-T4** Driver application enumeration + `cargo check` metadata invocation
+- [x] **M1-T4** Driver application enumeration + `cargo check` metadata invocation
       (including `cargo clean -p` for freshness).
       *Acceptance:* sync produces manifests for all fixture apps.
-- [ ] **M1-T5** Merge and validation: sender/receiver match, global priority
+- [x] **M1-T5** Merge and validation: sender/receiver match, global priority
       disjointness per target, type existence, region fit, core-id consistency.
       *Acceptance:* one test per validation rule, positive and negative.
-- [ ] **M1-T6** Deterministic per-task FIFO address allocation and `system.json` emit.
+- [x] **M1-T6** Deterministic per-task FIFO address allocation and `system.json` emit.
       *Acceptance:* stable byte-identical output across runs; overflow errors name the
       task and region.
-- [ ] **M1-T7** Wire `ipc-types` generation into `sync`; change detection/report.
+- [x] **M1-T7** Wire `ipc-types` generation into `sync`; change detection/report.
       *Acceptance:* editing the IDL updates the generated crate; unchanged IDL is a
       no-op.
 

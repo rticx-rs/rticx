@@ -1,0 +1,13 @@
+[package]
+name = "app-m7"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Sender application of the rticx-xbin metadata fixture"
+
+[[bin]]
+name = "m7"
+path = "src/main.rs"
+
+[dependencies]
+metadata-macro = { path = "../metadata-macro" }

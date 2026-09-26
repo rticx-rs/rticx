@@ -72,6 +72,37 @@ fn build_is_a_noop_without_a_project_and_succeeds() {
 }
 
 #[test]
+fn sync_reports_generated_ipc_types_changes() {
+    let dir = tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("rticx.toml"), "schema = 1\n").expect("write manifest");
+    std::fs::write(
+        dir.path().join("ipc-types.toml"),
+        "schema = 1\n\n[message.EncryptReq]\nfields = { addr = \"u32\" }\n",
+    )
+    .expect("write idl");
+
+    let first = run(dir.path(), &["xbin", "sync"]);
+    assert!(
+        first.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let stderr = String::from_utf8(first.stderr).expect("utf-8");
+    assert!(stderr.contains("created ipc-types/Cargo.toml"), "{stderr}");
+    assert!(stderr.contains("created ipc-types/src/lib.rs"), "{stderr}");
+
+    let second = run(dir.path(), &["xbin", "sync"]);
+    assert!(
+        second.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let stderr = String::from_utf8(second.stderr).expect("utf-8");
+    assert!(stderr.contains("ipc-types is up to date"), "{stderr}");
+    assert!(!stderr.contains("created"), "{stderr}");
+}
+
+#[test]
 fn invalid_manifest_fails_with_the_parser_message() {
     let dir = tempdir().expect("tempdir");
     std::fs::write(dir.path().join("rticx.toml"), "schema = 2\n").expect("write manifest");

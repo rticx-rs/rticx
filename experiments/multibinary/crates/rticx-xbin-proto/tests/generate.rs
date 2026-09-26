@@ -7,7 +7,8 @@
 //! intentionally changes).
 
 use rticx_xbin_proto::{
-    CodegenOptions, RtDependency, canonical_layout_text, generate_crate, layout_hash, parse_idl_str,
+    CodegenOptions, FileChange, RtDependency, canonical_layout_text, generate_crate, layout_hash,
+    parse_idl_str,
 };
 
 const GOLDEN_IDL: &str = r#"
@@ -116,6 +117,68 @@ fn write_to_creates_the_crate_tree() {
     generated.write_to(dir.path()).expect("write");
     assert!(dir.path().join("Cargo.toml").is_file());
     assert!(dir.path().join("src/lib.rs").is_file());
+}
+
+#[test]
+fn write_if_changed_creates_then_is_a_noop() {
+    let generated = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let first = generated.write_if_changed(dir.path()).expect("write");
+    assert!(first.changed());
+    assert!(!first.is_noop());
+    assert_eq!(first.files.len(), 2);
+    assert!(
+        first
+            .files
+            .iter()
+            .all(|file| file.change == FileChange::Created),
+        "{first:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("src/lib.rs")).expect("lib.rs"),
+        generated.file("src/lib.rs").expect("generated lib.rs")
+    );
+
+    let second = generated.write_if_changed(dir.path()).expect("write");
+    assert!(second.is_noop(), "{second:?}");
+    assert!(
+        second
+            .files
+            .iter()
+            .all(|file| file.change == FileChange::Unchanged),
+        "{second:?}"
+    );
+}
+
+#[test]
+fn write_if_changed_restores_tampered_files_only() {
+    let generated = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
+    let dir = tempfile::tempdir().expect("tempdir");
+    generated.write_if_changed(dir.path()).expect("write");
+
+    std::fs::write(dir.path().join("src/lib.rs"), "// stale\n").expect("tamper");
+
+    let status = generated.write_if_changed(dir.path()).expect("write");
+    assert!(status.changed());
+    assert_eq!(
+        status
+            .changed_files()
+            .map(|file| (file.path.as_str(), file.change))
+            .collect::<Vec<_>>(),
+        [("src/lib.rs", FileChange::Updated)]
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("src/lib.rs")).expect("lib.rs"),
+        generated.file("src/lib.rs").expect("generated lib.rs")
+    );
+
+    let cargo_toml = status
+        .files
+        .iter()
+        .find(|file| file.path == "Cargo.toml")
+        .expect("Cargo.toml status");
+    assert_eq!(cargo_toml.change, FileChange::Unchanged);
 }
 
 #[test]

@@ -1,0 +1,20 @@
+# Metadata fixture project (M1-T4).
+#
+# Standalone workspace, intentionally outside the experimental workspace: it
+# models a two-application `cargo xbin` project so the driver can be exercised
+# end to end on the host.
+#
+# - `app-m7` (bin `m7`, global core id 0) declares the `EncryptTask` sender stub;
+# - `app-m4` (bin `m4`, global core id 1) declares the `EncryptTask` receiver;
+# - `metadata-macro` is a minimal `#[app]` stand-in that runs only the
+#   cross-binary metadata pass: enough to write `<target>.xbin.json` under
+#   `RTICX_XBIN_META_OUT` without a target distribution. The real
+#   distributions run the full core pass and are exercised by the M3/M4
+#   fixtures.
+#
+# Commanded by `rticx_xbin_driver::sync` from
+# `crates/rticx-xbin-driver/tests/fixture.rs`.
+
+[workspace]
+resolver = "2"
+members = ["app-m7", "app-m4", "metadata-macro"]

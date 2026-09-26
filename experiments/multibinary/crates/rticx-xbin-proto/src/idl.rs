@@ -56,6 +56,18 @@ pub struct IpcTypes {
 }
 
 impl IpcTypes {
+    /// Returns an IDL with no types.
+    ///
+    /// Used by the driver when a project has no `ipc-types.toml` (and
+    /// therefore no cross-binary tasks).
+    pub fn empty() -> Self {
+        Self {
+            schema: SCHEMA_VERSION,
+            messages: BTreeMap::new(),
+            enums: BTreeMap::new(),
+        }
+    }
+
     /// Returns the IDL schema version (always [`SCHEMA_VERSION`] for parsed
     /// values).
     pub fn schema(&self) -> u32 {

@@ -37,7 +37,7 @@ directory until it finds `rticx.toml`.
 my-project/
 ├── rticx.toml            # project topology (implemented)
 ├── ipc-types.toml        # shared data types, IDL (implemented)
-├── ipc-types/            # generated crate (planned M1, kept in VCS)
+├── ipc-types/            # generated crate (implemented M1, kept in VCS)
 ├── .cargo/config.toml    # target triple, linker, runner (as usual)
 └── app-m7/, app-m4/      # one Cargo package per binary
 ```
@@ -46,8 +46,8 @@ my-project/
 
 ```text
 target/rticx-xbin/
-├── <app>.xbin.json       # per-application metadata (planned M1)
-└── system.json           # merged, validated, allocated system view (planned M1)
+├── <app>.xbin.json       # per-application metadata, written by `cargo xbin sync`
+└── system.json           # merged, validated, allocated system view
 ```
 
 ## 3. Writing `rticx.toml`
@@ -105,10 +105,13 @@ See [diagram 1](diagrams/01-project-topology.puml) for the same topology.
 
 ## 4. Writing `ipc-types.toml`
 
-*Implemented in M0:* `rticx_xbin_proto::{parse_idl_str, parse_idl_file}` plus
-the canonical [layout engine](architecture.md#6-memory-and-layout) checks the
-32-bit-safe subset. The `ipc-types/` crate generator exists in the proto crate;
-`cargo xbin sync` will invoke it from M1 on.
+*Implemented (M0 parser, M1 generation):* `rticx_xbin_proto::{parse_idl_str,
+parse_idl_file}` plus the canonical
+[layout engine](architecture.md#6-memory-and-layout) checks the 32-bit-safe
+subset. `cargo xbin sync` writes `ipc-types/` from this file: the generated
+crate contains the `#[repr(C)]` types, the `SIZE_*`/`ALIGN_*`/`OFF_*` layout
+constants, the `LAYOUT_HASH` and the compile-time layout assertions. Only
+files whose contents changed are rewritten, so an unchanged IDL is a no-op.
 
 ```toml
 schema = 1
@@ -142,9 +145,9 @@ discriminants in `0..=u32::MAX`.
 
 ## 5. Declaring cross-binary tasks
 
-*Planned (M1).* The syntax below is the proposal in
-[plan §6.4–6.5](../../../multibinary-multicore-plan.md#64-app-additions); it is
-confirmed when the metadata pass lands.
+*Syntax confirmed and implemented (M1-T3).* The extension pass parses both
+attributes and strips them (together with the `#[app]` extensions) before the
+core pass runs, so other passes and distributions never see them.
 
 Receiver binary (the task runs here):
 
@@ -162,32 +165,77 @@ Sender binary (lightweight stub; the name must match the receiver):
 
 ```rust
 #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-struct EncryptTask;
+struct EncryptTask;                 // optionally mirror the input type:
+                                    //
+                                    // impl CrossBinSpawn for EncryptTask {
+                                    //     type Input = ipc_types::EncryptReq;
+                                    // }
 ```
 
 `#[app(...)]` gains `core_ids = [g...]` (local → global mapping) and
-`external_cores = [g...]`; both are stripped by the extension pass. `core`
-and `spawned_by` always use **global** core ids.
+`external_cores = [g...]`; both are stripped by the extension pass. The
+confirmed argument rules:
+
+| Attribute | Key | Required | Meaning |
+|---|---|---|---|
+| `cross_bin_task` | `priority` | no (default `1`) | priority line on the receiver core |
+| | `capacity` | no (default `1`, `>= 1`) | pending inputs the FIFO holds |
+| | `core` | no (default `0`) | **local** core index running the task (`< cores`) |
+| | `spawned_by` | no | **global** ids of the cores allowed to spawn |
+| `cross_bin_spawn` | `core` | yes | **global** id of the target core that runs the task |
+| | `priority` | no (default `1`) | must match the receiver |
+| | `capacity` | no (default `1`, `>= 1`) | must match the receiver |
+
+A distribution that does **not** bind the extension pass never errors on these
+arguments: `core_ids` and `external_cores` show up as unknown `#[app]`
+arguments and only warn.
+
+Rejected with a precise error: unknown, duplicate or multi-segment keys;
+non-integer `priority`/`capacity`/`core`; `capacity = 0`; non-array
+`spawned_by`; a receiver without `impl CrossBinTask { type Input = … }`; a
+sender without `core`; a receiver `core` outside `0..cores`; `external_cores`
+overlapping the application's own `core_ids` or repeating an id; and either
+attribute on a non-struct item or both on one item.
 
 *TODO(M5-T3):* worked example, capacity/backpressure semantics, visibility
 rules, what happens on a rejected spawn (`Err(Some(input))`).
 
 ## 6. Building and running
 
-*Skeleton implemented in M0:*
+*Implemented through M1-T6:*
 
 ```bash
 cargo xbin --help     # CLI overview
-cargo xbin sync       # validate rticx.toml, create target/rticx-xbin/
-cargo xbin build      # sync, then build every application
+cargo xbin sync       # validate rticx.toml, collect <app>.xbin.json per application
+cargo xbin build      # sync, then build every application (builds land in M4)
 ```
 
-In M0 `sync` and `build` succeed as no-ops for a project without
-`rticx.toml`; once M1 lands they collect metadata, merge/validate the system
-view, allocate FIFO addresses, write `target/rticx-xbin/system.json` and
-regenerate `ipc-types/`. `build` always runs `sync` first; a plain
-`cargo build` after an explicit `sync` is supported, but fails with a
-topology-hash mismatch once sources changed until the next `sync`.
+`sync` parses `rticx.toml` and `ipc-types.toml`, creates
+`target/rticx-xbin/` and, for every `[[application]]`, runs
+`cargo clean -p <package>` followed by
+`cargo check -p <package> --bin <target>` with `RTICX_XBIN_META_OUT` pointing
+at the output directory. The `#[app]` macro writes `<target>.xbin.json`, which
+the driver reads back; a stale manifest is removed before each check, so an
+application that stops expanding its `#[app]` macro fails with a clear error.
+Without `rticx.toml`, `sync` and `build` stay no-ops.
+
+The collected manifests are then merged and validated (M1-T5): sender and
+receiver declarations must agree on name, target core, priority, capacity and
+input type; every `[[application]]`'s `core_ids`/`external_cores` must be
+consistent with `rticx.toml`; every referenced type must exist in the IDL; and
+the per-task FIFOs must fit their `(source → target)` region. The same
+deterministic pass allocates every FIFO address (8-byte aligned, plan order,
+depth `capacity + 1`); the first FIFO that does not fit names its task and
+region in the error. The sealed system view is written to
+`target/rticx-xbin/system.json` (M1-T6), and — when the project has an
+`ipc-types.toml` — the `ipc-types/` crate below the project root is
+generated/updated (M1-T7). `sync` prints one line per created or updated file,
+or `ipc-types is up to date` when nothing changed; since only changed files
+are rewritten, an unchanged IDL does not retrigger builds of the apps that
+depend on the crate. M4 then adds building the applications. `build` always
+runs `sync` first; a plain `cargo build` after an explicit `sync` is
+supported, but fails with a topology-hash mismatch once sources changed until
+the next `sync`.
 
 *TODO(M5-T3):* flashing/running per target, QEMU/Renode runners, cache/MPU
 setup checklist, expected boot order.
@@ -206,7 +254,33 @@ setup checklist, expected boot order.
 | ``key `0->0` connects core 0 to itself`` | regions are directional; declare `0->1` and `1->0` separately |
 | ``references unknown type `T` `` | declare `[message.T]` or `[enum.T]` in `ipc-types.toml` |
 | ``cyclic message reference: A -> B -> A`` | break the cycle; messages are stored inline |
+| ``message `FooBar` and message `Foo_Bar` would both generate the constant `SIZE_FOO_BAR` `` | rename one IDL type so the generated constants stay unique |
+| ``failed to write the generated `ipc-types` crate at `…` `` | fix the permissions or the conflicting path in the project root |
 
-*TODO(M1–M5):* merge/validation errors (sender/receiver mismatch, priority
-conflicts, region overflow, type not cross-core safe, not-ready target,
-doorbell failure) with causes and fixes.
+*Metadata collection errors (M1-T4):*
+
+| Message (excerpt) | Fix |
+|---|---|
+| `` `cargo clean --package x` failed `` | the package name in `[[application]]` must exist in the Cargo workspace |
+| `` `cargo check --package x --bin b` failed `` | fix the application's compile errors; `cargo check` diagnostics follow |
+| `` `cargo check` for package `x` did not write `.../<b>.xbin.json` `` | bind the cross-binary pass in the application's `#[app]` macro |
+
+*Merge/validation errors (M1-T5):*
+
+| Message (excerpt) | Fix |
+|---|---|
+| ``application `x` has no manifest`` | the `#[app]` macro of `x` must bind the cross-binary pass |
+| ``manifest for package `x` has no matching `[[application]]` `` | remove the stale manifest and re-run `cargo xbin sync` |
+| ``rticx.toml maps N core(s) for `x`, but its manifest declares `cores = M` `` | keep `core_ids` in `rticx.toml` and `#[app(cores = …)]` in sync |
+| ``… declares `core_ids = …`, but rticx.toml maps …`` | `rticx.toml` is authoritative; reconcile the mapping |
+| ``references global core id N … but no application declares it`` | fix the id or declare the owning application |
+| ``sender `T` … has no matching `#[cross_bin_task]` receiver`` | declare the receiver in the target binary |
+| ``receiver `T` … is never spawned`` | add a `#[cross_bin_spawn]` stub or remove the receiver |
+| ``sender `T` … declares `priority`/`capacity` …, but the receiver declares …`` | mirror the receiver's values in every sender stub |
+| ``task `T` … uses type `Y`, which is not declared in `ipc-types.toml` `` | declare `[message.Y]`/`[enum.Y]` or fix the path |
+| ``tasks `A` … and `B` … share priority P on core N`` | give tasks from different source cores disjoint priority lines |
+| ``task `T` needs a `S->T` region`` | add that direction to `[ipc.regions]` |
+| ``the `S->T` region has N bytes, but its task FIFOs need M`` | enlarge the region or lower task `capacity` |
+
+*TODO(M3–M5):* runtime errors (target not ready, doorbell failure), cache/MPU
+misconfiguration and the remaining troubleshooting guide.

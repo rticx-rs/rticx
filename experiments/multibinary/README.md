@@ -13,7 +13,7 @@ repository later.
 
 | Crate | Purpose |
 |---|---|
-| `rticx-xbin-proto` | IDL parser, canonical layout engine, JSON schema + validation |
+| `rticx-xbin-proto` | IDL parser, canonical layout engine, merge + validation, JSON schemas, canonical FIFO image |
 | `rticx-xbin-pass` | `RticPass` implementation (metadata mode + codegen mode) |
 | `rticx-xbin-rt` | Atomic cross-core SPSC queue, marker trait, ready/epoch helpers |
 | `rticx-xbin-driver` | `cargo-xbin` subcommand (`sync`, `build`) |
@@ -23,6 +23,17 @@ repository later.
 
 - [docs/](docs/README.md) — user guide outline, architecture outline and
   PlantUML sources (rendered manually).
+
+## Fixtures
+
+`fixtures/metadata/` is a standalone two-application project (its own
+`[workspace]`, so it stays outside this workspace's lockfile and target dir).
+`app-m7` declares the sender stub, `app-m4` the receiver, and
+`metadata-macro` is a minimal `#[app]` stand-in that runs only the
+cross-binary metadata pass. `cargo xbin sync` is exercised over it end to end
+(metadata collection, merge/validation, `system.json` emission and
+`ipc-types/` generation) by the driver's `tests/fixture.rs`; the generated
+`ipc-types/` crate is checked in, like in a real project.
 
 ## Build & test
 

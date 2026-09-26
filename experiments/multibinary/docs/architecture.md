@@ -48,12 +48,12 @@ core
      rticx-xbin-driver: cargo-xbin sync/build (M0 skeleton, M1 pipeline)
 ```
 
-| Crate | State in M0 |
+| Crate | State (M1) |
 |---|---|
-| `rticx-xbin-proto` | IDL parse/validate, layout engine, crate generator, `rticx.toml` parse/validate |
-| `rticx-xbin-driver` | CLI skeleton: project discovery, `sync`/`build` dispatch, output layout |
-| `rticx-xbin-pass` | empty (M1) |
-| `rticx-xbin-rt` | empty (M2) |
+| `rticx-xbin-proto` | IDL parse/validate, layout engine, crate generator with change-detecting write (`GeneratedCrate::write_if_changed`), `rticx.toml` parse/validate, `Hash64`, `system.json` / manifest schemas, merge + validation + FIFO allocation, `system_view` emission and the canonical FIFO image (`fifo`) |
+| `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `ipc-types` generation with change detection; `build` = `sync` for now (app builds in M4) |
+| `rticx-xbin-pass` | metadata mode: `#[app]` additions and `#[cross_bin_task]`/`#[cross_bin_spawn]` syntax confirmed and stripped (M1-T3), `<target>.xbin.json` emit (codegen lands in M3) |
+| `rticx-xbin-rt` | marker trait `CrossCoreMessage` (FIFO lands in M2) |
 | `rticx-xbin-mock` | empty (M2) |
 
 No public API of the root workspace changes in v1; the generated code only
@@ -61,7 +61,24 @@ uses the frozen external `task_trait` surface.
 
 ## 3. Phase 1: `cargo xbin sync`
 
-*Planned (M1); M0 validates `rticx.toml` and creates the output directory.*
+*Landed through M1-T7:* `sync` parses `rticx.toml` and `ipc-types.toml`, lays
+out `target/rticx-xbin/` and, for every `[[application]]`, runs
+`cargo clean -p <package>` + `cargo check -p <package> --bin <target>` with
+`RTICX_XBIN_META_OUT=<output dir>`; the pass writes `<target>.xbin.json`, which
+`sync` reads back. The manifests are then merged and validated by
+`rticx_xbin_proto::merge_project` (M1-T5): it resolves global core ids, checks
+the sender/receiver match, priority disjointness, type existence and region
+fit, and yields a `MergedProject` with the deterministic per-task FIFO
+allocations. `rticx_xbin_proto::system_view` (M1-T6) then emits the sealed
+`system.json` view and `sync` writes it. When the project has an
+`ipc-types.toml`, `rticx_xbin_proto::generate_crate` builds the generated
+crate in memory and `GeneratedCrate::write_if_changed` (M1-T7) writes only the
+files whose contents differ; the `rticx-xbin-rt` dependency is a path relative
+to `<project root>/ipc-types`, so the checked-in crate is portable. An
+unchanged IDL therefore touches nothing and the CLI reports
+`ipc-types is up to date` (or `created`/`updated` per file). The checked-in
+`fixtures/metadata` project covers this end to end, including the checked-in
+generated crate.
 
 1. Parse `rticx.toml` (`rticx-xbin-proto::parse_project_file`).
 2. Per application: `cargo clean -p <package>` (metadata env vars are
@@ -74,19 +91,25 @@ uses the frozen external `task_trait` surface.
    - sender stub ↔ receiver task (name, input type, capacity, target priority);
    - per-target priority lines disjoint across remote sources and local tasks;
    - referenced types exist and are cross-core safe;
-   - per-task FIFO bytes fit the `(source → target)` region;
    - global core ids consistent across apps and `rticx.toml`.
-5. Allocate FIFO offsets deterministically: sort by
+5. Allocate FIFO offsets deterministically (inside the merge): sort by
    `(source_global, target_global, task_name)`, align each FIFO to 8 bytes,
-   depth = `capacity + 1`, hard error on region overflow.
-6. Write `target/rticx-xbin/system.json`.
-7. Generate/update `ipc-types/` and report changes.
+   depth = `capacity + 1`; the first FIFO that does not fit fails with the
+   task and region named in the error.
+6. Write `target/rticx-xbin/system.json`
+   (`rticx_xbin_proto::system_view`: copies the merged view, computes the
+   doorbell lines, sets `layout_hash` and seals `topology_hash`).
+7. Generate/update `ipc-types/` and report changes (M1-T7).
 
 `system.json` shape (schema 1): `schema_version`, `rticx_generation`,
-`topology_hash`, `cores`, `types`, `tasks` (with per-task `fifo`), `regions`,
-`doorbells` — see [plan §7.2](../../../multibinary-multicore-plan.md#72-systemjson-contents).
-*TODO(M1-T1): link the canonical serde types once implemented, then make this
-section the schema reference.*
+`topology_hash`, `layout_hash`, `apps`, `cores`, `types`, `tasks` (with
+per-task `fifo`), `regions`, `doorbells` — see
+[plan §7.2](../../../multibinary-multicore-plan.md#72-systemjson-contents).
+The canonical serde types are `rticx_xbin_proto::system::SystemView` (with
+`canonical_topology_text`, `seal` and `verify_topology_hash`); the
+per-application manifest is `rticx_xbin_proto::manifest::AppManifest`
+(`<target>.xbin.json`, written by `rticx-xbin-pass` in metadata mode). This
+section is the human-readable reference for both.
 
 ## 4. Phase 2: `cargo xbin build`
 
@@ -122,7 +145,11 @@ dep-info rebuilds when the file changes.
 ## 6. Memory and layout
 
 - One region per `(source, target)` direction, with per-core base views
-  (aliases allowed); one FIFO per cross-binary task inside it.
+  (aliases allowed); one FIFO per cross-binary task inside it. The canonical
+  in-region image (two 32-byte-padded ring indices, then the element payload,
+  8-byte FIFO alignment, depth `capacity + 1`) and the size math live in
+  `rticx_xbin_proto::fifo`; the phase-1 merge checks the FIFOs fit their
+  region.
 - Canonical layout: `repr(C)`, little-endian, natural alignment capped at 4;
   `bool`/pointers/64-bit scalars rejected by the IDL subset.
 - Runtime FIFO: atomic SPSC ring, head/tail as `AtomicUsize` (Release publish
@@ -183,8 +210,6 @@ layout checks (`thumbv7em-none-eabihf`, `thumbv6m-none-eabi`, optionally
 
 ## 12. Open questions
 
-- Task syntax details (`#[cross_bin_task]` / `#[cross_bin_spawn]`) are a
-  proposal until M1.
 - Auto-generating sender stubs from receiver declarations (later relaxation).
 - `Producer` shared resource replacing `cross_spawn` for SRP locking.
 - Async and cross-binary locks are explicitly out of scope for v1.

@@ -92,6 +92,88 @@ impl GeneratedCrate {
         }
         Ok(())
     }
+
+    /// Writes below `root` only the files whose contents differ from disk.
+    ///
+    /// Files that are already byte-identical are left untouched, so an
+    /// unchanged IDL neither bumps modification times nor triggers rebuilds of
+    /// dependents. The per-file outcome is returned for reporting.
+    pub fn write_if_changed(&self, root: &Path) -> io::Result<CrateStatus> {
+        let mut status = CrateStatus {
+            files: Vec::with_capacity(self.files.len()),
+        };
+        for file in &self.files {
+            let path = root.join(&file.path);
+            let change = match std::fs::read_to_string(&path) {
+                Ok(existing) if existing == file.contents => FileChange::Unchanged,
+                Ok(_) => {
+                    std::fs::write(&path, &file.contents)?;
+                    FileChange::Updated
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&path, &file.contents)?;
+                    FileChange::Created
+                }
+                Err(error) => return Err(error),
+            };
+            status.files.push(FileStatus {
+                path: file.path.clone(),
+                change,
+            });
+        }
+        Ok(status)
+    }
+}
+
+/// What happened to one generated file during
+/// [`GeneratedCrate::write_if_changed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileChange {
+    /// The file did not exist and was written.
+    Created,
+    /// The file existed with different contents and was overwritten.
+    Updated,
+    /// The file already had exactly the generated contents and was left
+    /// untouched.
+    Unchanged,
+}
+
+/// Per-file outcome of [`GeneratedCrate::write_if_changed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStatus {
+    /// Path relative to the generated crate root, for example `src/lib.rs`.
+    pub path: String,
+    /// What happened to the file.
+    pub change: FileChange,
+}
+
+/// Outcome of [`GeneratedCrate::write_if_changed`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CrateStatus {
+    /// One entry per generated file, in generation order.
+    pub files: Vec<FileStatus>,
+}
+
+impl CrateStatus {
+    /// Returns `true` when at least one file was created or updated.
+    pub fn changed(&self) -> bool {
+        self.changed_files().next().is_some()
+    }
+
+    /// Returns `true` when every generated file was already up to date.
+    pub fn is_noop(&self) -> bool {
+        !self.changed()
+    }
+
+    /// Iterates over the files that were created or updated.
+    pub fn changed_files(&self) -> impl Iterator<Item = &FileStatus> {
+        self.files
+            .iter()
+            .filter(|file| file.change != FileChange::Unchanged)
+    }
 }
 
 /// Generates the complete `ipc-types` crate for `idl`.

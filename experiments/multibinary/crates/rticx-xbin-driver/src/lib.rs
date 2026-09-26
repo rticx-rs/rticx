@@ -3,13 +3,11 @@
 //! The driver is the single merger and address allocator of the multi-binary
 //! pipeline (see `multibinary-multicore-plan.md` §7 and §8):
 //!
-//! - `cargo xbin sync`: phase 1 -- collect per-application metadata, merge and
-//!   validate the system view, allocate FIFO addresses, write `system.json`
-//!   and generate the `ipc-types` crate;
+//! - `cargo xbin sync`: phase 1 -- collect per-application metadata, merge
+//!   and validate the system view (M1-T5), allocate the per-task FIFO
+//!   addresses and emit `target/rticx-xbin/system.json` (M1-T6), and
+//!   generate/update the `ipc-types` crate (M1-T7);
 //! - `cargo xbin build`: `sync`, then build every application.
-//!
-//! M0-T6 provides the CLI skeleton and the `target/rticx-xbin/` output
-//! layout; the metadata pipeline itself lands in M1/M4.
 
 mod cli;
 mod commands;
@@ -19,11 +17,14 @@ mod project;
 use std::ffi::OsString;
 
 use clap::Parser;
+use rticx_xbin_proto::FileChange;
 
 pub use cli::{Cli, Command};
-pub use commands::{BuildOutcome, SyncOutcome, build, sync};
+pub use commands::{BuildOutcome, IpcTypesOutcome, SyncOutcome, build, sync};
 pub use error::DriverError;
-pub use project::{OUTPUT_DIR, PROJECT_MANIFEST, find_project_root, output_dir};
+pub use project::{
+    IDL_MANIFEST, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE, find_project_root, output_dir,
+};
 
 /// Name under which Cargo invokes this binary (`cargo xbin`).
 pub const SUBCOMMAND: &str = "xbin";
@@ -65,13 +66,41 @@ fn run(cli: Cli) -> Result<(), DriverError> {
     let project_root = find_project_root(&current_dir).unwrap_or(current_dir);
     match cli.command {
         Command::Sync => {
-            sync(&project_root)?;
+            let outcome = sync(&project_root)?;
+            report_ipc_types(&outcome);
             Ok(())
         }
         Command::Build => {
-            build(&project_root)?;
+            let outcome = build(&project_root)?;
+            report_ipc_types(&outcome.sync);
             Ok(())
         }
+    }
+}
+
+/// Reports generated `ipc-types` changes (M1-T7) on standard error, like
+/// Cargo's own progress output.
+///
+/// Library callers inspect [`SyncOutcome::ipc_types`] instead; this is pure
+/// presentation.
+fn report_ipc_types(outcome: &SyncOutcome) {
+    let Some(ipc_types) = &outcome.ipc_types else {
+        return;
+    };
+    let dir = ipc_types
+        .path
+        .strip_prefix(&outcome.project_root)
+        .unwrap_or(&ipc_types.path);
+    for file in &ipc_types.status.files {
+        let path = dir.join(&file.path);
+        match file.change {
+            FileChange::Created => eprintln!("[cargo-xbin] created {}", path.display()),
+            FileChange::Updated => eprintln!("[cargo-xbin] updated {}", path.display()),
+            FileChange::Unchanged => {}
+        }
+    }
+    if ipc_types.status.is_noop() {
+        eprintln!("[cargo-xbin] {} is up to date", dir.display());
     }
 }
 

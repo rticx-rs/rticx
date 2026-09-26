@@ -19,12 +19,11 @@ Status legend:
   [M5-T3](../../../multibinary-multicore-plan.md#m5--multi-sourcetarget-readyepoch-complete-docs).
 - **stub** — placeholder with a `TODO(M5-T4)` marker.
 
-## Status snapshot (M0)
+## Status snapshot (M1, through M1-T7)
 
-- `rticx.toml` parsing/validation and the `cargo xbin` CLI skeleton work:
-  `cargo xbin sync` validates the project manifest and creates
-  `target/rticx-xbin/`.
-- `ipc-types.toml` parsing, the canonical layout engine and the `ipc-types`
-  crate generator work in `rticx-xbin-proto`.
-- Metadata collection, `system.json`, generated code and the fixture project
-  are still pending (M1+), so parts of the guide are marked *planned*.
+- `cargo xbin sync` validates `rticx.toml`, collects `<app>.xbin.json`
+  per application, merges/validates the project, allocates the per-task FIFOs,
+  emits the sealed `target/rticx-xbin/system.json` and generates/updates the
+  `ipc-types/` crate, rewriting only changed files.
+- Phase-2 codegen (M3) and building the applications (M4) are still pending,
+  so parts of the guide are marked *planned*.
