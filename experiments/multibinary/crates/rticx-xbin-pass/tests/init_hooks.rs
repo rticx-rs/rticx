@@ -127,8 +127,20 @@ impl XbinPassBackend for TestBackend {
         template
     }
 
-    fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
-        format_ident!("XbinDoorbell{target}_{line}")
+    fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident {
+        format_ident!("XbinRouter{source}To{target}")
+    }
+
+    fn read_doorbell_msg_fn(
+        &self,
+        target: u32,
+        source: u32,
+        mut template: syn::ItemFn,
+    ) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __rticx_xbin_backend().take_message(#source, #target)
+        });
+        template
     }
 
     fn doorbell_irq(&self, target: u32, line: u32) -> u16 {

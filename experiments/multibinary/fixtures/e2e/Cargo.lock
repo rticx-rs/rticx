@@ -267,6 +267,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rticx-spsc"
+version = "0.2.0"
+
+[[package]]
 name = "rticx-xbin-mock"
 version = "0.1.0"
 dependencies = [
@@ -300,6 +304,7 @@ name = "rticx-xbin-rt"
 version = "0.1.0"
 dependencies = [
  "portable-atomic",
+ "rticx-spsc",
 ]
 
 [[package]]

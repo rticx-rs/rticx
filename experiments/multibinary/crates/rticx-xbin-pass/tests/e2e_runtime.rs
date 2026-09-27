@@ -127,8 +127,24 @@ impl XbinPassBackend for TestBackend {
         template
     }
 
-    fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
-        format_ident!("__xbin_doorbell_{target}_{line}")
+    fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident {
+        format_ident!("__xbin_router_{source}_{target}")
+    }
+
+    fn read_doorbell_msg_fn(
+        &self,
+        target: u32,
+        source: u32,
+        mut template: syn::ItemFn,
+    ) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __rticx_xbin_backend().take_message(#source, #target)
+        });
+        template
+    }
+
+    fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
+        Some(syn::parse_quote!(__XbinInterrupt))
     }
 
     fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
@@ -184,9 +200,11 @@ fn sender_args() -> TokenStream {
 ///
 /// The receiver runs through the full core pass, so the generated entry boots
 /// the application (init, init hooks, idle). The driver runs after the boot
-/// sequence, from the idle task, and calls the generated doorbell ISR
-/// directly — the mock backend has no interrupt controller, so the idle task
-/// stands in for the hardware that would invoke it.
+/// sequence, from the idle task, and calls the generated **router ISR**
+/// directly; the router pends the line dispatcher through the stand-in
+/// `__rticx_local_irq_pend`, which runs the dispatcher ISR synchronously —
+/// the mock backend has no interrupt controller, so the idle task stands in
+/// for the hardware that would invoke it (M6.5-T3).
 fn receiver_module() -> syn::ItemMod {
     syn::parse_quote! {
         pub mod receiver_app {
@@ -196,6 +214,24 @@ fn receiver_module() -> syn::ItemMod {
 
             fn __rticx_xbin_backend() -> rticx_xbin_mock::MockBackend {
                 crate::backend_for(1)
+            }
+
+            /// Fixture interrupt enum of the line dispatcher, reached by the
+            /// generated router through `custom_interrupt_path`, plus the
+            /// stand-in pend function `rticx-sw-pass` would generate on a real
+            /// distribution. The mock has no interrupt controller, so the pend
+            /// runs the dispatcher ISR synchronously (tail-chaining).
+            #[allow(non_camel_case_types)]
+            pub enum __XbinInterrupt {
+                IRQ0,
+            }
+
+            fn __rticx_local_irq_pend(irq: __XbinInterrupt) {
+                match irq {
+                    // The dispatcher's `binds = IRQ0` makes the core pass
+                    // generate the handler under that interrupt name.
+                    __XbinInterrupt::IRQ0 => IRQ0(),
+                }
             }
 
             fn request(addr: u32) -> ipc_types::EncryptReq {
@@ -253,27 +289,29 @@ fn receiver_module() -> syn::ItemMod {
                     assert!(backend.shared_state().is_ready(0), "the owner core is ready");
                     assert!(backend.shared_state().is_ready(1), "the receiver core is ready");
 
-                    // -- spawn enqueues and rings; only the dispatcher executes
+                    // -- spawn enqueues and rings; the router wakes the line
+                    // dispatcher, which executes the task
                     crate::sender_app::EncryptTask::cross_spawn(request(1))
                         .expect("the first spawn enqueues");
-                    assert_eq!(
-                        backend.take_message(0, 1),
-                        Some(1),
+                    assert!(
+                        backend.router_wait(0, 1, std::time::Duration::from_millis(10)),
                         "the ring publishes the task id on the pair doorbell (M6.5-T2)"
                     );
                     assert!(
                         RECEIVED.lock().expect("the receiver log").is_empty(),
-                        "nothing executes before the dispatcher runs"
+                        "nothing executes before the router runs"
                     );
 
-                    __xbin_doorbell_1_0();
+                    __xbin_router_0_1();
                     assert_eq!(
                         RECEIVED.lock().expect("the receiver log").as_slice(),
                         &[request(1)],
-                        "the dispatcher executed the spawned input"
+                        "spawn -> ring -> router -> pended dispatcher -> exec"
                     );
 
-                    // -- a full FIFO (capacity 2) rejects the third input
+                    // -- a full FIFO (capacity 2) rejects the third input; the
+                    // two successful rings coalesce on the pair doorbell and
+                    // one router run drains both FIFO elements
                     crate::sender_app::EncryptTask::cross_spawn(request(2))
                         .expect("the second spawn enqueues");
                     crate::sender_app::EncryptTask::cross_spawn(request(3))
@@ -284,18 +322,41 @@ fn receiver_module() -> syn::ItemMod {
                         "a full FIFO returns the input to the spawner"
                     );
 
-                    __xbin_doorbell_1_0();
+                    __xbin_router_0_1();
                     assert_eq!(
                         RECEIVED.lock().expect("the receiver log").as_slice(),
                         &[request(1), request(2), request(3)],
-                        "the dispatcher drains in FIFO order"
+                        "coalesced notifications lose no spawns"
+                    );
+
+                    // -- a duplicate notification is idempotent: the dispatcher
+                    // finds an empty FIFO and is a no-op
+                    backend
+                        .doorbell_send(0, 1, 1)
+                        .expect("the mock doorbell accepts the id");
+                    __xbin_router_0_1();
+                    assert_eq!(
+                        RECEIVED.lock().expect("the receiver log").len(),
+                        3,
+                        "a duplicate id loses no input and adds none"
+                    );
+
+                    // -- unknown ids are ignored
+                    backend
+                        .doorbell_send(0, 1, 99)
+                        .expect("the mock doorbell accepts the id");
+                    __xbin_router_0_1();
+                    assert_eq!(
+                        RECEIVED.lock().expect("the receiver log").len(),
+                        3,
+                        "the router ignores unknown task ids"
                     );
 
                     // -- the ring wraps: depth (capacity + 1) slots are reused
                     for addr in 10..16 {
                         crate::sender_app::EncryptTask::cross_spawn(request(addr))
                             .expect("a wrapping spawn enqueues");
-                        __xbin_doorbell_1_0();
+                        __xbin_router_0_1();
                     }
                     assert_eq!(
                         RECEIVED.lock().expect("the receiver log").len(),
@@ -491,12 +552,20 @@ fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
         "receiver code generation failed: {receiver}"
     );
     assert!(
-        receiver.contains("__xbin_doorbell_1_0"),
-        "the doorbell ISR is missing: {receiver}"
+        receiver.contains("__RticxXbinRouter0To1"),
+        "the router is missing: {receiver}"
+    );
+    assert!(
+        receiver.contains("__rticx_xbin_read_0_1"),
+        "the read-doorbell function is missing: {receiver}"
     );
     assert!(
         receiver.contains("__RticxXbinDispatcher0To1P3"),
-        "the dispatcher is missing: {receiver}"
+        "the line dispatcher is missing: {receiver}"
+    );
+    assert!(
+        receiver.contains("__rticx_local_irq_pend"),
+        "the router does not pend through the software pass's function: {receiver}"
     );
 
     let project = dir.path().join("project");

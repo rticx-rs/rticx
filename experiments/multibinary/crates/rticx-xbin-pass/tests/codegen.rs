@@ -151,8 +151,20 @@ impl XbinPassBackend for TestBackend {
         template
     }
 
-    fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
-        format_ident!("XbinDoorbell{target}_{line}")
+    fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident {
+        format_ident!("XbinRouter{source}To{target}")
+    }
+
+    fn read_doorbell_msg_fn(
+        &self,
+        target: u32,
+        source: u32,
+        mut template: syn::ItemFn,
+    ) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __mock_xbin_backend().take_message(#source, #target)
+        });
+        template
     }
 
     fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
@@ -629,11 +641,13 @@ fn receiver_codegen_snapshot() {
         "{generated}"
     );
 
-    // ---- doorbell dispatcher ----
+    // ---- line dispatcher (M6.5-T3) ----
+    // The dispatcher is bound to the line's `ipc_dispatchers` entry, the same
+    // interrupt the router pends.
     assert_section_present(
         &generated,
         quote! {
-            #[task(binds = XbinDoorbell1_0, priority = 3, core = 0, init = generated)]
+            #[task(binds = IRQ0, priority = 3, core = 0, init = generated)]
             pub struct __RticxXbinDispatcher0To1P3;
         },
         "dispatcher task attribute",
@@ -645,25 +659,253 @@ fn receiver_codegen_snapshot() {
     );
     assert_section_present(
         &generated,
-        quote! { fn exec(&mut self) },
-        "dispatcher exec signature",
-    );
-    assert_section_present(
-        &generated,
         quote! { let __rticx_xbin_backend = __mock_xbin_backend(); },
         "dispatcher backend expression",
+    );
+
+    // The dispatcher drains its ready queue, then the FIFO of each popped
+    // task until empty (a duplicate notification is a no-op).
+    assert_section_present(
+        &generated,
+        quote! {
+            let mut __rticx_xbin_ready = unsafe { __rticx_xbin_ready_0_1_p3.split().1 };
+            while let Some(__rticx_xbin_task) = __rticx_xbin_ready.dequeue() {
+                match __rticx_xbin_task {
+                    __RticxXbinLine0To1P3::EncryptTask => {
+                        let __rticx_xbin_fifo = __rticx_xbin_fifo_EncryptTask(&__rticx_xbin_backend);
+                        unsafe {
+                            while let Some(input) = (*__rticx_xbin_fifo).dequeue() {
+                                ENCRYPT_TASK.assume_init_mut().exec(input);
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "dispatcher ready-queue drain loop",
+    );
+}
+
+#[test]
+fn receiver_codegen_line_queue_snapshot() {
+    let (_dir, path) = write_receiver_system();
+    let generated = generate_receiver_ok(&path);
+
+    // One task enum and one ready queue per line; the queue is sized to the
+    // sum of the line's task capacities plus the ring buffer's spare slot
+    // (M6.5-T3).
+    assert_section_present(
+        &generated,
+        quote! {
+            #[derive(Clone, Copy)]
+            pub enum __RticxXbinLine0To1P3 {
+                EncryptTask,
+            }
+        },
+        "line task enum",
     );
     assert_section_present(
         &generated,
         quote! {
-            let __rticx_xbin_fifo = __rticx_xbin_fifo_EncryptTask(&__rticx_xbin_backend);
-            unsafe {
-                while let Some(input) = (*__rticx_xbin_fifo).dequeue() {
-                    ENCRYPT_TASK.assume_init_mut().exec(input);
+            static mut __rticx_xbin_ready_0_1_p3:
+                rticx_xbin_rt::Queue<__RticxXbinLine0To1P3, 3usize> = rticx_xbin_rt::Queue::new();
+        },
+        "line ready queue",
+    );
+}
+
+#[test]
+fn receiver_codegen_router_snapshot() {
+    let (_dir, path) = write_receiver_system();
+    let generated = generate_receiver_ok(&path);
+
+    // ---- target-side read function (M6.5-T3) ----
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_xbin_read_0_1() -> Option<u32> {
+                __mock_xbin_backend().take_message(0u32, 1u32)
+            }
+        },
+        "read function with the backend-filled body",
+    );
+
+    // ---- router (M6.5-T3) ----
+    // One router per pair, bound to the pair doorbell at the highest line
+    // priority of the pair.
+    assert_section_present(
+        &generated,
+        quote! {
+            #[task(binds = XbinRouter0To1, priority = 3, core = 0, init = generated)]
+            pub struct __RticxXbinRouter0To1;
+        },
+        "router task attribute",
+    );
+    assert_section_present(
+        &generated,
+        quote! { impl RticTask for __RticxXbinRouter0To1 },
+        "router exec header",
+    );
+
+    // The router drains the pair's doorbell word, enqueues each id in its
+    // line's ready queue and pends the line dispatcher through the software
+    // pass's pend function; unknown ids are ignored.
+    assert_section_present(
+        &generated,
+        quote! {
+            while let Some(__rticx_xbin_task_id) = __rticx_xbin_read_0_1() {
+                match __rticx_xbin_task_id {
+                    1u32 => {
+                        unsafe {
+                            __rticx_xbin_ready_0_1_p3
+                                .split()
+                                .0
+                                .enqueue_unchecked(__RticxXbinLine0To1P3::EncryptTask);
+                        }
+                        __rticx_local_irq_pend(mypac::Interrupt::IRQ0);
+                    }
+                    _ => {}
                 }
             }
         },
-        "dispatcher drain loop",
+        "router drain and pend loop",
+    );
+}
+
+/// Receiver args for the two-line fixture: two cross lines on local core 0,
+/// listed in ascending `(source, priority)` order (M6.5-T1).
+fn two_line_receiver_args() -> TokenStream {
+    quote!(
+        device = mypac,
+        cores = 1,
+        core_ids = [1],
+        external_cores = [0],
+        ipc_dispatchers = [IRQ0, IRQ1]
+    )
+}
+
+/// Receiver module with two tasks on two priority lines of the same
+/// `(0 -> 1)` pair.
+fn two_line_receiver_app() -> syn::ItemMod {
+    syn::parse_quote! {
+        mod app {
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            struct AlphaTask;
+
+            impl RticSwTask for AlphaTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
+
+            #[sw_task(priority = 4, capacity = 1, spawn_by = 0)]
+            struct BetaTask;
+
+            impl RticSwTask for BetaTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
+        }
+    }
+}
+
+#[test]
+fn router_has_one_match_arm_per_view_task() {
+    let args = two_line_receiver_args();
+    let app_mod = two_line_receiver_app();
+    let view = system_with_patches(
+        |view| {
+            let tasks = view["tasks"].as_array_mut().expect("tasks");
+            tasks[0]["name"] = serde_json::json!("AlphaTask");
+            let mut beta = tasks[0].clone();
+            beta["id"] = serde_json::json!(2);
+            beta["name"] = serde_json::json!("BetaTask");
+            beta["priority"] = serde_json::json!(4);
+            beta["capacity"] = serde_json::json!(1);
+            beta["fifo"]["offset"] = serde_json::json!(64);
+            beta["fifo"]["depth"] = serde_json::json!(2);
+            tasks.push(beta);
+            view["doorbells"]
+                .as_array_mut()
+                .expect("doorbells")
+                .push(serde_json::json!({
+                    "source": 0,
+                    "target": 1,
+                    "priority": 4,
+                    "line": 1
+                }));
+        },
+        &[("app-m4", &args, &app_mod)],
+    );
+    let (_dir, path) = write_system(&view);
+    let pass = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
+    let (_, module) = pass
+        .run_pass(args, app_mod)
+        .expect("two-line generation succeeds");
+    let generated = module.to_token_stream().to_string();
+
+    // Two lines on the target: two dispatchers bound to distinct pool
+    // entries.
+    assert_section_present(
+        &generated,
+        quote! {
+            #[task(binds = IRQ0, priority = 3, core = 0, init = generated)]
+            pub struct __RticxXbinDispatcher0To1P3;
+        },
+        "priority-3 dispatcher",
+    );
+    assert_section_present(
+        &generated,
+        quote! {
+            #[task(binds = IRQ1, priority = 4, core = 0, init = generated)]
+            pub struct __RticxXbinDispatcher0To1P4;
+        },
+        "priority-4 dispatcher",
+    );
+
+    // One router per pair, at the highest line priority of the pair, with one
+    // match arm and one pend per view task (M6.5-T3).
+    assert_section_present(
+        &generated,
+        quote! {
+            #[task(binds = XbinRouter0To1, priority = 4, core = 0, init = generated)]
+            pub struct __RticxXbinRouter0To1;
+        },
+        "router at the maximum line priority",
+    );
+    assert_section_present(
+        &generated,
+        quote! {
+            1u32 => {
+                unsafe {
+                    __rticx_xbin_ready_0_1_p3
+                        .split()
+                        .0
+                        .enqueue_unchecked(__RticxXbinLine0To1P3::AlphaTask);
+                }
+                __rticx_local_irq_pend(mypac::Interrupt::IRQ0);
+            }
+        },
+        "AlphaTask match arm",
+    );
+    assert_section_present(
+        &generated,
+        quote! {
+            2u32 => {
+                unsafe {
+                    __rticx_xbin_ready_0_1_p4
+                        .split()
+                        .0
+                        .enqueue_unchecked(__RticxXbinLine0To1P4::BetaTask);
+                }
+                __rticx_local_irq_pend(mypac::Interrupt::IRQ1);
+            }
+        },
+        "BetaTask match arm",
     );
 }
 

@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5.5 and M6.5-T1/T2 complete; M6.5-T3 next, then M6)
+**Status:** in progress (M0–M5.5 and M6.5-T1/T2/T3 complete; M6.5-T4 next, then M6)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -856,7 +856,7 @@ multi-source acceptance is written against this model.
       calls it, keeping `Ok(())` / `Err(None)` / `Err(Some(input))`.
       *Acceptance:* codegen snapshot; mock ring writes the id into the pair's
       doorbell word; e2e.
-- [ ] **M6.5-T3** Router: `doorbell_interrupt(target, source) -> Ident` and
+- [x] **M6.5-T3** Router: `doorbell_interrupt(target, source) -> Ident` and
       `read_doorbell_msg_fn(target, source, template)` emit one router
       `#[task(binds = <pair IRQ>, priority = <max pair line priority>, core,
       init = generated)]`; its `exec` loops read → id → enqueue the task enum in

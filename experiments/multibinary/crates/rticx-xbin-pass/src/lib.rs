@@ -18,11 +18,13 @@
 //!     (`pub struct <Task>;`) plus FIFO views and `Task::cross_spawn` for
 //!     every view task whose `spawner_core` belongs to this application —
 //!     producer sources declare nothing;
-//!   - receiver side (M3-T2, M5.5): FIFO views, the
-//!     `SpawnInput: CrossCoreMessage` const assertion, one generated doorbell
-//!     dispatcher per `(source -> target, priority)` line, and the core
-//!     `#[task(..)]` shape on the native receiver structs themselves (see
-//!     `crate::parse::inject_receiver_tasks`);
+//!   - receiver side (M3-T2, M5.5, M6.5-T3): FIFO views, the
+//!     `SpawnInput: CrossCoreMessage` const assertion, one generated **line
+//!     dispatcher** per `(source -> target, priority)` line bound to its
+//!     `ipc_dispatchers` entry, one **doorbell router** per
+//!     `(source -> target)` pair routing task ids to the line ready queues,
+//!     and the core `#[task(..)]` shape on the native receiver structs
+//!     themselves (see `crate::parse::inject_receiver_tasks`);
 //!   - init hooks (M3-T3): `__rticx_xbin_configure_shared_memory` on every
 //!     core, `__rticx_xbin_init_shared` on the application owning the
 //!     project's owner core, and `__rticx_xbin_mark_ready_core<N>` on every
@@ -338,6 +340,7 @@ impl RticPass for XbinPass {
                 &view,
                 application,
                 &decls.receivers,
+                &extensions,
                 self.backend.as_deref(),
             )?);
 

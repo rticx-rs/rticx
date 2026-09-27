@@ -119,6 +119,12 @@ pub(crate) struct AppExtensions {
     /// Parsed and validated by `rticx-core` (M5), which owns `core_ids`; this
     /// pass only reads the mapping (and leaves the key in the arguments).
     pub core_ids: Vec<u32>,
+    /// Resolved `device` PAC paths, one per local core (`pacs[core]`).
+    ///
+    /// The router pends its line dispatchers through the same interrupt type
+    /// the software pass uses: `pacs[core]::Interrupt` unless the backend
+    /// provides a `custom_interrupt_path` (M6.5-T3).
+    pub pacs: Vec<syn::Path>,
     /// `external_cores`, empty when not declared.
     pub external_cores: Vec<u32>,
     /// Per-local-core `ipc_dispatchers` interrupt lines (M6.5).
@@ -159,6 +165,7 @@ pub(crate) fn parse_app_args(args: TokenStream) -> syn::Result<(AppExtensions, T
         ));
     }
     let core_ids = app_args.core_ids;
+    let pacs = app_args.pacs;
 
     let mut attr = parse_attr_tokens(args, format_ident!("app"))?;
 
@@ -193,6 +200,7 @@ pub(crate) fn parse_app_args(args: TokenStream) -> syn::Result<(AppExtensions, T
     let extensions = AppExtensions {
         cores,
         core_ids,
+        pacs,
         external_cores,
         ipc_dispatchers,
     };
@@ -918,6 +926,7 @@ mod tests {
         AppExtensions {
             cores,
             core_ids: (0..cores).collect(),
+            pacs: (0..cores).map(|_| syn::parse_quote!(pac)).collect(),
             external_cores: Vec::new(),
             ipc_dispatchers,
         }

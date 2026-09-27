@@ -14,6 +14,11 @@
 //!   [`fifo`] for the in-region image and the memory/ordering rules;
 //! - [`SharedState`] — the shared ready bitmap and epoch word used for boot
 //!   coordination and peer-reset detection. See [`state`] for the protocol;
+//! - [`Queue`] — the core-local SPSC queue behind the generated line ready
+//!   queues: the target's router produces task notifications, its line
+//!   dispatcher consumes them (M6.5-T3). It is the same queue type the
+//!   software pass uses, re-exported so generated code reaches it through one
+//!   path;
 //! - [`backend`] — the [`CrossBinBackend`] contract a distribution
 //!   implements for its IPC regions, doorbells, core identity and
 //!   cache/MPU policy; the in-tree `rticx-xbin-mock` implements it for host
@@ -27,6 +32,7 @@ pub mod state;
 
 pub use backend::{CrossBinBackend, DoorbellError, IpcRegion};
 pub use fifo::{Consumer, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer};
+pub use rticx_spsc::Queue;
 pub use state::{MAX_CORES, SharedState};
 
 /// Marker trait for data types that may travel through cross-core shared

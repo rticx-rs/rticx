@@ -27,17 +27,29 @@
 //!     - `Err(Some(input))`: nothing was enqueued (the FIFO is full, the caller
 //!       does not run on the expected core, …); retry later or raise `capacity`.
 //! - for every native `#[sw_task]` cross-binary receiver of this application
-//!   (M3-T2, M5.5):
+//!   (M3-T2, M5.5, M6.5-T3):
 //!   - a hidden **FIFO view** helper like the sender's, but resolving the
 //!     consumer view of the region (`base_from_target`);
 //!   - a const assertion that the receiver's `<Task as
 //!     RticSwTask>::SpawnInput` implements `rticx_xbin_rt::CrossCoreMessage`,
 //!     so the guarantee lives in generated code instead of the trait
 //!     definition;
-//!   - one generated **dispatcher** task per doorbell line: a hardware task
-//!     bound to the distribution's doorbell IRQ at the line's priority, whose
-//!     `exec` drains the FIFOs of the line directly (single consumer) and
-//!     calls the receiver task's `exec(input)`.
+//!   - one generated **line dispatcher** per `(source, target, priority)`
+//!     line: a hardware task bound to the line's `ipc_dispatchers` entry at
+//!     the line's priority, whose `exec` drains the line's ready queue and,
+//!     per popped task, that task's FIFO until empty (a duplicate
+//!     notification finds an empty FIFO and is a no-op), then calls the
+//!     receiver task's `exec(input)`;
+//!   - one generated **doorbell router** per `(source, target)` pair: a
+//!     hardware task bound to the pair's doorbell IRQ at the highest line
+//!     priority of the pair, whose `exec` loops reading task ids from the
+//!     pair's doorbell, enqueues each task in its line's ready queue and
+//!     pends that line's dispatcher through the software pass's
+//!     `__rticx_local_irq_pend[_core{N}]`; unknown ids are ignored;
+//!   - the target-side read function
+//!     `__rticx_xbin_read_{source}_{target}()`, whose body is the
+//!     distribution's transport, filled through
+//!     [`XbinPassBackend::read_doorbell_msg_fn`].
 //!
 //! The receiver structs themselves are turned into framework tasks by
 //! [`crate::parse::inject_receiver_tasks`]: `#[task(priority = …,
@@ -71,8 +83,9 @@
 //! The enqueue happens inside `__rticx_interrupt_free`, the v1 sender-side
 //! lock: the transport itself is kept independent of the lock mechanism, so a
 //! future `Producer` shared-resource API (SRP) can replace it in one place.
-//! The dispatcher runs under the doorbell interrupt, so the consumer side
-//! needs no lock: the SPSC discipline gives it the only `dequeue` call.
+//! The consumer side needs no lock: each FIFO has one producer core and one
+//! line dispatcher, which runs under its line interrupt at a priority no
+//! higher than the router that feeds its ready queue (M6.5-T3).
 //!
 //! The generated code only uses the frozen public surface of `rticx-core`
 //! (`__rticx_interrupt_free`, `main_injection`), the generated `ipc-types` and
@@ -88,9 +101,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use rticx_core::parser::ast::uppercase_ident;
 use rticx_core::rticx_traits::HWT_TRAIT_TY;
-use rticx_xbin_proto::{
-    AppEntry, DoorbellEntry, Hash64, ReceiverDecl, SystemView, TaskEntry, simple_type_name,
-};
+use rticx_xbin_proto::{AppEntry, Hash64, ReceiverDecl, SystemView, TaskEntry, simple_type_name};
 use syn::{Item, ItemMod, LitInt, LitStr, Type};
 
 use crate::parse::AppExtensions;
@@ -148,21 +159,51 @@ pub trait XbinPassBackend {
     /// it to `Err(None)`.
     fn ring_doorbell_fn(&self, source: u32, target: u32, template: syn::ItemFn) -> syn::ItemFn;
 
-    /// Identifier of the interrupt handler bound to doorbell `line` of
-    /// `target` — the receiver dispatcher's ISR.
+    /// Identifier of the interrupt handler bound to the `(source -> target)`
+    /// doorbell — the target's router ISR (M6.5-T3).
     ///
-    /// The generated dispatcher is a `#[task(binds = <ident>, …)]`, so the
-    /// identifier must resolve inside the `#[app]` module (typically a PAC
-    /// interrupt name the distribution re-exports or imports there).
-    fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident;
+    /// One router is generated per pair; it is a `#[task(binds = <ident>, …)]`
+    /// at the highest priority line of the pair, so the identifier must
+    /// resolve inside the `#[app]` module (typically a PAC interrupt name the
+    /// distribution re-exports or imports there).
+    fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident;
 
-    /// Numeric IRQ of the interrupt handler `dispatcher_irq(target, line)`
-    /// names.
+    /// Emits the target-side read function of the `(source -> target)`
+    /// doorbell pair (M6.5-T3).
+    ///
+    /// The pass generates one read function per pair this application
+    /// receives into and hands a template with the documented signature
+    ///
+    /// ```ignore
+    /// fn __rticx_xbin_read_{source}_{target}() -> Option<u32>
+    /// ```
+    ///
+    /// to this method. The implementation returns the next pending task id of
+    /// the pair's doorbell, or `None` when the doorbell is empty; the router
+    /// drains it in a loop and ignores unknown ids.
+    fn read_doorbell_msg_fn(&self, target: u32, source: u32, template: syn::ItemFn) -> syn::ItemFn;
+
+    /// Custom path to the interrupt type used for dispatchers on `core`.
+    ///
+    /// The generated router pends a line dispatcher as
+    /// `#pend_fn(#interrupt_type::#ipc_dispatchers_entry)`, so the returned
+    /// path must name a **type** whose variants or associated constants match
+    /// the `ipc_dispatchers` entries. Return `None` to use the application's
+    /// PAC path `pacs[core]::Interrupt`.
+    ///
+    /// A distribution must return the same path from this method and from
+    /// `SwPassBackend::custom_interrupt_path`, so the router and the software
+    /// pass's `__rticx_local_irq_pend` agree on the interrupt enum.
+    // TODO(extract): mirrors `rticx_sw_pass::SwPassBackend::custom_interrupt_path`.
+    fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
+        None
+    }
+
+    /// Numeric IRQ of the doorbell line `line` of `target`.
     ///
     /// Used by the init hook of `target`'s application to arm the line
     /// (`CrossBinBackend::doorbell_setup`) before the core is marked ready
-    /// (M3-T3). It must denote the same interrupt as
-    /// [`Self::dispatcher_irq`].
+    /// (M3-T3).
     fn doorbell_irq(&self, target: u32, line: u32) -> u16;
 }
 
@@ -328,9 +369,11 @@ fn check_stub_collision(app_mod: &ItemMod, task: &TaskEntry) -> syn::Result<()> 
 }
 
 /// Generates the receiver items for every native cross-binary receiver of an
-/// application (M3-T2, M5.5): the `SpawnInput: CrossCoreMessage` assertion,
-/// one hidden FIFO view per task plus one doorbell dispatcher per
-/// `(source -> target, priority)` line.
+/// application (M3-T2, M5.5, M6.5-T3): the `SpawnInput: CrossCoreMessage`
+/// assertion, one hidden FIFO view per task, one **line dispatcher** per
+/// `(source -> target, priority)` line bound to its `ipc_dispatchers` pool
+/// entry and draining the line's ready queue, and one **doorbell router** per
+/// `(source -> target)` pair that routes task ids to the line dispatchers.
 ///
 /// Returns an error naming the offending declaration when a declaration
 /// disagrees with the synced view, or the view places a task on this
@@ -340,6 +383,7 @@ pub(crate) fn generate_receiver_items(
     view: &SystemView,
     application: &AppEntry,
     receivers: &[ReceiverDecl],
+    extensions: &AppExtensions,
     backend: Option<&dyn XbinPassBackend>,
 ) -> syn::Result<Vec<Item>> {
     if receivers.is_empty() {
@@ -371,15 +415,32 @@ pub(crate) fn generate_receiver_items(
         }
     }
 
-    // ~ One dispatcher per doorbell line: the tasks are grouped by
-    // `(source, target, priority)`, the key of their `system.json` doorbell.
-    let mut lines: BTreeMap<(u32, u32, u16), Vec<ResolvedReceiver<'_>>> = BTreeMap::new();
+    // ~ The pass-owned `ipc_dispatchers` pool assigns one interrupt per line
+    // in ascending `(source, priority)` order (`validate_ipc_dispatchers`
+    // checked the count in `run_pass`), so the line's index in its core's
+    // list names the dispatcher's interrupt line (M6.5-T1/T4).
+    let irq_indices = line_irq_indices(receivers);
+
+    // ~ One line dispatcher per `(source, target, priority)`: the key of the
+    // tasks' `system.json` doorbell and of the `ipc_dispatchers` entry.
+    let mut groups: BTreeMap<(u32, u32, u16), LineGroup<'_>> = BTreeMap::new();
     for receiver in receivers {
         let resolved = resolve_receiver(view, application, receiver)?;
         let task = resolved.task;
-        lines
-            .entry((task.fifo.source, task.fifo.target, task.priority))
-            .or_default()
+        let key = (task.fifo.source, task.fifo.target, task.priority);
+        let index = irq_indices[&(resolved.local_core, task.fifo.source, task.priority)];
+        let irq = extensions.ipc_dispatchers[resolved.local_core as usize][index].clone();
+        groups
+            .entry(key)
+            .or_insert_with(|| LineGroup {
+                source: task.fifo.source,
+                target: task.fifo.target,
+                priority: task.priority,
+                local_core: resolved.local_core,
+                irq,
+                receivers: Vec::new(),
+            })
+            .receivers
             .push(resolved);
     }
 
@@ -398,7 +459,7 @@ pub(crate) fn generate_receiver_items(
         .collect::<syn::Result<Vec<TokenStream>>>()?;
     let assert_doc = "Compile-time assertion that every cross-binary receiver's `SpawnInput` \
          implements `CrossCoreMessage` (M5.5).";
-    let mut items = Vec::with_capacity(receivers.len() * 2 + 1);
+    let mut items = Vec::with_capacity(receivers.len() * 2 + groups.len() * 3 + 1);
     items.push(syn::parse_quote! {
         #[doc = #assert_doc]
         #[doc(hidden)]
@@ -411,16 +472,360 @@ pub(crate) fn generate_receiver_items(
         };
     });
 
-    for ((source, target_core, priority), group) in &lines {
-        items.extend(generate_dispatcher(
-            group,
-            *source,
-            *target_core,
-            *priority,
-            backend,
+    for group in groups.values() {
+        items.extend(generate_line_items(group, backend)?);
+    }
+
+    // ~ One router per `(source, target)` pair: it routes every task id of
+    // the pair's doorbell word to its line (M6.5-T3).
+    let mut pairs: BTreeMap<(u32, u32), Vec<&LineGroup<'_>>> = BTreeMap::new();
+    for group in groups.values() {
+        pairs
+            .entry((group.source, group.target))
+            .or_default()
+            .push(group);
+    }
+    for ((source, target), lines) in &pairs {
+        items.extend(generate_router_items(
+            *source, *target, lines, extensions, backend,
         )?);
     }
     Ok(items)
+}
+
+/// One `(source -> target, priority)` line of an application: the receivers
+/// that share the line and the `ipc_dispatchers` entry that wakes its
+/// dispatcher.
+struct LineGroup<'a> {
+    /// Producer (source) global core id.
+    source: u32,
+    /// Receiver (target) global core id.
+    target: u32,
+    /// Line priority.
+    priority: u16,
+    /// Local core index running the line's dispatcher (`0..cores`).
+    local_core: u32,
+    /// Interrupt line of the line's dispatcher, from the application's
+    /// `ipc_dispatchers` pool.
+    irq: syn::Path,
+    /// The receivers of the line, in declaration (name) order.
+    receivers: Vec<ResolvedReceiver<'a>>,
+}
+
+impl LineGroup<'_> {
+    /// The generated task-enum type naming the line's tasks.
+    fn enum_ident(&self) -> Ident {
+        format_ident!(
+            "__RticxXbinLine{}To{}P{}",
+            self.source,
+            self.target,
+            self.priority
+        )
+    }
+
+    /// The generated static ready queue of the line.
+    fn ready_queue_ident(&self) -> Ident {
+        format_ident!(
+            "__rticx_xbin_ready_{}_{}_p{}",
+            self.source,
+            self.target,
+            self.priority
+        )
+    }
+
+    /// The generated dispatcher task struct of the line.
+    fn dispatcher_ident(&self) -> Ident {
+        format_ident!(
+            "__RticxXbinDispatcher{}To{}P{}",
+            self.source,
+            self.target,
+            self.priority
+        )
+    }
+
+    /// The ready-queue depth: one slot per pending notification plus the ring
+    /// buffer's spare slot (M6.5-T3).
+    ///
+    /// Each spawn enqueues exactly one FIFO element before ringing, so the
+    /// line's pending notifications are bounded by the sum of its tasks'
+    /// capacities; the dispatcher drains both together.
+    fn queue_depth(&self) -> usize {
+        self.receivers
+            .iter()
+            .map(|resolved| resolved.task.capacity)
+            .sum::<usize>()
+            + 1
+    }
+}
+
+/// Index of every cross line in its local core's `ipc_dispatchers` list.
+///
+/// Mirrors [`crate::parse::validate_ipc_dispatchers`]: the pool lists each
+/// core's distinct `(source, priority)` lines in ascending order (M6.5-T1),
+/// and a task's line is the `(spawn_by, priority)` pair of its declaration.
+fn line_irq_indices(receivers: &[ReceiverDecl]) -> BTreeMap<(u32, u32, u16), usize> {
+    let mut per_core: BTreeMap<u32, Vec<(u32, u16)>> = BTreeMap::new();
+    for receiver in receivers {
+        per_core
+            .entry(receiver.core)
+            .or_default()
+            .push((receiver.spawn_by, receiver.priority));
+    }
+    let mut indices = BTreeMap::new();
+    for (core, mut lines) in per_core {
+        lines.sort_unstable();
+        lines.dedup();
+        for (index, (source, priority)) in lines.into_iter().enumerate() {
+            indices.insert((core, source, priority), index);
+        }
+    }
+    indices
+}
+
+/// Generates the items of one `(source -> target, priority)` line (M6.5-T3):
+/// the hidden FIFO views, the task enum and ready queue shared with the
+/// router, and the line dispatcher.
+///
+/// The dispatcher is a hardware task bound to the line's `ipc_dispatchers`
+/// entry at the line priority: it drains its ready queue and, per popped task,
+/// drains that task's FIFO until empty (a duplicate notification finds an
+/// empty FIFO and is a no-op) and calls the receiver's `exec`.
+fn generate_line_items(
+    line: &LineGroup<'_>,
+    backend: &dyn XbinPassBackend,
+) -> syn::Result<Vec<Item>> {
+    let rt_path = backend.rt_path();
+    let backend_expr = backend.backend();
+    let task_trait = format_ident!("{HWT_TRAIT_TY}");
+    let line_ty = line.enum_ident();
+    let ready_queue = line.ready_queue_ident();
+    let dispatcher_ty = line.dispatcher_ident();
+    let queue_depth = line.queue_depth();
+    let irq = &line.irq;
+    let priority_lit = LitInt::new(&line.priority.to_string(), Span::call_site());
+    let core_lit = LitInt::new(&line.local_core.to_string(), Span::call_site());
+
+    let mut items = Vec::with_capacity(line.receivers.len() * 2 + 3);
+    let mut variants = Vec::with_capacity(line.receivers.len());
+    let mut arms = Vec::with_capacity(line.receivers.len());
+    for resolved in &line.receivers {
+        items.push(generate_receiver_fifo_view(resolved, backend)?);
+
+        let task = resolved.task;
+        let task_ident = ident(&task.name)?;
+        let task_static = uppercase_ident(&task_ident);
+        let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
+        variants.push(task_ident.clone());
+        arms.push(quote! {
+            #line_ty::#task_ident => {
+                let __rticx_xbin_fifo = #fifo_fn(&__rticx_xbin_backend);
+                // SAFETY: this dispatcher is the single consumer of the FIFO
+                // (one producer core, one consumer dispatcher) and the FIFO
+                // lives at its synced, aligned address inside the region.
+                unsafe {
+                    while let Some(input) = (*__rticx_xbin_fifo).dequeue() {
+                        // SAFETY: the core pass initialized the task static
+                        // during `init` (`init = generated`).
+                        #task_static.assume_init_mut().exec(input);
+                    }
+                }
+            }
+        });
+    }
+
+    let enum_doc = format!(
+        "Tasks of the `({} -> {})` priority-{} line: the router enqueues one \
+         variant per notification (M6.5-T3).",
+        line.source, line.target, line.priority
+    );
+    items.push(syn::parse_quote! {
+        #[doc = #enum_doc]
+        #[doc(hidden)]
+        #[derive(Clone, Copy)]
+        pub enum #line_ty {
+            #(#variants,)*
+        }
+    });
+
+    let queue_doc = format!(
+        "Ready queue of the `({} -> {})` priority-{} line: the router produces, \
+         the dispatcher consumes. Sized to the sum of the line's task capacities \
+         plus the ring buffer's spare slot, so it cannot overflow (M6.5-T3).",
+        line.source, line.target, line.priority
+    );
+    items.push(syn::parse_quote! {
+        #[doc = #queue_doc]
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        static mut #ready_queue: #rt_path::Queue<#line_ty, #queue_depth> = #rt_path::Queue::new();
+    });
+
+    let dispatcher_doc = format!(
+        "Line dispatcher of the `({} -> {})` priority-{} line: drains the \
+         line's ready queue and FIFOs and runs the receiver tasks (M6.5-T3).",
+        line.source, line.target, line.priority
+    );
+    items.push(syn::parse_quote! {
+        #[doc = #dispatcher_doc]
+        #[doc(hidden)]
+        #[task(binds = #irq, priority = #priority_lit, core = #core_lit, init = generated)]
+        pub struct #dispatcher_ty;
+    });
+    items.push(syn::parse_quote! {
+        impl #task_trait for #dispatcher_ty {
+            fn exec(&mut self) {
+                let __rticx_xbin_backend = #backend_expr;
+                // SAFETY: the router (the only producer) runs at a priority
+                // at least as high as this dispatcher, so the enqueue and the
+                // dequeue never overlap on this core.
+                let mut __rticx_xbin_ready = unsafe { #ready_queue.split().1 };
+                while let Some(__rticx_xbin_task) = __rticx_xbin_ready.dequeue() {
+                    match __rticx_xbin_task {
+                        #(#arms)*
+                    }
+                }
+            }
+        }
+    });
+    Ok(items)
+}
+
+/// Generates the router of one `(source -> target)` pair (M6.5-T3).
+///
+/// The router is a hardware task bound to the pair's doorbell at the highest
+/// line priority of the pair: it loops reading task ids from the pair's
+/// doorbell, enqueues the task in its line's ready queue and pends that line's
+/// dispatcher through the software pass's `__rticx_local_irq_pend[_core{N}]`.
+/// Unknown ids are ignored.
+fn generate_router_items(
+    source: u32,
+    target: u32,
+    lines: &[&LineGroup<'_>],
+    extensions: &AppExtensions,
+    backend: &dyn XbinPassBackend,
+) -> syn::Result<Vec<Item>> {
+    let first = lines.first().expect("a router pair is never empty");
+    let local_core = first.local_core;
+    let max_priority = lines
+        .iter()
+        .map(|line| line.priority)
+        .max()
+        .expect("a router pair is never empty");
+    let router_ty = format_ident!("__RticxXbinRouter{source}To{target}");
+    let router_irq = backend.doorbell_interrupt(target, source);
+    let read_fn = format_ident!("__rticx_xbin_read_{source}_{target}");
+    let interrupt_ty = interrupt_path(backend, extensions, local_core);
+    let pend_fn = local_pend_fn_ident(local_core, extensions.cores);
+    let task_trait = format_ident!("{HWT_TRAIT_TY}");
+    let max_priority_lit = LitInt::new(&max_priority.to_string(), Span::call_site());
+    let core_lit = LitInt::new(&local_core.to_string(), Span::call_site());
+
+    let mut arms = Vec::with_capacity(lines.iter().map(|line| line.receivers.len()).sum());
+    for line in lines {
+        let line_ty = line.enum_ident();
+        let ready_queue = line.ready_queue_ident();
+        let line_irq = &line.irq;
+        for resolved in &line.receivers {
+            let task = resolved.task;
+            let task_id = task.id;
+            let task_ident = ident(&task.name)?;
+            arms.push(quote! {
+                #task_id => {
+                    // SAFETY: the router is the only producer on this core
+                    // and runs at a priority at least as high as the line
+                    // dispatcher, so it never races the dequeue.
+                    unsafe {
+                        #ready_queue.split().0.enqueue_unchecked(#line_ty::#task_ident);
+                    }
+                    #pend_fn(#interrupt_ty::#line_irq);
+                }
+            });
+        }
+    }
+
+    let doc = format!(
+        "Doorbell router of the `({source} -> {target})` pair: reads task ids \
+         from the pair's doorbell word, enqueues each task in its line's ready \
+         queue and pends that line's dispatcher (M6.5-T3). Unknown ids are \
+         ignored."
+    );
+    Ok(vec![
+        generate_read_function(source, target, backend),
+        syn::parse_quote! {
+            #[doc = #doc]
+            #[doc(hidden)]
+            #[task(binds = #router_irq, priority = #max_priority_lit, core = #core_lit, init = generated)]
+            pub struct #router_ty;
+        },
+        syn::parse_quote! {
+            impl #task_trait for #router_ty {
+                fn exec(&mut self) {
+                    // The router drains the pair's doorbell word; duplicate and
+                    // coalesced ids lose no spawns because each line
+                    // dispatcher drains its FIFOs until empty (M6.5-T3).
+                    while let Some(__rticx_xbin_task_id) = #read_fn() {
+                        match __rticx_xbin_task_id {
+                            #(#arms)*
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        },
+    ])
+}
+
+/// Generates the target-side read function of one `(source -> target)` pair
+/// (M6.5-T3): the pass hands [`XbinPassBackend::read_doorbell_msg_fn`] a
+/// template with the documented signature and appends the filled function.
+fn generate_read_function(source: u32, target: u32, backend: &dyn XbinPassBackend) -> Item {
+    let fn_ident = format_ident!("__rticx_xbin_read_{source}_{target}");
+    let doc = format!(
+        "Returns the next pending task id of the `({source} -> {target})` doorbell, or `None` \
+         when it is empty. The distribution fills the body through \
+         `XbinPassBackend::read_doorbell_msg_fn` (M6.5-T3)."
+    );
+    let template: syn::ItemFn = syn::parse_quote! {
+        #[doc = #doc]
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        fn #fn_ident() -> Option<u32> {
+            // The distribution replaces this body through
+            // `XbinPassBackend::read_doorbell_msg_fn`.
+            None
+        }
+    };
+    Item::Fn(backend.read_doorbell_msg_fn(target, source, template))
+}
+
+/// Computes the interrupt type path of the dispatchers on `core`.
+///
+/// Uses the backend's [`XbinPassBackend::custom_interrupt_path`] if provided,
+/// otherwise falls back to the application's PAC path `pacs[core]::Interrupt`,
+/// exactly like the software pass.
+// TODO(extract): mirrors `rticx_sw_pass`'s `get_interrupt_path`.
+fn interrupt_path(
+    backend: &dyn XbinPassBackend,
+    extensions: &AppExtensions,
+    core: u32,
+) -> syn::Path {
+    backend.custom_interrupt_path(core).unwrap_or_else(|| {
+        let pac = &extensions.pacs[core as usize];
+        syn::parse_quote!(#pac::Interrupt)
+    })
+}
+
+/// Name of the software pass's core-local interrupt-pending function.
+///
+/// Single-core applications keep the plain name; multi-core applications
+/// append the local core index (M6.5-T3).
+// TODO(extract): mirrors `rticx_sw_pass`'s `local_pend_fn_ident`.
+fn local_pend_fn_ident(core: u32, cores: u32) -> Ident {
+    if cores == 1 {
+        format_ident!("__rticx_local_irq_pend")
+    } else {
+        format_ident!("__rticx_local_irq_pend_core{core}")
+    }
 }
 
 /// Generates the init hooks of one application (M3-T3): the per-core
@@ -630,8 +1035,6 @@ fn owner_core(view: &SystemView) -> Option<u32> {
 struct ResolvedReceiver<'a> {
     /// The synced task the receiver executes.
     task: &'a TaskEntry,
-    /// The doorbell line of the task's `(source, target, priority)` key.
-    doorbell: &'a DoorbellEntry,
     /// Local core index the task runs on (`0..cores`).
     local_core: u32,
     /// Rust type of the spawn input, as declared by the user.
@@ -720,8 +1123,10 @@ fn resolve_receiver<'a>(
         )));
     }
 
-    let doorbell = view
-        .doorbells
+    // The pair router is generated from the view's doorbell table (the
+    // distribution arms its lines at `mark_ready`), so a task without its
+    // `(source, target, priority)` doorbell entry is a stale view.
+    view.doorbells
         .iter()
         .find(|doorbell| {
             doorbell.source == task.fifo.source
@@ -745,83 +1150,10 @@ fn resolve_receiver<'a>(
 
     Ok(ResolvedReceiver {
         task,
-        doorbell,
         local_core: receiver.core,
         input,
         elem_align: input_align(view, task)?,
     })
-}
-
-/// Generates the dispatcher of one doorbell line: a hardware task bound to the
-/// distribution's doorbell IRQ at the line's priority, plus the hidden FIFO
-/// view of every task it drains.
-fn generate_dispatcher(
-    group: &[ResolvedReceiver<'_>],
-    source: u32,
-    target_core: u32,
-    priority: u16,
-    backend: &dyn XbinPassBackend,
-) -> syn::Result<Vec<Item>> {
-    let first = group.first().expect("a dispatcher group is never empty");
-    let line = first.doorbell.line;
-    let local_core = first.local_core;
-    let irq = backend.dispatcher_irq(target_core, line);
-    let backend_expr = backend.backend();
-    let dispatcher_ty = format_ident!(
-        "__RticxXbinDispatcher{}To{}P{}",
-        source,
-        target_core,
-        priority
-    );
-    let priority_lit = LitInt::new(&priority.to_string(), Span::call_site());
-    let core_lit = LitInt::new(&local_core.to_string(), Span::call_site());
-    let task_trait = format_ident!("{HWT_TRAIT_TY}");
-
-    let mut items = Vec::with_capacity(group.len() + 1);
-    let mut drains = Vec::with_capacity(group.len());
-    for resolved in group {
-        items.push(generate_receiver_fifo_view(resolved, backend)?);
-
-        let task = resolved.task;
-        let task_ident = ident(&task.name)?;
-        let task_static = uppercase_ident(&task_ident);
-        let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
-        drains.push(quote! {
-            {
-                let __rticx_xbin_fifo = #fifo_fn(&__rticx_xbin_backend);
-                // SAFETY: this dispatcher is the single consumer of the FIFO
-                // (one producer core, one consumer dispatcher) and the FIFO
-                // lives at its synced, aligned address inside the region.
-                unsafe {
-                    while let Some(input) = (*__rticx_xbin_fifo).dequeue() {
-                        // SAFETY: the core pass initialized the task static
-                        // during `init` (`init = generated`).
-                        #task_static.assume_init_mut().exec(input);
-                    }
-                }
-            }
-        });
-    }
-
-    let doc = format!(
-        "Doorbell dispatcher for the `({source} -> {target_core})` priority-{priority} line: \
-         drains its per-task FIFOs and runs the receiver tasks."
-    );
-    items.push(syn::parse_quote! {
-        #[doc = #doc]
-        #[doc(hidden)]
-        #[task(binds = #irq, priority = #priority_lit, core = #core_lit, init = generated)]
-        pub struct #dispatcher_ty;
-    });
-    items.push(syn::parse_quote! {
-        impl #task_trait for #dispatcher_ty {
-            fn exec(&mut self) {
-                let __rticx_xbin_backend = #backend_expr;
-                #(#drains)*
-            }
-        }
-    });
-    Ok(items)
 }
 
 /// Generates the hidden FIFO view of one resolved receiver, mirroring the
@@ -1202,4 +1534,46 @@ fn ident(name: &str) -> syn::Result<Ident> {
 /// Builds a code-generation error at the macro call site.
 fn error(message: impl Into<String>) -> syn::Error {
     syn::Error::new(Span::call_site(), message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mirrors `rticx-sw-pass`'s `local_pend_fn_ident`: single-core
+    /// applications keep the plain name, multi-core ones append the core.
+    #[test]
+    fn local_pend_fn_name_mirrors_the_software_pass() {
+        assert_eq!(
+            local_pend_fn_ident(0, 1).to_string(),
+            "__rticx_local_irq_pend"
+        );
+        assert_eq!(
+            local_pend_fn_ident(1, 2).to_string(),
+            "__rticx_local_irq_pend_core1"
+        );
+    }
+
+    /// The pool lists each core's lines in ascending `(source, priority)`
+    /// order (M6.5-T1), independent of the declaration order.
+    #[test]
+    fn line_irq_indices_follow_the_pool_order() {
+        let receiver = |name: &str, core: u32, spawn_by: u32, priority: u16| ReceiverDecl {
+            name: name.to_string(),
+            priority,
+            capacity: 1,
+            core,
+            spawn_by,
+            input_type: "Msg".to_string(),
+        };
+        let receivers = vec![
+            receiver("B", 0, 0, 4),
+            receiver("A", 0, 0, 3),
+            receiver("C", 1, 2, 1),
+        ];
+        let indices = line_irq_indices(&receivers);
+        assert_eq!(indices[&(0, 0, 3)], 0);
+        assert_eq!(indices[&(0, 0, 4)], 1);
+        assert_eq!(indices[&(1, 2, 1)], 0);
+    }
 }

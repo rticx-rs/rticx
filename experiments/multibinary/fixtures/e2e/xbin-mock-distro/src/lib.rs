@@ -45,8 +45,24 @@ impl XbinPassBackend for MockDistroBackend {
         template
     }
 
-    fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
-        format_ident!("__xbin_doorbell_{target}_{line}")
+    fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident {
+        format_ident!("__xbin_router_{source}_{target}")
+    }
+
+    fn read_doorbell_msg_fn(
+        &self,
+        target: u32,
+        source: u32,
+        mut template: syn::ItemFn,
+    ) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __rticx_xbin_backend().take_message(#source, #target)
+        });
+        template
+    }
+
+    fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
+        Some(syn::parse_quote!(__XbinInterrupt))
     }
 
     fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
@@ -60,6 +76,7 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let parsed_args = TokenStream2::from(args.clone());
     let mut app_mod = parse_macro_input!(input as ItemMod);
     inject_backend_helper(&mut app_mod, global_core(&parsed_args));
+    inject_interrupt_support(&mut app_mod, &parsed_args);
 
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(XbinPass::from_env().with_backend(MockDistroBackend));
@@ -84,6 +101,64 @@ fn global_core(args: &TokenStream2) -> u32 {
     match &lit.lit {
         Lit::Int(int) => int.base10_parse().unwrap_or(0),
         _ => 0,
+    }
+}
+
+/// Injects the fixture interrupt enum and the stand-in pend function the
+/// generated router calls (M6.5-T3).
+///
+/// A real distribution points `custom_interrupt_path` at its PAC and gets
+/// `__rticx_local_irq_pend[_core{N}]` from `rticx-sw-pass`; the mock binds no
+/// software pass, so it provides both itself. The enum's variants are the last
+/// path segments of the application's `ipc_dispatchers` entries, so
+/// `#interrupt_type::#entry` in the generated pend call resolves.
+fn inject_interrupt_support(app_mod: &mut ItemMod, args: &TokenStream2) {
+    let variants = ipc_dispatcher_variants(args);
+    let Some((_, items)) = app_mod.content.as_mut() else {
+        return;
+    };
+    items.push(syn::parse_quote! {
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        pub enum __XbinInterrupt {
+            #(#variants,)*
+        }
+    });
+    items.push(syn::parse_quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub fn __rticx_local_irq_pend(_irq: __XbinInterrupt) {}
+    });
+}
+
+/// Collects the last path segment of every `ipc_dispatchers` entry.
+fn ipc_dispatcher_variants(args: &TokenStream2) -> Vec<syn::Ident> {
+    let Ok(attr) = RticAttr::parse_from_tokens(args.clone(), format_ident!("app")) else {
+        return Vec::new();
+    };
+    let Some(expr) = attr.get_expr("ipc_dispatchers") else {
+        return Vec::new();
+    };
+    let mut variants = Vec::new();
+    collect_dispatcher_idents(expr, &mut variants);
+    variants
+}
+
+/// Recursively collects interrupt path idents from an `ipc_dispatchers`
+/// expression (flat or per-core nested arrays).
+fn collect_dispatcher_idents(expr: &Expr, out: &mut Vec<syn::Ident>) {
+    match expr {
+        Expr::Array(array) => {
+            for element in &array.elems {
+                collect_dispatcher_idents(element, out);
+            }
+        }
+        Expr::Path(path) if path.qself.is_none() => {
+            if let Some(segment) = path.path.segments.last() {
+                out.push(segment.ident.clone());
+            }
+        }
+        _ => {}
     }
 }
 

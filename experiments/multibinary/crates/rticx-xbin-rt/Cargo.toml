@@ -13,6 +13,10 @@ publish = false
 
 [dependencies]
 portable-atomic = { version = "1.15.0", default-features = false }
+# Core-local ready queues of the generated line dispatchers (M6.5-T3): the
+# single-core SPSC queue the software pass also uses, so router → dispatcher
+# handoff matches the software dispatchers' semantics.
+rticx-spsc = { workspace = true }
 
 [dev-dependencies]
 # Layout drift guard: the runtime ring must mirror the canonical image computed

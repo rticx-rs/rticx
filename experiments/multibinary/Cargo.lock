@@ -408,6 +408,7 @@ name = "rticx-xbin-rt"
 version = "0.1.0"
 dependencies = [
  "portable-atomic",
+ "rticx-spsc",
  "rticx-xbin-proto",
 ]
 

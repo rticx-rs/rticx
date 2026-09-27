@@ -108,8 +108,24 @@ impl XbinPassBackend for CompileBackend {
         template
     }
 
-    fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
-        format_ident!("__rticx_xbin_doorbell_{target}_{line}")
+    fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident {
+        format_ident!("__rticx_xbin_router_{source}_{target}")
+    }
+
+    fn read_doorbell_msg_fn(
+        &self,
+        target: u32,
+        source: u32,
+        mut template: syn::ItemFn,
+    ) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __rticx_xbin_backend().take_message(#source, #target)
+        });
+        template
+    }
+
+    fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
+        Some(syn::parse_quote!(__XbinInterrupt))
     }
 
     fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
@@ -217,6 +233,16 @@ fn receiver_app() -> syn::ItemMod {
                     });
                 SYSTEM.backend(1)
             }
+
+            /// Fixture interrupt enum: `custom_interrupt_path` points the
+            /// generated router at it, and the stand-in pend function is what
+            /// `rticx-sw-pass` would generate for the receiver core.
+            #[allow(non_camel_case_types)]
+            pub enum __XbinInterrupt {
+                IRQ0,
+            }
+
+            fn __rticx_local_irq_pend(_irq: __XbinInterrupt) {}
 
             trait RticSwTask {
                 type SpawnInput;
@@ -389,18 +415,26 @@ fn receiver_fixture_expands_and_compiles() {
 
     let expanded = expand(&system);
 
-    // The pipeline ran to completion and emitted the M3-T2 items.
+    // The pipeline ran to completion and emitted the M3-T2/M6.5-T3 items.
     assert!(
         !expanded.contains("compile_error"),
         "pipeline failed: {expanded}"
     );
     assert!(
-        expanded.contains("__rticx_xbin_doorbell_1_0"),
-        "the doorbell handler is missing: {expanded}"
+        expanded.contains("fn IRQ0"),
+        "the dispatcher handler bound to the pool entry is missing: {expanded}"
     );
     assert!(
         expanded.contains("__RticxXbinDispatcher0To1P3"),
         "the dispatcher is missing: {expanded}"
+    );
+    assert!(
+        expanded.contains("__RticxXbinRouter0To1"),
+        "the router is missing: {expanded}"
+    );
+    assert!(
+        expanded.contains("__rticx_local_irq_pend") && expanded.contains("__XbinInterrupt :: IRQ0"),
+        "the router does not pend the line dispatcher: {expanded}"
     );
     assert!(
         expanded.contains("implements_rtic_sw_task")
