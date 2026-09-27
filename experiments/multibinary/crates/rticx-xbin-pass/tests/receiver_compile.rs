@@ -101,6 +101,13 @@ impl XbinPassBackend for CompileBackend {
         syn::parse_quote!(rticx_xbin_rt)
     }
 
+    fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __rticx_xbin_backend().doorbell_send(#source, #target, task_id)
+        });
+        template
+    }
+
     fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
         format_ident!("__rticx_xbin_doorbell_{target}_{line}")
     }

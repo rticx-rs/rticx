@@ -6,6 +6,12 @@
 //!
 //! - for every view task whose `spawner_core` belongs to this application
 //!   (M5.5: the producer declares nothing; the stubs are generated):
+//!   - one **ring function** per `(source -> target)` pair the application
+//!     produces into: `__rticx_xbin_ring_{source}_{target}(task_id)` publishes
+//!     the task id to the target's doorbell and triggers its router. The pass
+//!     generates only the documented signature; the body is the distribution's
+//!     transport, filled through [`XbinPassBackend::ring_doorbell_fn`]
+//!     (M6.5-T2);
 //!   - a hidden **FIFO view** helper returning the fixed-address
 //!     `rticx_xbin_rt::Fifo` of the task at
 //!     `region.base_for(this_core, source, target) + offset`, where the region
@@ -15,8 +21,8 @@
 //!   - the task struct itself (`pub struct <Task>;`, the generated sender
 //!     stub) and `Task::cross_spawn(input)`, matching the error semantics of
 //!     the single-binary `cross_spawn`:
-//!     - `Ok(())`: the input is enqueued and the target doorbell was rung;
-//!     - `Err(None)`: the input is enqueued, but ringing the doorbell failed
+//!     - `Ok(())`: the input is enqueued and the target router was notified;
+//!     - `Err(None)`: the input is enqueued, but the notification failed
 //!       (do not retry the enqueue; re-notify the target);
 //!     - `Err(Some(input))`: nothing was enqueued (the FIFO is full, the caller
 //!       does not run on the expected core, …); retry later or raise `capacity`.
@@ -75,7 +81,7 @@
 //!
 //! [`CrossBinBackend`]: rticx_xbin_rt::backend::CrossBinBackend
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use proc_macro2::{Ident, Span, TokenStream};
@@ -123,6 +129,24 @@ pub trait XbinPassBackend {
     fn ipc_types_path(&self) -> syn::Path {
         syn::parse_quote!(ipc_types)
     }
+
+    /// Emits the producer-side ring function of the `(source -> target)`
+    /// doorbell pair (M6.5-T2).
+    ///
+    /// The pass generates one ring function per pair producing cross-binary
+    /// tasks and hands a template with the documented signature
+    ///
+    /// ```ignore
+    /// fn __rticx_xbin_ring_{source}_{target}(task_id: u32) -> Result<(), ()>
+    /// ```
+    ///
+    /// to this method. The implementation fills the body with the
+    /// distribution's transport: publish `task_id` to the pair's doorbell (a
+    /// per-pair shared atomic word is the portable choice) and trigger the
+    /// router interrupt. `Err(())` reports a notification that could not be
+    /// delivered; the spawn input is already enqueued, so `cross_spawn` maps
+    /// it to `Err(None)`.
+    fn ring_doorbell_fn(&self, source: u32, target: u32, template: syn::ItemFn) -> syn::ItemFn;
 
     /// Identifier of the interrupt handler bound to doorbell `line` of
     /// `target` — the receiver dispatcher's ISR.
@@ -196,10 +220,12 @@ impl HookPlan {
     }
 }
 
-/// Generates the producer-side items of an application (M5.5): for every view
-/// task whose `spawner_core` is one of its cores, the generated
+/// Generates the producer-side items of an application (M5.5, M6.5-T2): for
+/// every view task whose `spawner_core` is one of its cores, the generated
 /// `pub struct <Task>;` sender stub, its hidden FIFO view and its
-/// `cross_spawn` impl.
+/// `cross_spawn` impl — plus one ring function per `(source -> target)` pair
+/// the application produces into, which delivers task ids to the target's
+/// doorbell router.
 ///
 /// The producer source declares nothing, so the stubs are derived from the
 /// synced system view. A user item with the generated stub's name is rejected
@@ -227,12 +253,44 @@ pub(crate) fn generate_sender_items(
         ));
     };
 
-    let mut items = Vec::with_capacity(stubs.len() * 3);
+    let mut items = Vec::with_capacity(stubs.len() * 3 + 1);
+    let mut pairs = BTreeSet::new();
+    for task in &stubs {
+        pairs.insert((task.fifo.source, task.fifo.target));
+    }
+    for (source, target) in pairs {
+        items.push(generate_ring_function(source, target, backend));
+    }
     for task in stubs {
         check_stub_collision(app_mod, task)?;
         items.extend(generate_sender(view, task, backend)?);
     }
     Ok(items)
+}
+
+/// Generates the producer ring function of one `(source -> target)` pair
+/// (M6.5-T2): the pass hands [`XbinPassBackend::ring_doorbell_fn`] a template
+/// with the documented signature and appends the filled function to the
+/// `#[app]` module.
+fn generate_ring_function(source: u32, target: u32, backend: &dyn XbinPassBackend) -> Item {
+    let fn_ident = format_ident!("__rticx_xbin_ring_{source}_{target}");
+    let doc = format!(
+        "Publishes `task_id` to the `({source} -> {target})` doorbell and triggers the target's \
+         router interrupt. The distribution fills the body through \
+         `XbinPassBackend::ring_doorbell_fn` (M6.5-T2)."
+    );
+    let template: syn::ItemFn = syn::parse_quote! {
+        #[doc = #doc]
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        fn #fn_ident(task_id: u32) -> Result<(), ()> {
+            let _ = task_id;
+            // The distribution replaces this body through
+            // `XbinPassBackend::ring_doorbell_fn`.
+            Err(())
+        }
+    };
+    Item::Fn(backend.ring_doorbell_fn(source, target, template))
 }
 
 /// Rejects a generated sender stub whose name collides with a user item of
@@ -969,22 +1027,6 @@ fn generate_sender(
     task: &TaskEntry,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<Vec<Item>> {
-    let doorbell = view
-        .doorbells
-        .iter()
-        .find(|doorbell| {
-            doorbell.source == task.fifo.source
-                && doorbell.target == task.fifo.target
-                && doorbell.priority == task.priority
-        })
-        .ok_or_else(|| {
-            error(format!(
-                "the synced system view has no doorbell for `{}` ({} -> {} at priority {}); \
-                 run `cargo xbin sync`",
-                task.name, task.fifo.source, task.fifo.target, task.priority
-            ))
-        })?;
-
     let task_ident = ident(&task.name)?;
     let input_ty = input_type(task, backend)?;
     let rt_path = backend.rt_path();
@@ -992,13 +1034,14 @@ fn generate_sender(
 
     let source = task.fifo.source;
     let target_core = task.fifo.target;
-    let line = doorbell.line;
+    let task_id = task.id;
     let offset = task.fifo.offset as usize;
     let depth = task.fifo.depth as usize;
     let elem_size = task.fifo.elem_size as usize;
     let elem_align = input_align(view, task)? as usize;
 
     let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
+    let ring_fn = format_ident!("__rticx_xbin_ring_{source}_{target_core}");
     let fifo_doc = format!(
         "Returns this application's view of the `{}` FIFO, placed at its `({source} -> \
          {target_core})` region offset from `system.json`.",
@@ -1013,11 +1056,11 @@ fn generate_sender(
     );
 
     let spawn_doc = format!(
-        "Cross-binary spawn: enqueue `input` into the `{}` FIFO and ring the doorbell of global \
+        "Cross-binary spawn: enqueue `input` into the `{}` FIFO and notify the router of global \
          core {target_core}.\n\n\
          # Returns\n\n\
-         - `Ok(())`: the input is enqueued and the target dispatcher was notified;\n\
-         - `Err(None)`: the input is enqueued, but the doorbell could not be rung. Do **not** \
+         - `Ok(())`: the input is enqueued and the target router was notified;\n\
+         - `Err(None)`: the input is enqueued, but the notification failed. Do **not** \
          retry the spawn; re-notify the target instead;\n\
          - `Err(Some(input))`: nothing was enqueued (the FIFO is full, or the caller does not \
          run on global core {source}). Retry later or raise `capacity`.",
@@ -1082,7 +1125,7 @@ fn generate_sender(
 
                     const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
                     const __RTICX_XBIN_TARGET_CORE: u32 = #target_core;
-                    const __RTICX_XBIN_DOORBELL_LINE: u32 = #line;
+                    const __RTICX_XBIN_TASK_ID: u32 = #task_id;
 
                     const _: () = assert!(
                         core::mem::size_of::<#input_ty>() == #elem_size,
@@ -1108,12 +1151,12 @@ fn generate_sender(
                         if let Err(input) = unsafe { (*__rticx_xbin_fifo).enqueue(input) } {
                             return Err(Some(input));
                         }
-                        match __rticx_xbin_backend.doorbell_ring(
-                            __RTICX_XBIN_TARGET_CORE,
-                            __RTICX_XBIN_DOORBELL_LINE,
-                        ) {
+                        // The ring function publishes the task id to the
+                        // target's doorbell and triggers its router; a failed
+                        // notification leaves the input enqueued (M6.5-T2).
+                        match #ring_fn(__RTICX_XBIN_TASK_ID) {
                             Ok(()) => Ok(()),
-                            Err(_) => Err(None),
+                            Err(()) => Err(None),
                         }
                     })
                 }

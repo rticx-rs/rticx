@@ -20,11 +20,17 @@
 //! ```
 //!
 //! A region is backed by an 8-byte-aligned, zeroed in-process array (the
-//! "array" variant of the plan's `mmap`/array choice). The mock doorbell is a
-//! pending flag with a condition variable: [`MockBackend::doorbell_ring`]
-//! (the `CrossBinBackend` method) sets it and [`MockBackend::doorbell_wait`] /
-//! [`MockBackend::doorbell_take`] let a test thread act as the target's
-//! dispatcher ISR.
+//! "array" variant of the plan's `mmap`/array choice). Two doorbell flavours
+//! coexist:
+//!
+//! - the per-line **pending flag** of the `CrossBinBackend` contract
+//!   ([`MockBackend::doorbell_ring`], [`MockBackend::doorbell_wait`],
+//!   [`MockBackend::doorbell_take`]) let a test thread act as a target's
+//!   dispatcher ISR;
+//! - the per-`(source -> target)` **pair message word** of the M6.5 router
+//!   transport ([`MockBackend::doorbell_send`], [`MockBackend::take_message`],
+//!   [`MockBackend::router_wait`]) carries the task id a producer publishes
+//!   to the target's router.
 //!
 //! This crate is host-only test support: it is not `no_std` and its
 //! `MockBackend` implements the [`CrossBinBackend`] cache/MPU hooks with the
@@ -33,7 +39,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -59,6 +65,9 @@ pub struct MockSystem {
 struct SystemInner {
     regions: BTreeMap<(u32, u32), RegionBacking>,
     doorbells: Mutex<BTreeMap<(u32, u32), Arc<Doorbell>>>,
+    /// Per-`(source -> target)` pair message words of the M6.5 doorbell
+    /// routers, keyed by `(source, target)`.
+    pair_doorbells: Mutex<BTreeMap<(u32, u32), Arc<PairDoorbell>>>,
     state: SharedState,
 }
 
@@ -78,6 +87,7 @@ impl MockSystem {
             inner: Arc::new(SystemInner {
                 regions: BTreeMap::new(),
                 doorbells: Mutex::new(BTreeMap::new()),
+                pair_doorbells: Mutex::new(BTreeMap::new()),
                 state: SharedState::new(),
             }),
         }
@@ -141,6 +151,19 @@ impl MockSystem {
             .get(&(target, line))
             .cloned()
     }
+
+    /// Returns the pair message word of `(source -> target)`, creating it on
+    /// first use (like a hardware doorbell, which exists independently of the
+    /// software that rings it).
+    fn pair_doorbell(&self, source: u32, target: u32) -> Arc<PairDoorbell> {
+        self.inner
+            .pair_doorbells
+            .lock()
+            .expect("mock pair doorbell table is never poisoned")
+            .entry((source, target))
+            .or_insert_with(|| Arc::new(PairDoorbell::new()))
+            .clone()
+    }
 }
 
 impl Clone for MockSystem {
@@ -193,6 +216,44 @@ impl MockBackend {
             Some(doorbell) => doorbell.take(),
             None => false,
         }
+    }
+
+    /// Publishes `task_id` to the `(source -> target)` pair message word and
+    /// triggers the target's router interrupt (M6.5-T2).
+    ///
+    /// This is what the generated `__rticx_xbin_ring_{source}_{target}`
+    /// function calls: it is the mock's portable doorbell transport. An
+    /// unread message is overwritten (the hardware doorbell coalesces
+    /// notifications); the target's line dispatcher drains its FIFOs until
+    /// empty, so repeated delivery of the same task id loses no spawn.
+    ///
+    /// Always succeeds: the mock doorbell exists from the first ring, like a
+    /// hardware peripheral.
+    #[allow(clippy::result_unit_err)] // mirrors the generated ring contract
+    pub fn doorbell_send(&self, source: u32, target: u32, task_id: u32) -> Result<(), ()> {
+        self.system.pair_doorbell(source, target).send(task_id);
+        Ok(())
+    }
+
+    /// Takes the pending task id of the `(source -> target)` pair message
+    /// word, or `None` when no notification is pending (M6.5-T3).
+    ///
+    /// This is what the generated `__rticx_xbin_read_{source}_{target}`
+    /// function calls; the router drains the word in a loop.
+    pub fn take_message(&self, source: u32, target: u32) -> Option<u32> {
+        self.system.pair_doorbell(source, target).take()
+    }
+
+    /// Waits until a notification is pending on the `(source -> target)` pair
+    /// message word, up to `timeout`.
+    ///
+    /// Returns `false` on timeout. Simulates the target core sleeping until
+    /// its router interrupt fires; pair it with [`Self::take_message`], which
+    /// acts as the router reading and clearing the word.
+    pub fn router_wait(&self, source: u32, target: u32, timeout: Duration) -> bool {
+        self.system
+            .pair_doorbell(source, target)
+            .wait_timeout(timeout)
     }
 }
 
@@ -274,6 +335,69 @@ impl Doorbell {
                 .expect("mock doorbell is never poisoned");
             guard = next;
             if result.timed_out() && !self.pending.load(Ordering::Acquire) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// The per-`(source -> target)` pair message word: the mock's doorbell
+/// transport for task-id routing (M6.5-T2/T3).
+///
+/// `message` holds the latest published task id (`0` means empty; the driver
+/// numbers tasks from 1), and the condition variable lets a test thread wait
+/// for the router interrupt. This mirrors a single-word hardware doorbell:
+/// notifications coalesce, and idempotence comes from the line dispatcher
+/// draining its FIFOs until empty.
+struct PairDoorbell {
+    message: AtomicU32,
+    lock: Mutex<()>,
+    ready: Condvar,
+}
+
+impl PairDoorbell {
+    fn new() -> Self {
+        Self {
+            message: AtomicU32::new(0),
+            lock: Mutex::new(()),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn send(&self, task_id: u32) {
+        self.message.store(task_id, Ordering::Release);
+        let _guard = self
+            .lock
+            .lock()
+            .expect("the mock pair doorbell is never poisoned");
+        self.ready.notify_all();
+    }
+
+    fn take(&self) -> Option<u32> {
+        match self.message.swap(0, Ordering::AcqRel) {
+            0 => None,
+            task_id => Some(task_id),
+        }
+    }
+
+    fn wait_timeout(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut guard = self
+            .lock
+            .lock()
+            .expect("the mock pair doorbell is never poisoned");
+        while self.message.load(Ordering::Acquire) == 0 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next, result) = self
+                .ready
+                .wait_timeout(guard, remaining)
+                .expect("the mock pair doorbell is never poisoned");
+            guard = next;
+            if result.timed_out() && self.message.load(Ordering::Acquire) == 0 {
                 return false;
             }
         }

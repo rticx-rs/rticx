@@ -125,6 +125,48 @@ fn doorbell_wakes_a_waiting_thread() {
 }
 
 #[test]
+fn pair_doorbell_carries_task_ids() {
+    let system = MockSystem::new();
+    let source = system.backend(0);
+    let target = system.backend(1);
+
+    // The pair word exists from the first ring, like a hardware doorbell.
+    assert_eq!(target.take_message(0, 1), None, "no notification yet");
+    assert!(!target.router_wait(0, 1, Duration::from_millis(10)));
+
+    source.doorbell_send(0, 1, 3).unwrap();
+    assert!(target.router_wait(0, 1, Duration::from_millis(10)));
+    assert_eq!(target.take_message(0, 1), Some(3));
+    assert_eq!(target.take_message(0, 1), None, "take clears the word");
+
+    // Notifications coalesce: the latest task id replaces an unread one.
+    source.doorbell_send(0, 1, 1).unwrap();
+    source.doorbell_send(0, 1, 2).unwrap();
+    assert_eq!(target.take_message(0, 1), Some(2));
+
+    // Pairs are independent, and both endpoints see the same word.
+    assert_eq!(target.take_message(1, 0), None);
+    source.doorbell_send(0, 1, 9).unwrap();
+    assert_eq!(source.take_message(0, 1), Some(9), "the word is shared");
+}
+
+#[test]
+fn pair_doorbell_wakes_a_waiting_router() {
+    let system = MockSystem::new();
+    let target = system.backend(1);
+    let source = system.backend(0);
+
+    thread::scope(|scope| {
+        let waiter = scope.spawn(|| {
+            assert!(target.router_wait(0, 1, Duration::from_secs(5)));
+            assert_eq!(target.take_message(0, 1), Some(7));
+        });
+        source.doorbell_send(0, 1, 7).unwrap();
+        waiter.join().unwrap();
+    });
+}
+
+#[test]
 fn ready_and_epoch_delegate_to_the_shared_state() {
     let system = MockSystem::new();
     let core0 = system.backend(0);

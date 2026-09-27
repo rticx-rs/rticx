@@ -120,6 +120,13 @@ impl XbinPassBackend for TestBackend {
         syn::parse_quote!(rticx_xbin_rt)
     }
 
+    fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __rticx_xbin_backend().doorbell_send(#source, #target, task_id)
+        });
+        template
+    }
+
     fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
         format_ident!("__xbin_doorbell_{target}_{line}")
     }
@@ -249,9 +256,10 @@ fn receiver_module() -> syn::ItemMod {
                     // -- spawn enqueues and rings; only the dispatcher executes
                     crate::sender_app::EncryptTask::cross_spawn(request(1))
                         .expect("the first spawn enqueues");
-                    assert!(
-                        backend.doorbell_take(1, 0),
-                        "the spawn rings the target doorbell"
+                    assert_eq!(
+                        backend.take_message(0, 1),
+                        Some(1),
+                        "the ring publishes the task id on the pair doorbell (M6.5-T2)"
                     );
                     assert!(
                         RECEIVED.lock().expect("the receiver log").is_empty(),

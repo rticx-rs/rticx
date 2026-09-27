@@ -144,6 +144,13 @@ impl XbinPassBackend for TestBackend {
         syn::parse_quote!(rticx_xbin_rt)
     }
 
+    fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
+        template.block = syn::parse_quote!({
+            __mock_xbin_backend().doorbell_send(#source, #target, task_id)
+        });
+        template
+    }
+
     fn dispatcher_irq(&self, target: u32, line: u32) -> syn::Ident {
         format_ident!("XbinDoorbell{target}_{line}")
     }
@@ -382,6 +389,17 @@ fn sender_codegen_snapshot() {
         },
         "cross_spawn signature",
     );
+
+    // ---- pair ring function (M6.5-T2) ----
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_xbin_ring_0_1 (task_id : u32) -> Result < () , () > {
+                __mock_xbin_backend () . doorbell_send (0u32 , 1u32 , task_id)
+            }
+        },
+        "ring function with the backend-filled body",
+    );
 }
 
 #[test]
@@ -428,19 +446,24 @@ fn sender_codegen_ring_and_error_semantics() {
         "enqueue error semantics",
     );
 
-    // Doorbell ring and its `Err(None)` semantics.
+    // The ring call publishes the task id of the synced task and maps a
+    // failed notification to `Err(None)` (the input is already enqueued).
     assert_section_present(
         &generated,
         quote! {
-            match __rticx_xbin_backend . doorbell_ring (
-                __RTICX_XBIN_TARGET_CORE ,
-                __RTICX_XBIN_DOORBELL_LINE ,
-            ) {
+            const __RTICX_XBIN_TASK_ID : u32 = 1u32 ;
+        },
+        "task id constant",
+    );
+    assert_section_present(
+        &generated,
+        quote! {
+            match __rticx_xbin_ring_0_1 (__RTICX_XBIN_TASK_ID) {
                 Ok (()) => Ok (()) ,
-                Err (_) => Err (None) ,
+                Err (()) => Err (None) ,
             }
         },
-        "doorbell ring",
+        "ring call and its `Err(None)` semantics",
     );
 }
 

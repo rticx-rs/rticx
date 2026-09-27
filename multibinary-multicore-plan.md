@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5.5 and M6.5-T1 complete; M6.5-T2 next, then M6)
+**Status:** in progress (M0–M5.5 and M6.5-T1/T2 complete; M6.5-T3 next, then M6)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -849,7 +849,7 @@ multi-source acceptance is written against this model.
       *Acceptance:* parse and pipeline tests for both shapes, count, duplicate
       and overlap errors; sw-pass's `assign_dispatchers` sees only its own
       entries.
-- [ ] **M6.5-T2** Producer ring binding:
+- [x] **M6.5-T2** Producer ring binding:
       `XbinPassBackend::ring_doorbell_fn(source, target, template)` emits
       `__rticx_xbin_ring_{source}_{target}(task_id) -> Result<(), ()>` in every
       application producing a pair with tasks; `cross_spawn` enqueues, then
