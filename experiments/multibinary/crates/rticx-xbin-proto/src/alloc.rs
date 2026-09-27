@@ -49,7 +49,7 @@ pub fn system_view(
             id: task.id(),
             name: task.name().to_string(),
             receiver_core: task.receiver_core(),
-            spawner_cores: vec![task.spawner_core()],
+            spawner_core: task.spawner_core(),
             priority: task.priority(),
             capacity: task.capacity(),
             input_type: task.input_type().to_string(),

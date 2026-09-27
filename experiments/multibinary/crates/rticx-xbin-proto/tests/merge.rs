@@ -1,13 +1,16 @@
-//! Merge and validation tests (M1-T5).
+//! Merge and validation tests (M1-T5, M5.5).
 //!
 //! One positive and one negative test per validation rule: core-id
-//! consistency, sender/receiver match, priority disjointness, type existence
-//! and region fit. Negative cases assert the exact error variant (and, for
-//! the central rules, the deterministic message).
+//! consistency, receiver topology, priority disjointness, type existence and
+//! region fit. Negative cases assert the exact error variant (and, for the
+//! central rules, the deterministic message).
+//!
+//! Since M5.5 the task topology comes exclusively from the receivers'
+//! singular `spawn_by`: there are no sender manifests to match.
 
 use rticx_xbin_proto::{
-    AppManifest, FIFO_HEADER, Hash64, IpcTypes, MergeError, ProjectConfig, ReceiverDecl,
-    SenderDecl, TargetRef, TypeKind, merge_project, parse_idl_str, parse_project_str,
+    AppManifest, FIFO_HEADER, Hash64, IpcTypes, MergeError, ProjectConfig, ReceiverDecl, TargetRef,
+    TypeKind, merge_project, parse_idl_str, parse_project_str,
 };
 
 const IDL: &str = r#"
@@ -67,25 +70,6 @@ core_ids = [2]
 "2->1" = { base_from_source = 0x30042000, base_from_target = 0x30042000, size = 4096 }
 "#;
 
-/// One application (`app-duo`, global cores 0 and 1) plus the receiver binary.
-const DUO_APPS: &str = r#"
-schema = 1
-
-[[application]]
-package = "app-duo"
-target = { kind = "bin", name = "duo" }
-core_ids = [0, 1]
-
-[[application]]
-package = "app-m4"
-target = { kind = "bin", name = "m4" }
-core_ids = [2]
-
-[ipc.regions]
-"0->2" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"1->2" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
-"#;
-
 fn config(source: &str) -> ProjectConfig {
     parse_project_str(source).expect("valid project manifest")
 }
@@ -105,7 +89,6 @@ fn manifest(package: &str, target: &str, core_ids: &[u32], external_cores: &[u32
         external_cores: external_cores.to_vec(),
         types: Vec::new(),
         receivers: Vec::new(),
-        senders: Vec::new(),
     }
 }
 
@@ -114,7 +97,7 @@ fn receiver(
     priority: u16,
     capacity: usize,
     core: u32,
-    spawned_by: Option<&[u32]>,
+    spawn_by: u32,
     input: &str,
 ) -> ReceiverDecl {
     ReceiverDecl {
@@ -122,64 +105,27 @@ fn receiver(
         priority,
         capacity,
         core,
-        spawned_by: spawned_by.map(<[u32]>::to_vec),
+        spawn_by,
         input_type: input.to_string(),
     }
 }
 
-fn sender(
-    name: &str,
-    core: u32,
-    priority: u16,
-    capacity: usize,
-    input: Option<&str>,
-) -> SenderDecl {
-    SenderDecl {
-        name: name.to_string(),
-        core,
-        priority,
-        capacity,
-        input_type: input.map(str::to_string),
-    }
-}
-
-/// `app-m7`: spawns `EncryptTask` on global core 1 with `EncryptReq`.
+/// `app-m7`: the producer of global core 0, no declarations of its own.
 fn m7_manifest() -> AppManifest {
-    let mut manifest = manifest("app-m7", "m7", &[0], &[1]);
-    manifest.types = vec!["ipc_types::EncryptReq".to_string()];
-    manifest.senders = vec![sender(
-        "EncryptTask",
-        1,
-        3,
-        2,
-        Some("ipc_types::EncryptReq"),
-    )];
-    manifest
+    manifest("app-m7", "m7", &[0], &[1])
 }
 
 /// `app-m4`: executes `EncryptTask` for global core 0.
 fn m4_manifest() -> AppManifest {
     let mut manifest = manifest("app-m4", "m4", &[1], &[0]);
     manifest.types = vec!["ipc_types::EncryptReq".to_string()];
-    manifest.receivers = vec![receiver(
-        "EncryptTask",
-        3,
-        2,
-        0,
-        Some(&[0]),
-        "ipc_types::EncryptReq",
-    )];
+    manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, 0, "ipc_types::EncryptReq")];
     manifest
 }
 
-/// `app-m5`: no cross-binary declarations of its own.
+/// `app-m5`: no declarations of its own (global core 2).
 fn m5_manifest() -> AppManifest {
     manifest("app-m5", "m5", &[2], &[])
-}
-
-/// `app-m6`: owns global core 5, used by the `spawned_by` tests.
-fn m5_manifest_core5() -> AppManifest {
-    manifest("app-m6", "m6", &[5], &[])
 }
 
 fn merge(
@@ -198,7 +144,7 @@ fn error(project: &str, manifests: &[AppManifest]) -> MergeError {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn merges_the_sender_receiver_fixture() {
+fn merges_the_producer_receiver_fixture() {
     let merged = merge(TWO_APPS, &[m7_manifest(), m4_manifest()]).expect("valid project");
 
     let packages: Vec<&str> = merged
@@ -281,17 +227,12 @@ fn merges_the_sender_receiver_fixture() {
 
 #[test]
 fn merged_view_is_deterministic_and_tasks_are_numbered_in_name_order() {
-    let mut m7 = m7_manifest();
-    m7.senders = vec![
-        sender("Zeta", 1, 4, 1, None),
-        sender("Alpha", 1, 5, 1, None),
-    ];
     let mut m4 = m4_manifest();
     m4.receivers = vec![
-        receiver("Zeta", 4, 1, 0, Some(&[0]), "ipc_types::EncryptReq"),
-        receiver("Alpha", 5, 1, 0, Some(&[0]), "ipc_types::EncryptReq"),
+        receiver("Zeta", 4, 1, 0, 0, "ipc_types::EncryptReq"),
+        receiver("Alpha", 5, 1, 0, 0, "ipc_types::EncryptReq"),
     ];
-    let manifests = [m7, m4];
+    let manifests = [m7_manifest(), m4];
 
     let first = merge(TWO_APPS, &manifests).expect("valid project");
     let second = merge(TWO_APPS, &manifests).expect("valid project");
@@ -445,23 +386,23 @@ fn rejects_receiver_core_out_of_range() {
 }
 
 #[test]
-fn rejects_unknown_core_in_spawned_by() {
+fn rejects_unknown_core_in_spawn_by() {
     let mut m4 = m4_manifest();
-    m4.receivers[0].spawned_by = Some(vec![9]);
+    m4.receivers[0].spawn_by = 9;
     let error = error(TWO_APPS, &[m7_manifest(), m4]);
     assert!(
         matches!(
             &error,
-            MergeError::UnknownCore { core: 9, context, .. } if context.contains("spawned_by")
+            MergeError::UnknownCore { core: 9, context, .. } if context.contains("spawn_by")
         ),
         "{error}"
     );
 }
 
 #[test]
-fn rejects_own_core_in_spawned_by() {
+fn rejects_own_core_in_spawn_by() {
     let mut m4 = m4_manifest();
-    m4.receivers[0].spawned_by = Some(vec![1]);
+    m4.receivers[0].spawn_by = 1;
     let error = error(TWO_APPS, &[m7_manifest(), m4]);
     assert!(
         matches!(&error, MergeError::OwnSpawnerCore { core: 1, .. }),
@@ -470,20 +411,13 @@ fn rejects_own_core_in_spawned_by() {
 }
 
 // ---------------------------------------------------------------------------
-// Sender/receiver match
+// Receiver topology
 // ---------------------------------------------------------------------------
 
 #[test]
 fn rejects_duplicate_receiver() {
     let mut m7 = m7_manifest();
-    m7.receivers = vec![receiver(
-        "EncryptTask",
-        3,
-        2,
-        0,
-        None,
-        "ipc_types::EncryptReq",
-    )];
+    m7.receivers = vec![receiver("EncryptTask", 3, 2, 0, 1, "ipc_types::EncryptReq")];
     let error = error(TWO_APPS, &[m7, m4_manifest()]);
     assert!(
         matches!(
@@ -496,162 +430,32 @@ fn rejects_duplicate_receiver() {
 }
 
 #[test]
-fn rejects_sender_without_receiver() {
-    let mut m4 = m4_manifest();
-    m4.receivers = Vec::new();
-    let error = error(TWO_APPS, &[m7_manifest(), m4]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::SenderWithoutReceiver { package, task }
-                if package == "app-m7" && task == "EncryptTask"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_receiver_without_sender() {
-    let mut m7 = m7_manifest();
-    m7.senders = Vec::new();
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::ReceiverWithoutSender { package, task }
-                if package == "app-m4" && task == "EncryptTask"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_target_core_mismatch() {
-    let mut m7 = m7_manifest();
-    m7.external_cores = vec![1, 2];
-    m7.senders[0].core = 2;
-    let error = error(THREE_APPS, &[m7, m4_manifest(), m5_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::TargetCoreMismatch {
-                expected: 1,
-                found: 2,
-                ..
-            }
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_target_core_not_visible() {
-    let mut m7 = m7_manifest();
-    m7.external_cores = Vec::new();
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::TargetCoreNotVisible { task, core: 1, .. } if task == "EncryptTask"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_spawner_core_not_visible() {
+fn rejects_spawner_core_not_visible_to_the_receiver() {
     let mut m4 = m4_manifest();
     m4.external_cores = Vec::new();
     let error = error(TWO_APPS, &[m7_manifest(), m4]);
     assert!(
         matches!(
             &error,
-            MergeError::SpawnerCoreNotVisible { task, core: 0, .. } if task == "EncryptTask"
+            MergeError::SpawnerCoreNotVisible { task, core: 0, package } if task == "EncryptTask" && package == "app-m4"
         ),
         "{error}"
     );
 }
 
 #[test]
-fn rejects_self_target() {
-    let mut duo = manifest("app-duo", "duo", &[0, 1], &[]);
-    duo.senders = vec![sender("EncryptTask", 1, 3, 2, None)];
-    let error = error(DUO_APPS, &[duo, m4_manifest_with_core(2)]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::SelfTarget { package, task, core: 1 }
-                if package == "app-duo" && task == "EncryptTask"
-        ),
-        "{error}"
-    );
-}
-
-/// `app-m4` variant owning global core 2 (for the DUO_APPS topology).
-fn m4_manifest_with_core(core: u32) -> AppManifest {
-    let mut manifest = manifest("app-m4", "m4", &[core], &[]);
-    manifest.receivers = vec![receiver(
-        "EncryptTask",
-        3,
-        2,
-        0,
-        None,
-        "ipc_types::EncryptReq",
-    )];
-    manifest
-}
-
-#[test]
-fn rejects_priority_mismatch() {
+fn rejects_receiver_core_not_visible_to_the_producer() {
     let mut m7 = m7_manifest();
-    m7.senders[0].priority = 2;
+    m7.external_cores = Vec::new();
     let error = error(TWO_APPS, &[m7, m4_manifest()]);
     assert!(
         matches!(
             &error,
-            MergeError::PriorityMismatch { task, receiver: 3, sender: 2, .. } if task == "EncryptTask"
+            MergeError::TargetCoreNotVisible { task, core: 1, package }
+                if task == "EncryptTask" && package == "app-m7"
         ),
         "{error}"
     );
-}
-
-#[test]
-fn rejects_capacity_mismatch() {
-    let mut m7 = m7_manifest();
-    m7.senders[0].capacity = 1;
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::CapacityMismatch { task, receiver: 2, sender: 1, .. } if task == "EncryptTask"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_input_type_mismatch() {
-    let mut m7 = m7_manifest();
-    m7.senders[0].input_type = Some("ipc_types::OtherReq".to_string());
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::InputTypeMismatch { task, receiver, sender, .. }
-                if task == "EncryptTask"
-                    && receiver == "ipc_types::EncryptReq"
-                    && sender == "ipc_types::OtherReq"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn matches_input_types_by_their_idl_name() {
-    let mut m7 = m7_manifest();
-    m7.senders[0].input_type = Some("EncryptReq".to_string());
-    let merged = merge(TWO_APPS, &[m7, m4_manifest()]).expect("same IDL name");
-    assert_eq!(merged.tasks()[0].input_type(), "EncryptReq");
 }
 
 #[test]
@@ -669,145 +473,22 @@ fn rejects_unknown_receiver_input_type() {
     );
 }
 
-#[test]
-fn rejects_unknown_sender_input_type() {
-    let mut m7 = m7_manifest();
-    m7.senders[0].input_type = Some("ipc_types::Missing".to_string());
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::UnknownInputType { package, type_name, .. }
-                if package == "app-m7" && type_name == "Missing"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_multiple_senders_from_different_applications() {
-    let mut m7 = m7_manifest();
-    m7.external_cores = vec![1];
-    let mut m5 = manifest("app-m5", "m5", &[2], &[1]);
-    m5.senders = vec![sender("EncryptTask", 1, 3, 2, None)];
-    let mut m4 = m4_manifest();
-    m4.external_cores = vec![0, 2];
-    m4.receivers[0].spawned_by = None;
-
-    let error = error(THREE_APPS, &[m7, m4, m5]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::MultipleSpawners { task, spawners } if task == "EncryptTask" && spawners == &[0, 2]
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_multi_core_sender_application() {
-    let mut duo = manifest("app-duo", "duo", &[0, 1], &[2]);
-    duo.senders = vec![sender("EncryptTask", 2, 3, 2, None)];
-    let error = error(DUO_APPS, &[duo, m4_manifest_with_core(2)]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::MultipleSpawners { task, spawners } if task == "EncryptTask" && spawners == &[0, 1]
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_spawner_not_allowed_by_receiver() {
-    let mut m4 = m4_manifest();
-    m4.external_cores = vec![0, 5];
-    m4.receivers[0].spawned_by = Some(vec![5]);
-
-    let error = error(SPAWNED_BY_APPS, &[m7_manifest(), m4, m5_manifest_core5()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::SpawnerNotAllowed { task, producer: 0, allowed } if task == "EncryptTask" && allowed == &[5]
-        ),
-        "{error}"
-    );
-}
-
-/// m7 (core 0), m4 (core 1) and m6 (core 5), used for `spawned_by` tests.
-const SPAWNED_BY_APPS: &str = r#"
-schema = 1
-
-[[application]]
-package = "app-m7"
-target = { kind = "bin", name = "m7" }
-core_ids = [0]
-
-[[application]]
-package = "app-m4"
-target = { kind = "bin", name = "m4" }
-core_ids = [1]
-
-[[application]]
-package = "app-m6"
-target = { kind = "bin", name = "m6" }
-core_ids = [5]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"5->1" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
-"#;
-
-#[test]
-fn rejects_phantom_spawner() {
-    let mut m4 = m4_manifest();
-    m4.external_cores = vec![0, 5];
-    m4.receivers[0].spawned_by = Some(vec![0, 5]);
-
-    let error = error(SPAWNED_BY_APPS, &[m7_manifest(), m4, m5_manifest_core5()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::PhantomSpawner { task, core: 5 } if task == "EncryptTask"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn allows_omitting_spawned_by() {
-    let mut m4 = m4_manifest();
-    m4.receivers[0].spawned_by = None;
-    let merged = merge(TWO_APPS, &[m7_manifest(), m4]).expect("spawned_by is optional");
-    assert_eq!(merged.tasks()[0].spawner_core(), 0);
-}
-
-#[test]
-fn allows_sender_without_input_type() {
-    let mut m7 = m7_manifest();
-    m7.senders[0].input_type = None;
-    let merged = merge(TWO_APPS, &[m7, m4_manifest()]).expect("sender input is optional");
-    assert_eq!(merged.tasks().len(), 1);
-}
-
 // ---------------------------------------------------------------------------
 // Priority disjointness
 // ---------------------------------------------------------------------------
 
 #[test]
 fn rejects_priority_conflict_between_sources() {
-    let mut m7 = m7_manifest();
-    m7.senders = vec![sender("Alpha", 1, 3, 1, None)];
-    let mut m5 = manifest("app-m5", "m5", &[2], &[1]);
-    m5.senders = vec![sender("Beta", 1, 3, 1, None)];
     let mut m4 = m4_manifest();
     m4.external_cores = vec![0, 2];
     m4.receivers = vec![
-        receiver("Alpha", 3, 1, 0, Some(&[0]), "ipc_types::EncryptReq"),
-        receiver("Beta", 3, 1, 0, Some(&[2]), "ipc_types::EncryptReq"),
+        receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq"),
+        receiver("Beta", 3, 1, 0, 2, "ipc_types::EncryptReq"),
     ];
+    let mut m5 = m5_manifest();
+    m5.external_cores = vec![1];
 
-    let error = error(THREE_APPS, &[m7, m4, m5]);
+    let error = error(THREE_APPS, &[m7_manifest(), m4, m5]);
     assert!(
         matches!(
             &error,
@@ -826,18 +507,14 @@ fn rejects_priority_conflict_between_sources() {
 
 #[test]
 fn allows_same_priority_from_the_same_source() {
-    let mut m7 = m7_manifest();
-    m7.senders = vec![
-        sender("Alpha", 1, 3, 1, None),
-        sender("Beta", 1, 3, 1, None),
-    ];
     let mut m4 = m4_manifest();
     m4.receivers = vec![
-        receiver("Alpha", 3, 1, 0, Some(&[0]), "ipc_types::EncryptReq"),
-        receiver("Beta", 3, 1, 0, Some(&[0]), "ipc_types::EncryptReq"),
+        receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq"),
+        receiver("Beta", 3, 1, 0, 0, "ipc_types::EncryptReq"),
     ];
 
-    let merged = merge(TWO_APPS, &[m7, m4]).expect("one dispatcher line drains both FIFOs");
+    let merged =
+        merge(TWO_APPS, &[m7_manifest(), m4]).expect("one dispatcher line drains both FIFOs");
     assert_eq!(merged.tasks().len(), 2);
     assert!(merged.tasks().iter().all(|task| task.spawner_core() == 0));
 }
@@ -846,29 +523,13 @@ fn allows_same_priority_from_the_same_source() {
 fn allows_the_same_priority_on_different_targets() {
     let mut m7 = m7_manifest();
     m7.external_cores = vec![1, 2];
-    m7.senders = vec![
-        sender("Alpha", 1, 3, 1, None),
-        sender("Beta", 2, 3, 1, None),
-    ];
+
     let mut m4 = m4_manifest();
-    m4.receivers = vec![receiver(
-        "Alpha",
-        3,
-        1,
-        0,
-        Some(&[0]),
-        "ipc_types::EncryptReq",
-    )];
+    m4.receivers = vec![receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq")];
+
     let mut m5 = m5_manifest();
     m5.external_cores = vec![0];
-    m5.receivers = vec![receiver(
-        "Beta",
-        3,
-        1,
-        0,
-        Some(&[0]),
-        "ipc_types::EncryptReq",
-    )];
+    m5.receivers = vec![receiver("Beta", 3, 1, 0, 0, "ipc_types::EncryptReq")];
 
     let merged = merge(THREE_APPS, &[m7, m4, m5]).expect("different targets do not conflict");
     assert_eq!(merged.tasks().len(), 2);
@@ -973,17 +634,12 @@ core_ids = [1]
 
 #[test]
 fn region_fit_accounts_for_fifo_alignment() {
-    let mut m7 = m7_manifest();
-    m7.senders = vec![
-        sender("Alpha", 1, 3, 2, None),
-        sender("Beta", 1, 4, 2, None),
-    ];
     let mut m4 = m4_manifest();
     m4.receivers = vec![
-        receiver("Alpha", 3, 2, 0, Some(&[0]), "ipc_types::EncryptReq"),
-        receiver("Beta", 4, 2, 0, Some(&[0]), "ipc_types::EncryptReq"),
+        receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
+        receiver("Beta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
     ];
-    let manifests = [m7, m4];
+    let manifests = [m7_manifest(), m4];
 
     // 100 bytes each; the second FIFO starts at the next 8-byte boundary (104).
     let error = error(ODD_REGION, &manifests);

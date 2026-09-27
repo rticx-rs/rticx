@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5 complete; M5.5 next)
+**Status:** in progress (M0–M5 complete; M5.5 in progress — T1/T2 done)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -751,19 +751,19 @@ breaking triggers the coordinated generation bump.
 
 ### M5.5 — Native `#[sw_task]` cross-binary declarations
 
-- [ ] **M5.5-T1** Native receiver syntax: parse cross receivers from `#[sw_task]`
+- [x] **M5.5-T1** Native receiver syntax: parse cross receivers from `#[sw_task]`
       plus `impl RticSwTask` (`SpawnInput`) instead of `#[cross_bin_task]`. In
       applications declaring `external_cores`, resolve `spawn_by` in the global
       namespace (`∈ core_ids` → in-app task, mapped back to a local index for
       sw-pass; `∈ external_cores` → cross receiver; else error), keeping `core` a
       local index. Delete `#[cross_bin_task]`, `#[cross_bin_spawn]`,
       `CrossBinTask` and `CrossBinSpawn`; make the manifest field `spawn_by: u32`
-      and bump the manifest/view schema versions.
+      and dont bump the manifest/view schema versions (lets keep it 1 for now).
       *Acceptance:* parse tests for identity-default back-compat, in-app
       global→local mapping, external classification and unknown-core errors; the
       `cross_bin_task`/`cross_bin_spawn`/`CrossBinTask`/`CrossBinSpawn` symbols no
       longer exist (`CrossBinBackend` stays — it is the backend contract).
-- [ ] **M5.5-T2** Codegen and stubs: before the native parser runs, metadata mode
+- [x] **M5.5-T2** Codegen and stubs: before the native parser runs, metadata mode
       rewrites in-app global `spawn_by` values to local indexes and strips
       `spawn_by` on cross receivers, so sw-pass never sees an external id; codegen
       mode injects `#[task(..., task_trait = RticSwTask, init = generated)]`,

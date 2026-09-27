@@ -15,8 +15,10 @@ use std::process::Command;
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use rticx_core::RticMacroBuilder;
 use rticx_core::mock_backend::MockCoreBackend;
+use rticx_core::{
+    Analysis, App, AppArgs, CorePassBackend, RticMacroBuilder, RticTask, SubAnalysis, SubApp,
+};
 use rticx_xbin_pass::{XbinPass, XbinPassBackend};
 use rticx_xbin_proto::SystemView;
 
@@ -65,7 +67,7 @@ const SYSTEM_JSON: &str = r#"{
       "id": 1,
       "name": "EncryptTask",
       "receiver_core": 1,
-      "spawner_cores": [0],
+      "spawner_core": 0,
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
@@ -108,9 +110,92 @@ impl XbinPassBackend for CompileBackend {
     }
 }
 
-/// The receiver application: one task, its input, and the mock backend used
-/// by the generated FIFO view. `__rticx_xbin_backend` lives inside the app
-/// module because the generated code calls it there.
+/// The core backend of the receiver fixture: [`MockCoreBackend`] with a
+/// working resource-proxy lock body.
+///
+/// The mock replaces the whole lock body, which drops the `resource_ptr`
+/// binding the generated body starts with. The receiver declares a shared
+/// resource (`shared = [counter]`), so the fixture needs the same contract as
+/// a real distribution: keep the generated body and call `f` with the
+/// resource pointer. Everything else is delegated to the mock backend.
+#[derive(Default)]
+struct FixtureCoreBackend(MockCoreBackend);
+
+impl CorePassBackend for FixtureCoreBackend {
+    fn post_init(
+        &self,
+        app_args: &AppArgs,
+        app_info: &SubApp,
+        app_analysis: &SubAnalysis,
+    ) -> Option<proc_macro2::TokenStream> {
+        self.0.post_init(app_args, app_info, app_analysis)
+    }
+
+    fn generate_resource_proxy_lock_impl(
+        &self,
+        _app_args: &AppArgs,
+        _app_info: &SubApp,
+        mut incomplete_lock_fn: syn::ImplItemFn,
+    ) -> syn::ImplItemFn {
+        let lock_call: syn::Block = syn::parse_quote!({ f(unsafe { &mut *resource_ptr }) });
+        incomplete_lock_fn.block.stmts.extend(lock_call.stmts);
+        incomplete_lock_fn
+    }
+
+    fn generate_global_definitions(
+        &self,
+        app_args: &AppArgs,
+        app_info: &SubApp,
+        app_analysis: &SubAnalysis,
+    ) -> Option<proc_macro2::TokenStream> {
+        self.0
+            .generate_global_definitions(app_args, app_info, app_analysis)
+    }
+
+    fn wrap_task_execution(
+        &self,
+        task: &RticTask,
+        dispatch_task_call: proc_macro2::TokenStream,
+    ) -> Option<proc_macro2::TokenStream> {
+        self.0.wrap_task_execution(task, dispatch_task_call)
+    }
+
+    fn entry_name(&self, core: u32) -> syn::Ident {
+        self.0.entry_name(core)
+    }
+
+    fn populate_idle_loop(&self) -> Option<proc_macro2::TokenStream> {
+        self.0.populate_idle_loop()
+    }
+
+    fn generate_enable_global_interrupts(&self) -> Option<proc_macro2::TokenStream> {
+        self.0.generate_enable_global_interrupts()
+    }
+
+    fn generate_interrupt_free_fn(&self, empty_body_fn: syn::ItemFn) -> syn::ItemFn {
+        self.0.generate_interrupt_free_fn(empty_body_fn)
+    }
+
+    fn pre_codegen_validation(&self, app: &App, analysis: &Analysis) -> syn::Result<()> {
+        self.0.pre_codegen_validation(app, analysis)
+    }
+
+    fn entry_attrs(&self) -> Vec<syn::Attribute> {
+        self.0.entry_attrs()
+    }
+
+    fn task_attrs(&self, interrupt_name: syn::Ident) -> Vec<syn::Attribute> {
+        self.0.task_attrs(interrupt_name)
+    }
+}
+
+/// The receiver application: one task with a shared resource, its input, and
+/// the mock backend used by the generated FIFO view. `__rticx_xbin_backend`
+/// lives inside the app module because the generated code calls it there.
+///
+/// The `shared = [counter]` declaration is passed through to the core
+/// `#[task(..)]` shape the pass injects, so the core pass computes the SRP
+/// ceiling of `counter` for the receiver (M5.5).
 fn receiver_app() -> syn::ItemMod {
     syn::parse_quote! {
         mod app {
@@ -126,22 +211,27 @@ fn receiver_app() -> syn::ItemMod {
                 SYSTEM.backend(1)
             }
 
-            trait CrossBinTask {
-                type Input;
-                fn exec(&mut self, input: Self::Input);
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
             }
 
-            #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+            #[shared]
+            struct Shared {
+                pub counter: u32,
+            }
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0, shared = [counter])]
             struct EncryptTask;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
-                fn exec(&mut self, _input: Self::Input) {}
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
             }
 
             #[init]
-            fn init() -> TaskInits {
-                TaskInits {}
+            fn init() -> (Shared, TaskInits) {
+                (Shared { counter: 0 }, TaskInits {})
             }
         }
     }
@@ -159,24 +249,44 @@ fn receiver_args() -> TokenStream {
 /// The fixture view with the receiver application's source hash recorded, as
 /// `cargo xbin sync` would (M3-T4).
 fn receiver_system() -> String {
+    system_for(&receiver_app())
+}
+
+/// Like [`receiver_system`] for an arbitrary receiver module.
+fn system_for(app_mod: &syn::ItemMod) -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     let application = view
         .apps
         .iter_mut()
         .find(|application| application.package == "app-m4")
         .expect("fixture app-m4");
-    application.source_hash = rticx_xbin_pass::app_source_hash(&receiver_args(), &receiver_app());
+    application.source_hash = rticx_xbin_pass::app_source_hash(&receiver_args(), app_mod);
     view.seal();
     view.to_json()
 }
 
+/// The receiver module without the `RticSwTask` trait definition: what a
+/// distribution without the `swtasks` feature leaves in scope (M5.5).
+fn receiver_app_without_sw_task_trait() -> syn::ItemMod {
+    let mut app_mod = receiver_app();
+    if let Some((_, items)) = app_mod.content.as_mut() {
+        items.retain(|item| !matches!(item, syn::Item::Trait(item) if item.ident == "RticSwTask"));
+    }
+    app_mod
+}
+
 /// Runs the extension pass and the core pass and returns the expansion.
 fn expand(system: &Path) -> String {
+    expand_with(system, receiver_app())
+}
+
+/// Like [`expand`], over an arbitrary receiver module.
+fn expand_with(system: &Path, app_mod: syn::ItemMod) -> String {
     let pass = XbinPass::with_system(system, "app-m4", "m4").with_backend(CompileBackend);
-    let mut builder = RticMacroBuilder::new(MockCoreBackend);
+    let mut builder = RticMacroBuilder::new(FixtureCoreBackend::default());
     builder.bind_pre_core_pass(pass);
     builder
-        .build_rtic_macro2(receiver_args(), receiver_app(), None)
+        .build_rtic_macro2(receiver_args(), app_mod, None)
         .to_string()
 }
 
@@ -285,9 +395,22 @@ fn receiver_fixture_expands_and_compiles() {
         "the dispatcher is missing: {expanded}"
     );
     assert!(
-        expanded.contains("implements_cross_bin_task")
-            && expanded.contains("impl CrossBinTask for EncryptTask"),
+        expanded.contains("implements_rtic_sw_task")
+            && expanded.contains("impl RticSwTask for EncryptTask"),
         "the receiver was not turned into a core task: {expanded}"
+    );
+    assert!(
+        expanded.contains("__rticx_xbin_assert_cross_core_message")
+            && expanded.contains("CrossCoreMessage"),
+        "the `SpawnInput: CrossCoreMessage` assertion is missing: {expanded}"
+    );
+
+    // `shared = [counter]` is passed through to the core `#[task(..)]` shape,
+    // so the core pass computes the SRP ceiling and generates the receiver's
+    // shared-resource accessor (M5.5).
+    assert!(
+        expanded.contains("__encrypt_task_shared_resources"),
+        "the receiver's shared resource was dropped: {expanded}"
     );
 
     // The init hooks are wired into the generated entry function: the
@@ -357,5 +480,46 @@ fn receiver_fixture_expands_and_compiles() {
         String::from_utf8_lossy(&rebuild.stderr).contains("Compiling xbin-receiver-compile"),
         "editing system.json must trigger a rebuild (include_str! dep-info):\n{}",
         String::from_utf8_lossy(&rebuild.stderr)
+    );
+}
+
+#[test]
+fn missing_sw_task_trait_is_a_compile_error() {
+    // The `swtasks` feature is what makes `rticx-sw-pass` generate the
+    // `RticSwTask` trait and its check function. A distribution that binds
+    // the cross-binary pass without it leaves `RticSwTask` undefined, so the
+    // receiver's `impl RticSwTask` and the injected
+    // `task_trait = RticSwTask` must fail to resolve (M5.5).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let system = dir.path().join("system.json");
+    let app_mod = receiver_app_without_sw_task_trait();
+    std::fs::write(&system, system_for(&app_mod)).expect("system.json");
+
+    let expanded = expand_with(&system, app_mod);
+    assert!(
+        !expanded.contains("compile_error"),
+        "pipeline failed: {expanded}"
+    );
+
+    let project = dir.path().join("project");
+    write_project(&project, &expanded);
+
+    let output = Command::new(cargo())
+        .arg("build")
+        .arg("--quiet")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(project.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", project.join("target"))
+        .output()
+        .expect("failed to run cargo");
+    assert!(
+        !output.status.success(),
+        "the receiver compiled although `RticSwTask` is undefined"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("RticSwTask"),
+        "the error does not name the missing `RticSwTask` trait:\n{stderr}"
     );
 }

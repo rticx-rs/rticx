@@ -86,7 +86,7 @@ const SYSTEM_JSON: &str = r#"{
       "id": 1,
       "name": "EncryptTask",
       "receiver_core": 1,
-      "spawner_cores": [0],
+      "spawner_core": 0,
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
@@ -129,9 +129,9 @@ impl XbinPassBackend for TestBackend {
     }
 }
 
-/// The sender fixture application: one `#[cross_bin_spawn]` stub plus the
-/// pieces its codegen-only expansion needs and `pub` wrappers over the
-/// generated private init hooks.
+/// The producer fixture application: it declares nothing (the pass generates
+/// the `EncryptTask` stub from the view) plus the pieces its codegen-only
+/// expansion needs and `pub` wrappers over the generated private init hooks.
 ///
 /// The sender is expanded through [`XbinPass`] alone, so no core pass provides
 /// `__rticx_interrupt_free` (the pass generated `cross_spawn` calls it): the
@@ -147,9 +147,6 @@ fn sender_module() -> syn::ItemMod {
             fn __rticx_interrupt_free<R>(f: impl FnOnce() -> R) -> R {
                 f()
             }
-
-            #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-            pub struct EncryptTask;
 
             pub fn test_configure() {
                 __rticx_xbin_configure_shared_memory(&__rticx_xbin_backend());
@@ -205,18 +202,18 @@ fn receiver_module() -> syn::ItemMod {
             /// Inputs executed by the receiver task, in dispatcher order.
             pub static RECEIVED: Mutex<Vec<ipc_types::EncryptReq>> = Mutex::new(Vec::new());
 
-            trait CrossBinTask {
-                type Input;
-                fn exec(&mut self, input: Self::Input);
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
             }
 
-            #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
             pub struct EncryptTask;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
 
-                fn exec(&mut self, input: Self::Input) {
+                fn exec(&mut self, input: Self::SpawnInput) {
                     RECEIVED
                         .lock()
                         .expect("the receiver log is never poisoned")

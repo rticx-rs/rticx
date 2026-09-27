@@ -12,13 +12,16 @@
 //! - **codegen mode** (phase 2): it reads the driver-generated `system.json`
 //!   (from `RTICX_XBIN_SYSTEM`, or the default
 //!   `<project root>/target/rticx-xbin/system.json`), filters it by this
-//!   application's cores, and emits the cross-binary code for every
-//!   `#[cross_bin_spawn]` stub and `#[cross_bin_task]` receiver:
+//!   application's cores, and emits the cross-binary code:
 //!
-//!   - sender side (M3-T1): FIFO views and `Task::cross_spawn`;
-//!   - receiver side (M3-T2): FIFO views, one generated doorbell dispatcher
-//!     per `(source -> target, priority)` line, and the core `#[task(..)]`
-//!     shape on the receiver structs themselves (see
+//!   - sender side (M3-T1, M5.5): a generated sender stub
+//!     (`pub struct <Task>;`) plus FIFO views and `Task::cross_spawn` for
+//!     every view task whose `spawner_core` belongs to this application —
+//!     producer sources declare nothing;
+//!   - receiver side (M3-T2, M5.5): FIFO views, the
+//!     `SpawnInput: CrossCoreMessage` const assertion, one generated doorbell
+//!     dispatcher per `(source -> target, priority)` line, and the core
+//!     `#[task(..)]` shape on the native receiver structs themselves (see
 //!     `crate::parse::inject_receiver_tasks`);
 //!   - init hooks (M3-T3): `__rticx_xbin_configure_shared_memory` on every
 //!     core, `__rticx_xbin_init_shared` on the application owning the
@@ -33,19 +36,32 @@
 //!     application whose source changed since the last `sync` (see
 //!     `crate::codegen::check_source_hash`).
 //!
+//! Codegen mode loads the view for every application listed in it — not only
+//! for applications declaring cross tasks — because producer endpoints need
+//! their generated stubs and every application needs its init hooks (M5.5).
+//!
 //! Metadata mode wins when both environments are configured, so the
 //! `cargo check` runs of `cargo xbin sync` never generate code. Code
 //! generation needs a distribution backend ([`XbinPassBackend`]): a
 //! distribution binds it with [`XbinPass::with_backend`].
+//!
+//! The pass is bound **before** `rticx-sw-pass` and requires the
+//! distribution's `swtasks` feature: the software pass emits the generated
+//! `RticSwTask` trait and the core pass's external `task_trait` mechanism
+//! compiles the receiver through it. Without the feature `RticSwTask` is
+//! undefined and the receiver fails to compile. Async cross-binary tasks are
+//! out of scope until a later milestone.
 //!
 //! Syntax owned by this pass:
 //!
 //! - `#[app(external_cores = [..])]` (always consumed, in both modes);
 //!   `#[app(core_ids = [..])]` is *read* through the core parser and left for
 //!   the core pass, which owns the key since M5 — see `crate::parse`;
-//! - `#[cross_bin_task(..)]` receiver structs and `#[cross_bin_spawn(..)]`
-//!   sender stubs (always consumed, in both modes), with their input type
-//!   taken from the matching `impl CrossBinTask`/`impl CrossBinSpawn` block.
+//! - native `#[sw_task(..)]` cross-binary receivers (always consumed, in both
+//!   modes), with their input type taken from the matching `impl RticSwTask {
+//!   type SpawnInput = …; }` block. In an application declaring
+//!   `external_cores`, `spawn_by` is resolved in the global namespace (see
+//!   `crate::parse`); there are no sender declarations since M5.5.
 //!
 //! Detection of the metadata environment happens when the pass is
 //! constructed (`XbinPass::from_env`), i.e. at the macro entry point, so a
@@ -69,6 +85,7 @@ use crate::codegen::{
 };
 use crate::parse::{
     AppExtensions, ModuleDecls, inject_receiver_tasks, parse_app_args, parse_module,
+    strip_receiver_tasks,
 };
 
 /// Re-export of the pass trait, so that distributions and fixtures binding
@@ -148,10 +165,10 @@ impl XbinPass {
     ///
     /// - [`META_OUT_ENV`] set: **metadata mode** (phase 1);
     /// - otherwise [`SYSTEM_ENV`] set, or a `rticx.toml` discovered above
-    ///   `CARGO_MANIFEST_DIR`: **codegen mode** (phase 2). The view itself is
-    ///   loaded only when the application declares cross-binary tasks: a
-    ///   missing file is then the documented "run `cargo xbin sync`" hard
-    ///   error, never a silent skip of code generation;
+    ///   `CARGO_MANIFEST_DIR`: **codegen mode** (phase 2). The view is loaded
+    ///   for every application listed in it; a missing file is the documented
+    ///   "run `cargo xbin sync`" hard error, never a silent skip of code
+    ///   generation;
     /// - neither: the pass only parses and strips its syntax.
     ///
     /// This is the constructor distributions bind: cargo propagates the
@@ -235,9 +252,9 @@ impl XbinPass {
 
     /// Configures the distribution backend used to generate runtime code.
     ///
-    /// Code generation for an application that declares
-    /// `#[cross_bin_spawn]`/`#[cross_bin_task]` tasks requires it; a
-    /// distribution binds it unconditionally while its macro runs.
+    /// Code generation for an application with cross-binary endpoints (a
+    /// receiver or a view task it produces) requires it; a distribution binds
+    /// it unconditionally while its macro runs.
     pub fn with_backend<T: XbinPassBackend + 'static>(mut self, backend: T) -> Self {
         self.backend = Some(Box::new(backend));
         self
@@ -274,19 +291,20 @@ impl RticPass for XbinPass {
         let source_hash = app_source_hash(&args, &app_mod);
 
         let (extensions, args) = parse_app_args(args)?;
-        let decls = parse_module(&mut app_mod, extensions.cores)?;
+        let decls = parse_module(&mut app_mod, &extensions)?;
 
         if let Some(meta) = &self.meta {
             let manifest = build_manifest(meta, source_hash, extensions.clone(), decls.clone())?;
             write_manifest(meta, &manifest)?;
+
+            // Metadata mode does not run the software pass: strip the parsed
+            // cross-receiver attributes so the emitted module only keeps the
+            // struct and its `impl RticSwTask` block; the manifest already
+            // recorded the task.
+            strip_receiver_tasks(&mut app_mod, &decls.receivers);
         }
 
-        // TODO(M6): an application listed in the view but declaring no cross
-        // task never loads it, so it gets no configure/ready hooks either. A
-        // topology whose owner or peer has no cross task needs them.
-        if let Some(system) = &self.system
-            && (!decls.senders.is_empty() || !decls.receivers.is_empty())
-        {
+        if let Some(system) = &self.system {
             let package = system.package.as_deref().ok_or_else(|| {
                 meta_error(
                     "the system view is configured but `CARGO_PKG_NAME` is not defined; \
@@ -299,22 +317,18 @@ impl RticPass for XbinPass {
                 .filter(|target| !target.is_empty())
                 .unwrap_or(package);
 
+            // Every application listed in the view loads it: producer
+            // endpoints need their generated stubs and every application
+            // needs its init hooks, even when it declares no cross task
+            // (M5.5).
             let view = load_system(&system.path)?;
             let application = check_application(&view, package, target, &extensions)?;
-            let mut items = generate_receiver_items(
+            let mut items =
+                generate_sender_items(&app_mod, &view, application, self.backend.as_deref())?;
+            items.extend(generate_receiver_items(
                 &view,
-                package,
-                target,
-                &extensions,
+                application,
                 &decls.receivers,
-                self.backend.as_deref(),
-            )?;
-            items.extend(generate_sender_items(
-                &view,
-                package,
-                target,
-                &extensions,
-                &decls.senders,
                 self.backend.as_deref(),
             )?);
 
@@ -324,18 +338,17 @@ impl RticPass for XbinPass {
             check_source_hash(application, source_hash)?;
             items.extend(generate_freshness_items(&view, &system.path)?);
 
-            // The init hooks need a backend for the same reason the sender
-            // and receiver items do; the generation above already reported a
-            // missing backend when there are cross declarations, so this only
-            // guards a view with none of them.
+            // The init hooks need the backend for the same reason the sender
+            // and receiver items do; without one the freshness anchors still
+            // compile, but no runtime hooks are wired.
             if let Some(backend) = self.backend.as_deref() {
                 let hooks = generate_init_hooks(&view, application, backend)?;
                 items.extend(hooks.items);
                 *self.hooks.borrow_mut() = Some(hooks.plan);
             }
 
-            append_items(&mut app_mod, items);
             inject_receiver_tasks(&mut app_mod, &decls.receivers);
+            append_items(&mut app_mod, items);
         }
 
         Ok((args, app_mod))
@@ -364,10 +377,9 @@ fn append_items(app_mod: &mut ItemMod, items: Vec<syn::Item>) {
 ///
 /// Both an explicit [`SYSTEM_ENV`] path and a `rticx.toml` discovered above
 /// `CARGO_MANIFEST_DIR` select codegen mode, whether or not the view exists:
-/// an application with cross-binary declarations and no synced view must fail
+/// an application listed in the project but without a synced view must fail
 /// with the "run `cargo xbin sync`" error instead of silently generating
-/// nothing. Applications without cross-binary declarations never load the
-/// view, so they are unaffected.
+/// nothing (M5.5 removed the cross-declaration gate).
 fn system_from_env() -> Option<SystemMode> {
     let package = non_empty_env("CARGO_PKG_NAME");
     let target = non_empty_env("CARGO_BIN_NAME");
@@ -458,12 +470,6 @@ fn build_manifest(
         .receivers
         .iter()
         .map(|receiver| receiver.input_type.clone())
-        .chain(
-            decls
-                .senders
-                .iter()
-                .filter_map(|sender| sender.input_type.clone()),
-        )
         .collect();
     types.sort();
     types.dedup();
@@ -481,7 +487,6 @@ fn build_manifest(
         external_cores: extensions.external_cores,
         types,
         receivers: decls.receivers,
-        senders: decls.senders,
     })
 }
 
@@ -549,16 +554,15 @@ mod tests {
 
         let app_mod: syn::ItemMod = syn::parse_quote! {
             mod app {
-                #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+                struct EncryptReq;
+
+                #[sw_task(priority = 3, capacity = 2, spawn_by = 1)]
                 struct EncryptTask;
 
-                impl CrossBinTask for EncryptTask {
-                    type Input = ipc_types::EncryptReq;
-                    fn exec(&mut self, input: Self::Input) {}
+                impl RticSwTask for EncryptTask {
+                    type SpawnInput = EncryptReq;
+                    fn exec(&mut self, input: Self::SpawnInput) {}
                 }
-
-                #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-                struct EncryptTask;
             }
         };
         let input_args = quote!(
@@ -586,40 +590,63 @@ mod tests {
         let app_args = AppArgs::parse(args).expect("the core pass parses the kept `core_ids`");
         assert_eq!(app_args.core_ids, [0]);
 
+        // The native cross receiver keeps its `#[sw_task]` attribute (minus
+        // the external `spawn_by`) and its `impl RticSwTask` block.
         let tokens = out.to_token_stream().to_string();
-        assert!(!tokens.contains("cross_bin_task"), "{tokens}");
-        assert!(!tokens.contains("cross_bin_spawn"), "{tokens}");
+        assert!(!tokens.contains("spawn_by"), "{tokens}");
         assert!(
-            tokens.contains("impl CrossBinTask for EncryptTask"),
+            tokens.contains("impl RticSwTask for EncryptTask"),
             "{tokens}"
         );
     }
 
     #[test]
-    fn receiver_without_input_type_is_rejected() {
+    fn receiver_without_spawn_input_is_rejected() {
         let app_mod: syn::ItemMod = syn::parse_quote! {
             mod app {
-                #[cross_bin_task(priority = 3)]
+                #[sw_task(priority = 3, spawn_by = 1)]
                 struct EncryptTask;
             }
         };
         let error = XbinPass::disabled()
-            .run_pass(quote!(device = mypac), app_mod)
-            .expect_err("receiver needs `type Input`")
+            .run_pass(
+                quote!(
+                    device = mypac,
+                    cores = 1,
+                    core_ids = [0],
+                    external_cores = [1]
+                ),
+                app_mod,
+            )
+            .expect_err("receiver needs `type SpawnInput`")
             .to_string();
-        assert!(error.contains("type Input"), "{error}");
+        assert!(error.contains("type SpawnInput"), "{error}");
     }
 
     #[test]
     fn unknown_task_argument_is_rejected() {
         let app_mod: syn::ItemMod = syn::parse_quote! {
             mod app {
-                #[cross_bin_spawn(core = 1, bogus = 3)]
+                struct EncryptReq;
+
+                #[sw_task(priority = 3, spawn_by = 1, bogus = 3)]
                 struct EncryptTask;
+
+                impl RticSwTask for EncryptTask {
+                    type SpawnInput = EncryptReq;
+                }
             }
         };
         let error = XbinPass::disabled()
-            .run_pass(quote!(device = mypac), app_mod)
+            .run_pass(
+                quote!(
+                    device = mypac,
+                    cores = 1,
+                    core_ids = [0],
+                    external_cores = [1]
+                ),
+                app_mod,
+            )
             .expect_err("unknown key")
             .to_string();
         assert!(error.contains("unknown argument `bogus`"), "{error}");

@@ -4,16 +4,16 @@
 # models a two-application `cargo xbin` project that builds end to end on the
 # host.
 #
-# - `app-m7` (bin `m7`, global core id 0) declares the `EncryptTask` sender
-#   stub;
-# - `app-m4` (bin `m4`, global core id 1) declares the `EncryptTask` receiver
-#   and executes it in a generated doorbell dispatcher;
+# - `app-m7` (bin `m7`, global core id 0) declares nothing: the cross-binary
+#   pass generates its `EncryptTask` sender stub from the synced view;
+# - `app-m4` (bin `m4`, global core id 1) declares the native `#[sw_task]`
+#   `EncryptTask` receiver and executes it in a generated doorbell dispatcher;
 # - `xbin-mock-distro` is the `#[app]` macro of the fixture's mock
 #   distribution. It runs the full core pass on `MockCoreBackend` and binds the
 #   cross-binary pass against `xbin-mock-runtime`, so the generated code
 #   compiles and links without target hardware;
 # - `xbin-mock-runtime` owns the process-global in-memory regions and provides
-#   the receiver-side `CrossBinTask` trait;
+#   the receiver-side `RticSwTask` trait;
 # - `mock-pac` is an empty PAC stand-in for `device = mock_pac`;
 # - `ipc-types/` is the `cargo xbin sync`-generated crate (checked in).
 #

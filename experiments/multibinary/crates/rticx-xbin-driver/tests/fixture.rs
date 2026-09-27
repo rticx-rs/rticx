@@ -46,28 +46,24 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
         "manifests follow `rticx.toml` order"
     );
 
-    let sender = outcome.manifest("m7").expect("m7 manifest");
-    assert_eq!(sender.package, "app-m7");
-    assert_eq!(sender.core_ids.as_deref(), Some(&[0][..]));
-    assert_eq!(sender.external_cores, [1]);
-    assert!(sender.receivers.is_empty());
-    assert_eq!(sender.senders.len(), 1);
-    let stub = &sender.senders[0];
-    assert_eq!(stub.name, "EncryptTask");
-    assert_eq!(stub.core, 1, "global target core id");
-    assert_eq!(stub.priority, 3);
-    assert_eq!(stub.capacity, 2);
+    let producer = outcome.manifest("m7").expect("m7 manifest");
+    assert_eq!(producer.package, "app-m7");
+    assert_eq!(producer.core_ids.as_deref(), Some(&[0][..]));
+    assert_eq!(producer.external_cores, [1]);
+    assert!(
+        producer.receivers.is_empty(),
+        "the producer declares nothing (M5.5)"
+    );
 
     let receiver = outcome.manifest("m4").expect("m4 manifest");
     assert_eq!(receiver.package, "app-m4");
     assert_eq!(receiver.core_ids.as_deref(), Some(&[1][..]));
     assert_eq!(receiver.external_cores, [0]);
-    assert!(receiver.senders.is_empty());
     assert_eq!(receiver.receivers.len(), 1);
     let task = &receiver.receivers[0];
     assert_eq!(task.name, "EncryptTask");
     assert_eq!(task.core, 0, "receiver `core` is a local index");
-    assert_eq!(task.spawned_by.as_deref(), Some(&[0][..]));
+    assert_eq!(task.spawn_by, 0, "the global producer core id");
     assert_eq!(task.priority, 3);
     assert_eq!(task.capacity, 2);
     assert_eq!(task.input_type_name(), "EncryptReq");
@@ -158,13 +154,13 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
             .map(|task| (
                 task.name.as_str(),
                 task.receiver_core,
-                task.spawner_cores.as_slice(),
+                task.spawner_core,
                 task.priority,
                 task.capacity,
                 task.input_type.as_str(),
             ))
             .collect::<Vec<_>>(),
-        [("EncryptTask", 1, &[0][..], 3, 2, "EncryptReq")]
+        [("EncryptTask", 1, 0, 3, 2, "EncryptReq")]
     );
     assert_eq!(
         system.tasks[0].fifo,
@@ -257,14 +253,11 @@ fn sync_reports_a_merge_failure() {
     );
 }
 
-const SENDER_MAIN: &str = r#"
+const PRODUCER_MAIN: &str = r#"
 use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [0], external_cores = [1])]
-mod app {
-    #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-    struct EncryptTask;
-}
+mod app {}
 
 fn main() {}
 "#;
@@ -274,19 +267,19 @@ use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [1], external_cores = [0])]
 mod app {
-    trait CrossBinTask {
-        type Input;
-        fn exec(&mut self, input: Self::Input);
+    trait RticSwTask {
+        type SpawnInput;
+        fn exec(&mut self, input: Self::SpawnInput);
     }
 
     struct EncryptReq;
 
-    #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+    #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
     struct EncryptTask;
 
-    impl CrossBinTask for EncryptTask {
-        type Input = EncryptReq;
-        fn exec(&mut self, _input: Self::Input) {}
+    impl RticSwTask for EncryptTask {
+        type SpawnInput = EncryptReq;
+        fn exec(&mut self, _input: Self::SpawnInput) {}
     }
 }
 
@@ -308,7 +301,7 @@ fn write_merge_project(root: &Path) {
     .expect("workspace manifest");
 
     for (package, bin, source) in [
-        ("app-m7", "m7", SENDER_MAIN),
+        ("app-m7", "m7", PRODUCER_MAIN),
         ("app-m4", "m4", RECEIVER_MAIN),
     ] {
         let dir = root.join(package);

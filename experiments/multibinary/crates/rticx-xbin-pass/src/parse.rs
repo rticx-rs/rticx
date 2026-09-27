@@ -1,4 +1,5 @@
-//! Parsing of the `#[app]` additions and the cross-binary task declarations.
+//! Parsing of the `#[app]` additions and the native cross-binary task
+//! declarations (M5.5).
 //!
 //! This module owns the syntax that the multi-binary extension adds on top of
 //! the core RTIC syntax (see `multibinary-multicore-plan.md` §6.4 and §6.5):
@@ -8,24 +9,35 @@
 //!   the arguments for the core pass; only `external_cores` is consumed here,
 //!   so the core pass never sees it (it would warn about an unknown
 //!   argument);
-//! - `#[cross_bin_task(..)]` receiver structs, whose input type is declared by
-//!   `impl CrossBinTask for <Name> { type Input = …; }`;
-//! - `#[cross_bin_spawn(..)]` sender stubs, optionally mirrored by an
-//!   `impl CrossBinSpawn for <Name> { type Input = …; }`.
+//! - native `#[sw_task(..)]` structs with `impl RticSwTask { type SpawnInput
+//!   = …; }` blocks. In an application that declares `external_cores`, the
+//!   task's `spawn_by` is resolved in the **global** namespace:
+//!   - `spawn_by ∈ core_ids` → an in-app cross-core task; the value is
+//!     rewritten to its local index and the task is left for `rticx-sw-pass`;
+//!   - `spawn_by ∈ external_cores` → a cross-binary receiver; it is recorded
+//!     in the manifest and `spawn_by` is stripped so the software pass never
+//!     sees an external id (in codegen mode the whole attribute is later
+//!     replaced by the core `#[task(..)]` shape);
+//!   - anything else → a hard error naming the unknown core.
+//!
+//! Task `core` always stays a **local** index (`0..cores`), like RTIC's task
+//! `core`. The xbin-specific task attributes and traits of the M1–M4
+//! prototype were deleted outright in M5.5: there is no compatibility shim,
+//! no warning and no migration error (the extension has no released users).
 //!
 //! Everything is parsed into the plain data types of `rticx-xbin-proto` that
-//! the metadata manifest is made of. The attributes themselves are *stripped*
-//! from the module: once this pass has consumed them they are meaningless to
-//! the core pass (and to other distributions). In codegen mode the receiver
-//! structs are additionally rewritten into the core `#[task(..)]` items the
-//! generated dispatchers run against (see [`inject_receiver_tasks`]).
+//! the metadata manifest is made of. In codegen mode the receiver structs are
+//! additionally rewritten into the core `#[task(..)]` items the generated
+//! dispatchers run against (see [`inject_receiver_tasks`]); in metadata mode
+//! their parsed attributes are stripped from the emitted module.
 //!
-//! Confirmed syntax (M1-T3):
+//! Confirmed syntax (M5.5):
 //!
-//! - receiver `core` is a **local** core index (`0..cores`), like RTIC's task
-//!   `core`; sender `core` is the **global** id of the target core and
-//!   receiver `spawned_by` lists **global** source core ids;
-//! - defaults: `priority = 1`, `capacity = 1`, receiver `core = 0`;
+//! - receiver `core` is a **local** core index (`0..cores`);
+//! - cross receivers declare exactly one global producer core in `spawn_by`
+//!   (an array is rejected: multi-producer tasks land in M6-T1);
+//! - defaults: `priority = 1` (cross receivers require `priority >= 1`),
+//!   `capacity = 1` (minimum 1), receiver `core = 0`;
 //! - unknown, duplicate and multi-segment keys as well as malformed values
 //!   are hard errors; `external_cores` is validated against the `core_ids`
 //!   mapping the core parser resolves (identity when not declared);
@@ -34,43 +46,49 @@
 //!   `external_cores` as an unknown `#[app]` argument (`core_ids` is native
 //!   to `rticx-core` since M5 and is understood with or without the pass).
 //!
-//! TODO(extract): `parse_attr_int` and `item_attrs` duplicate helpers in
-//! `rticx-sw-pass`'s internal `common::parse` module. They may be promoted
-//! into `rticx-core` once a second pass needs them (`take_u32_array` already
-//! lives on [`RticAttr`]).
+//! The producer application declares nothing: its `Task::cross_spawn` stubs
+//! are generated in codegen mode from the synced system view (M5.5).
+//!
+//! TODO(extract): `parse_attr_int` and `type_path_string` duplicate helpers in
+//! `rticx-sw-pass`'s internal modules. They may be promoted into `rticx-core`
+//! once a second pass needs them (`take_u32_array` already lives on
+//! [`RticAttr`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::str::FromStr;
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{ToTokens, format_ident};
+use quote::{ToTokens, format_ident, quote};
 use rticx_core::parse_utils::RticAttr;
 use rticx_core::parser::ast::AppArgs;
-use rticx_xbin_proto::{ReceiverDecl, SenderDecl};
+use rticx_xbin_proto::ReceiverDecl;
 use syn::{
     Attribute, Expr, ExprLit, ImplItem, Item, ItemImpl, ItemMod, Lit, LitInt, Meta, PathArguments,
-    Token, Type, parse::Parser, punctuated::Punctuated, spanned::Spanned,
+    Token, Type, parse::Parser, parse_quote, punctuated::Punctuated, spanned::Spanned,
 };
 
 /// `#[app(core_ids = [..])]`: local core index -> global core id.
 pub(crate) const CORE_IDS_ARG: &str = "core_ids";
 /// `#[app(external_cores = [..])]`: global ids of cores in other binaries.
 pub(crate) const EXTERNAL_CORES_ARG: &str = "external_cores";
-/// Receiver attribute: the task executes in this binary.
-pub(crate) const CROSS_BIN_TASK_ATTR: &str = "cross_bin_task";
-/// Sender attribute: a stub that spawns a task in another binary.
-pub(crate) const CROSS_BIN_SPAWN_ATTR: &str = "cross_bin_spawn";
-/// Receiver trait name (last path segment) carrying `type Input`.
-pub(crate) const CROSS_BIN_TASK_TRAIT: &str = "CrossBinTask";
-/// Sender trait name (last path segment) optionally carrying `type Input`.
-pub(crate) const CROSS_BIN_SPAWN_TRAIT: &str = "CrossBinSpawn";
+/// Native software-task attribute.
+pub(crate) const SW_TASK_ATTR: &str = "sw_task";
+/// `#[sw_task(spawn_by = G)]`: the (global, in apps declaring
+/// `external_cores`) producer core id.
+pub(crate) const SPAWN_BY_ARG: &str = "spawn_by";
+/// Software-task trait (last path segment), carrying `type SpawnInput`.
+pub(crate) const SW_TASK_TRAIT: &str = "RticSwTask";
+/// Associated type of [`SW_TASK_TRAIT`] declaring the task input.
+pub(crate) const SPAWN_INPUT_ASSOC: &str = "SpawnInput";
 
-/// Default task priority, matching the core pass (`1` is the lowest active
-/// priority).
+/// Default cross-receiver priority (`1` is the lowest active priority;
+/// `rticx-sw-pass` defaults native software tasks to `0`).
 const DEFAULT_PRIORITY: u16 = 1;
 /// Default FIFO capacity (one pending spawn), matching `rticx-sw-pass`.
 const DEFAULT_CAPACITY: usize = 1;
+/// Default receiver local core index.
+const DEFAULT_CORE: u32 = 0;
 
 /// The `#[app]` arguments owned by this pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,17 +108,8 @@ pub(crate) struct AppExtensions {
 /// The cross-binary declarations found inside the `#[app]` module.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct ModuleDecls {
-    /// `#[cross_bin_task]` receivers, sorted by name.
+    /// Cross-binary receivers, sorted by name.
     pub receivers: Vec<ReceiverDecl>,
-    /// `#[cross_bin_spawn]` senders, sorted by name.
-    pub senders: Vec<SenderDecl>,
-}
-
-/// Which cross-binary attribute an item carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeclKind {
-    Receiver,
-    Sender,
 }
 
 /// Parses the `#[app]` arguments owned by this pass and returns them together
@@ -154,73 +163,163 @@ pub(crate) fn parse_app_args(args: TokenStream) -> syn::Result<(AppExtensions, T
     Ok((extensions, attr.args_tokens()))
 }
 
-/// Parses (and strips) every cross-binary declaration from the `#[app]`
+/// Parses (and rewrites) the native cross-binary receivers of the `#[app]`
 /// module.
 ///
-/// `cores` is the application's local core count, used to check receiver core
-/// indices (which are local, unlike the global sender target and
-/// `spawned_by` ids).
-pub(crate) fn parse_module(app_mod: &mut ItemMod, cores: u32) -> syn::Result<ModuleDecls> {
+/// The function performs the `spawn_by` namespace resolution described in the
+/// module documentation and returns every cross-binary receiver sorted by
+/// name. In-app global `spawn_by` values are rewritten to local indices and
+/// cross receivers lose their `spawn_by` key, so `rticx-sw-pass` never sees a
+/// global id it would compare against a local index.
+pub(crate) fn parse_module(
+    app_mod: &mut ItemMod,
+    extensions: &AppExtensions,
+) -> syn::Result<ModuleDecls> {
     let Some((_, items)) = app_mod.content.as_mut() else {
         return Ok(ModuleDecls::default());
     };
 
-    let inputs = collect_input_types(items)?;
+    let inputs = collect_spawn_input_types(items)?;
     let mut decls = ModuleDecls::default();
 
     for item in items.iter_mut() {
-        if !matches!(item, Item::Struct(_)) {
-            if let Some((kind, attr)) = find_cross_attr(item) {
-                return Err(syn::Error::new(
-                    attr.span(),
-                    format!(
-                        "`{}` must be applied to a struct declaration (task name)",
-                        attr_name(kind)
-                    ),
-                ));
-            }
-            continue;
-        }
-
         let Item::Struct(item_struct) = item else {
-            unreachable!("checked above");
+            continue;
         };
-        let Some((kind, attr)) = take_cross_attr(&mut item_struct.attrs)? else {
+        let Some(index) = find_sw_task_attr(&item_struct.attrs) else {
             continue;
         };
         let name = item_struct.ident.clone();
-        match kind {
-            DeclKind::Receiver => {
-                let input = inputs.receiver.get(&name.to_string()).cloned();
-                decls
-                    .receivers
-                    .push(parse_receiver(name, &attr, input, cores)?);
-            }
-            DeclKind::Sender => {
-                let input = inputs.sender.get(&name.to_string()).cloned();
-                decls.senders.push(parse_sender(name, &attr, input)?);
-            }
+        let mut attr = parse_item_attr(&item_struct.attrs[index])?;
+        attr.ensure_supported(&["priority", "capacity", "core", SPAWN_BY_ARG, "shared"])?;
+
+        // `spawn_by` absent: a plain software task, untouched.
+        let Some(span) = attr.get_expr(SPAWN_BY_ARG).map(Spanned::span) else {
+            continue;
+        };
+        // Without `external_cores` the native local-index reading applies and
+        // the software pass validates the value (`spawn_by < cores`).
+        if extensions.external_cores.is_empty() {
+            continue;
         }
+
+        let producer = take_spawn_by(&mut attr, span)?;
+        if let Some(local) = extensions.core_ids.iter().position(|&id| id == producer) {
+            // In-app cross-core task: map the global id back to the local
+            // index the software pass compares against.
+            let local = u32::try_from(local).expect("core count fits in u32");
+            attr.elements
+                .insert(SPAWN_BY_ARG.to_string(), syn::parse_quote!(#local));
+        } else if extensions.external_cores.contains(&producer) {
+            // Cross-binary receiver: recorded here, invisible to sw-pass.
+            attr.elements.remove(SPAWN_BY_ARG);
+            decls.receivers.push(parse_receiver(
+                name, &attr, &inputs, extensions, producer, span,
+            )?);
+        } else {
+            return Err(unknown_spawn_by(&name, producer, span, extensions));
+        }
+
+        // Re-render the rewritten attribute in place for the software pass.
+        item_struct.attrs[index] = render_attribute(&attr);
     }
 
     decls.receivers.sort_by(|a, b| a.name.cmp(&b.name));
-    decls.senders.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(decls)
 }
 
-/// Rewrites every receiver struct into the `#[task(..)]` item the core pass
-/// consumes (M3-T2).
+/// Reads the singular `spawn_by` producer core id.
+///
+/// Arrays are rejected outright: v1 has one SPSC FIFO and one priority line
+/// per task, so a task has exactly one producer core (M6-T1 lifts this).
+fn take_spawn_by(attr: &mut RticAttr, span: Span) -> syn::Result<u32> {
+    if let Some(Expr::Array(array)) = attr.get_expr(SPAWN_BY_ARG) {
+        return Err(syn::Error::new(
+            array.span(),
+            format!(
+                "`{SPAWN_BY_ARG}` must be a single core id, not an array; a cross-binary task \
+                 has exactly one producer core"
+            ),
+        ));
+    }
+    attr.take_u32(SPAWN_BY_ARG)?.ok_or_else(|| {
+        syn::Error::new(span, format!("`{SPAWN_BY_ARG}` must be an integer literal"))
+    })
+}
+
+/// Builds the cross-binary receiver declaration, validating the remaining
+/// attribute keys against the application's local cores.
+fn parse_receiver(
+    name: Ident,
+    attr: &RticAttr,
+    inputs: &BTreeMap<String, String>,
+    extensions: &AppExtensions,
+    spawn_by: u32,
+    spawn_by_span: Span,
+) -> syn::Result<ReceiverDecl> {
+    let priority = parse_attr_int(attr, "priority", DEFAULT_PRIORITY)?;
+    if priority == 0 {
+        return Err(syn::Error::new(
+            int_span(attr, "priority").unwrap_or(spawn_by_span),
+            format!(
+                "cross-binary receiver `{name}` requires `priority >= 1`; `priority = 0` is \
+                 reserved for the idle task"
+            ),
+        ));
+    }
+    let capacity = parse_attr_int(attr, "capacity", DEFAULT_CAPACITY)?;
+    if capacity == 0 {
+        return Err(syn::Error::new(
+            int_span(attr, "capacity").unwrap_or_else(|| name.span()),
+            "The `capacity` argument must be at least 1.",
+        ));
+    }
+    let core = parse_attr_int(attr, "core", DEFAULT_CORE)?;
+    if core >= extensions.cores {
+        return Err(syn::Error::new(
+            int_span(attr, "core").unwrap_or_else(|| name.span()),
+            format!(
+                "receiver `{name}` declares local `core = {core}`, but the application has only \
+                 {} local core(s); `core` is a local index (map it to a global id through \
+                 `{}`)",
+                extensions.cores, CORE_IDS_ARG
+            ),
+        ));
+    }
+
+    let input_type = inputs.get(&name.to_string()).cloned().ok_or_else(|| {
+        syn::Error::new(
+            name.span(),
+            format!(
+                "cross-binary receiver `{name}` must have an `impl {SW_TASK_TRAIT} for {name}` \
+                 block declaring `type {SPAWN_INPUT_ASSOC} = …;` inside the `#[app]` module"
+            ),
+        )
+    })?;
+
+    Ok(ReceiverDecl {
+        name: name.to_string(),
+        priority,
+        capacity,
+        core,
+        spawn_by,
+        input_type,
+    })
+}
+
+/// Rewrites every cross-binary receiver struct into the `#[task(..)]` item
+/// the core pass consumes (M5.5).
 ///
 /// Only codegen mode calls this: the injected attribute is what makes the
 /// core pass generate the task static and enforce the user's `impl
-/// CrossBinTask` (`task_trait = CrossBinTask`), so the generated dispatcher
-/// can call `exec(input)` on the initialized instance. The attribute carries
-/// only keys the core pass understands, so no core changes are required.
+/// RticSwTask` (`task_trait = RticSwTask`), so the generated dispatcher can
+/// call `exec(input)` on the initialized instance. The attribute carries only
+/// keys the core pass understands, so no core changes are required; `shared`
+/// is passed through untouched (the core pass computes the SRP ceilings).
 pub(crate) fn inject_receiver_tasks(app_mod: &mut ItemMod, receivers: &[ReceiverDecl]) {
     let Some((_, items)) = app_mod.content.as_mut() else {
         return;
     };
-    let task_trait = format_ident!("{CROSS_BIN_TASK_TRAIT}");
 
     for item in items.iter_mut() {
         let Item::Struct(item_struct) = item else {
@@ -232,69 +331,103 @@ pub(crate) fn inject_receiver_tasks(app_mod: &mut ItemMod, receivers: &[Receiver
         else {
             continue;
         };
+        let Some(index) = find_sw_task_attr(&item_struct.attrs) else {
+            continue;
+        };
 
+        let Ok(mut attr) = RticAttr::parse_from_attr(&item_struct.attrs[index]) else {
+            continue;
+        };
+        // `shared` is passed through untouched (the core pass computes the
+        // SRP ceilings); `spawn_by` and `capacity` are consumed by this pass.
+        let shared = attr.elements.remove("shared");
+        let shared = shared.map(|expr| quote!(, shared = #expr));
         let priority = LitInt::new(&receiver.priority.to_string(), item_struct.ident.span());
         let core = LitInt::new(&receiver.core.to_string(), item_struct.ident.span());
-        item_struct.attrs.push(syn::parse_quote! {
-            #[task(priority = #priority, core = #core, task_trait = #task_trait, init = generated)]
-        });
+        item_struct.attrs[index] = parse_quote! {
+            #[task(priority = #priority, core = #core, task_trait = RticSwTask,
+                   init = generated #shared)]
+        };
     }
 }
 
-/// `type Input = …;` declarations found in `impl CrossBinTask`/`CrossBinSpawn`
-/// blocks, keyed by the implementing type name.
-#[derive(Debug, Default)]
-struct InputTypes {
-    receiver: BTreeMap<String, String>,
-    sender: BTreeMap<String, String>,
+/// Removes the `#[sw_task(..)]` attribute of every cross-binary receiver.
+///
+/// Without it the software pass of a metadata `cargo check` would treat the
+/// cross receiver as a local software task and miss the external `spawn_by`;
+/// the declaration is already recorded in the manifest, so the attribute is
+/// removed from the emitted module and only the struct and its `impl
+/// RticSwTask` block remain.
+pub(crate) fn strip_receiver_tasks(app_mod: &mut ItemMod, receivers: &[ReceiverDecl]) {
+    let Some((_, items)) = app_mod.content.as_mut() else {
+        return;
+    };
+
+    for item in items.iter_mut() {
+        let Item::Struct(item_struct) = item else {
+            continue;
+        };
+        if !receivers
+            .iter()
+            .any(|receiver| item_struct.ident == receiver.name)
+        {
+            continue;
+        }
+        if let Some(index) = find_sw_task_attr(&item_struct.attrs) {
+            item_struct.attrs.remove(index);
+        }
+    }
 }
 
-fn collect_input_types(items: &[Item]) -> syn::Result<InputTypes> {
-    let mut inputs = InputTypes::default();
+/// Returns the index of the first `#[sw_task]` attribute in `attrs`, if any.
+fn find_sw_task_attr(attrs: &[Attribute]) -> Option<usize> {
+    attrs
+        .iter()
+        .position(|attr| attr.path().is_ident(SW_TASK_ATTR))
+}
+
+/// `type SpawnInput = …;` declarations found in `impl RticSwTask` blocks,
+/// keyed by the implementing type name.
+fn collect_spawn_input_types(items: &[Item]) -> syn::Result<BTreeMap<String, String>> {
+    let mut inputs = BTreeMap::new();
 
     for item in items {
         let Item::Impl(impl_item) = item else {
             continue;
         };
-        let Some(kind) = impl_kind(impl_item) else {
+        if !implements_sw_task(impl_item) {
             continue;
-        };
+        }
         let Some(self_ty) = impl_self_ident(impl_item) else {
             continue;
         };
-        let Some(input) = find_input_type(impl_item) else {
+        let Some(input) = find_spawn_input_type(impl_item) else {
             continue;
         };
         let name = self_ty.to_string();
-        let slot = match kind {
-            DeclKind::Receiver => &mut inputs.receiver,
-            DeclKind::Sender => &mut inputs.sender,
-        };
-        if slot.contains_key(&name) {
+        if inputs.contains_key(&name) {
             return Err(syn::Error::new(
                 self_ty.span(),
                 format!(
-                    "duplicate `impl {}` for `{name}` with `type Input`",
-                    trait_name(kind)
+                    "duplicate `impl {SW_TASK_TRAIT}` for `{name}` with `type \
+                     {SPAWN_INPUT_ASSOC}`"
                 ),
             ));
         }
-        slot.insert(name, type_path_string(&input));
+        inputs.insert(name, type_path_string(&input));
     }
 
     Ok(inputs)
 }
 
-fn impl_kind(impl_item: &ItemImpl) -> Option<DeclKind> {
-    let (_, path, _) = impl_item.trait_.as_ref()?;
-    let last = path.segments.last()?;
-    if last.ident == CROSS_BIN_TASK_TRAIT {
-        Some(DeclKind::Receiver)
-    } else if last.ident == CROSS_BIN_SPAWN_TRAIT {
-        Some(DeclKind::Sender)
-    } else {
-        None
-    }
+/// Whether the `impl` block is an `impl RticSwTask for …` (last path segment
+/// matched, so qualified paths like `crate::RticSwTask` are recognized).
+fn implements_sw_task(impl_item: &ItemImpl) -> bool {
+    impl_item
+        .trait_
+        .as_ref()
+        .and_then(|(_, path, _)| path.segments.last())
+        .is_some_and(|last| last.ident == SW_TASK_TRAIT)
 }
 
 fn impl_self_ident(impl_item: &ItemImpl) -> Option<&Ident> {
@@ -306,9 +439,9 @@ fn impl_self_ident(impl_item: &ItemImpl) -> Option<&Ident> {
     }
 }
 
-fn find_input_type(impl_item: &ItemImpl) -> Option<Type> {
+fn find_spawn_input_type(impl_item: &ItemImpl) -> Option<Type> {
     impl_item.items.iter().find_map(|item| match item {
-        ImplItem::Type(assoc) if assoc.ident == "Input" => Some(assoc.ty.clone()),
+        ImplItem::Type(assoc) if assoc.ident == SPAWN_INPUT_ASSOC => Some(assoc.ty.clone()),
         _ => None,
     })
 }
@@ -341,161 +474,36 @@ fn type_path_string(ty: &Type) -> String {
     ty.to_token_stream().to_string()
 }
 
-fn parse_receiver(
-    name: Ident,
-    attr: &Attribute,
-    input: Option<String>,
-    cores: u32,
-) -> syn::Result<ReceiverDecl> {
-    let mut args = parse_item_attr(attr)?;
-    args.ensure_supported(&["priority", "capacity", "spawned_by", "core"])?;
-
-    let priority = parse_attr_int(&args, "priority", DEFAULT_PRIORITY)?;
-    let capacity = parse_attr_int(&args, "capacity", DEFAULT_CAPACITY)?;
-    if capacity == 0 {
-        return Err(syn::Error::new(
-            int_span(&args, "capacity").unwrap_or_else(|| name.span()),
-            "The `capacity` argument must be at least 1.",
-        ));
-    }
-    let core = parse_attr_int(&args, "core", 0u32)?;
-    if core >= cores {
-        return Err(syn::Error::new(
-            int_span(&args, "core").unwrap_or_else(|| name.span()),
-            format!(
-                "receiver `{name}` declares local `core = {core}`, but the application has only \
-                 {cores} local core(s); `core` is a local index (map it to a global id through \
-                 `{CORE_IDS_ARG}`)"
-            ),
-        ));
-    }
-    let spawned_by = args.take_u32_array("spawned_by")?;
-
-    let input_type = input.ok_or_else(|| {
-        syn::Error::new(
-            name.span(),
-            format!(
-                "receiver `{name}` must have an `impl {CROSS_BIN_TASK_TRAIT} for {name}` block \
-                 declaring `type Input = …;`"
-            ),
-        )
-    })?;
-
-    Ok(ReceiverDecl {
-        name: name.to_string(),
-        priority,
-        capacity,
-        core,
-        spawned_by,
-        input_type,
-    })
+/// Error for a `spawn_by` that names neither a local nor an external core.
+fn unknown_spawn_by(
+    name: &Ident,
+    producer: u32,
+    span: Span,
+    extensions: &AppExtensions,
+) -> syn::Error {
+    syn::Error::new(
+        span,
+        format!(
+            "receiver `{name}` declares `{SPAWN_BY_ARG} = {producer}`, which is not a known \
+             core: it is neither one of this application's `{CORE_IDS_ARG}` ({:?}) nor listed \
+             in `{EXTERNAL_CORES_ARG}` ({:?})",
+            extensions.core_ids, extensions.external_cores
+        ),
+    )
 }
 
-fn parse_sender(name: Ident, attr: &Attribute, input: Option<String>) -> syn::Result<SenderDecl> {
-    let mut args = parse_item_attr(attr)?;
-    args.ensure_supported(&["core", "priority", "capacity"])?;
-
-    let core = args.take_u32("core")?.ok_or_else(|| {
-        syn::Error::new(
-            name.span(),
-            "sender stubs must declare the global target core id, e.g. `#[cross_bin_spawn(core = 1, …)]`",
-        )
-    })?;
-    let priority = parse_attr_int(&args, "priority", DEFAULT_PRIORITY)?;
-    let capacity = parse_attr_int(&args, "capacity", DEFAULT_CAPACITY)?;
-    if capacity == 0 {
-        return Err(syn::Error::new(
-            int_span(&args, "capacity").unwrap_or_else(|| name.span()),
-            "The `capacity` argument must be at least 1.",
-        ));
-    }
-
-    Ok(SenderDecl {
-        name: name.to_string(),
-        core,
-        priority,
-        capacity,
-        input_type: input,
-    })
-}
-
-/// Returns the cross-binary attribute on `item`, if any, without removing it.
-fn find_cross_attr(item: &Item) -> Option<(DeclKind, &Attribute)> {
-    item_attrs(item)?
-        .iter()
-        .find_map(|attr| attr_kind(attr).map(|kind| (kind, attr)))
-}
-
-fn attr_kind(attr: &Attribute) -> Option<DeclKind> {
-    let last = attr.path().segments.last()?;
-    if last.ident == CROSS_BIN_TASK_ATTR {
-        Some(DeclKind::Receiver)
-    } else if last.ident == CROSS_BIN_SPAWN_ATTR {
-        Some(DeclKind::Sender)
-    } else {
-        None
-    }
-}
-
-fn attr_name(kind: DeclKind) -> &'static str {
-    match kind {
-        DeclKind::Receiver => CROSS_BIN_TASK_ATTR,
-        DeclKind::Sender => CROSS_BIN_SPAWN_ATTR,
-    }
-}
-
-fn trait_name(kind: DeclKind) -> &'static str {
-    match kind {
-        DeclKind::Receiver => CROSS_BIN_TASK_TRAIT,
-        DeclKind::Sender => CROSS_BIN_SPAWN_TRAIT,
-    }
-}
-
-/// Removes and returns the cross-binary attribute of an item, erroring when
-/// both kinds are present.
-fn take_cross_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Option<(DeclKind, Attribute)>> {
-    let mut found: Option<(DeclKind, Attribute)> = None;
-    let mut index = 0;
-    while index < attrs.len() {
-        let Some(kind) = attr_kind(&attrs[index]) else {
-            index += 1;
-            continue;
-        };
-        if found.is_some() {
-            return Err(syn::Error::new(
-                attrs[index].span(),
-                "an item may carry at most one of `#[cross_bin_task]` and `#[cross_bin_spawn]`",
-            ));
-        }
-        let attr = attrs.remove(index);
-        found = Some((kind, attr));
-    }
-    Ok(found)
-}
-
-/// Attributes attached to `item`, if the item kind carries attributes.
+/// Renders `attr` back into a `#[name(..)]` item attribute.
 ///
-/// TODO(extract): duplicates `rticx-sw-pass`'s internal helper of the same
-/// name.
-fn item_attrs(item: &Item) -> Option<&[Attribute]> {
-    Some(match item {
-        Item::Const(item) => &item.attrs,
-        Item::Enum(item) => &item.attrs,
-        Item::ExternCrate(item) => &item.attrs,
-        Item::Fn(item) => &item.attrs,
-        Item::ForeignMod(item) => &item.attrs,
-        Item::Impl(item) => &item.attrs,
-        Item::Macro(item) => &item.attrs,
-        Item::Mod(item) => &item.attrs,
-        Item::Static(item) => &item.attrs,
-        Item::Struct(item) => &item.attrs,
-        Item::Trait(item) => &item.attrs,
-        Item::TraitAlias(item) => &item.attrs,
-        Item::Type(item) => &item.attrs,
-        Item::Union(item) => &item.attrs,
-        Item::Use(item) => &item.attrs,
-        _ => return None,
-    })
+/// [`RticAttr`]'s [`ToTokens`] emits the complete attribute; `syn` has no
+/// `Parse` impl for [`Attribute`], so it is parsed with
+/// [`Attribute::parse_outer`].
+fn render_attribute(attr: &RticAttr) -> Attribute {
+    let mut attributes = Attribute::parse_outer
+        .parse2(attr.to_token_stream())
+        .expect("an RticAttr renders to a valid attribute");
+    attributes
+        .pop()
+        .expect("an RticAttr renders exactly one attribute")
 }
 
 /// Parses `key = value, …` arguments after rejecting malformed keys that

@@ -1,5 +1,6 @@
-//! Acceptance tests for the metadata mode (M1-T2): a fixture application run
-//! through the pass produces the expected `<target>.xbin.json`.
+//! Acceptance tests for the metadata mode (M1-T2, M5.5): a fixture
+//! application run through the pass produces the expected `<target>.xbin.json`
+//! from the native `#[sw_task]` receiver syntax.
 //!
 //! Environment-variable tests are serialized behind [`ENV_LOCK`] because the
 //! process environment is global.
@@ -15,32 +16,34 @@ use rticx_xbin_proto::{AppManifest, Hash64};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-/// A receiver application: declares the task it executes for a remote core.
+/// A receiver application: declares the native cross receiver task it
+/// executes for a remote core.
 fn receiver_app() -> syn::ItemMod {
     syn::parse_quote! {
         mod app {
-            #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            struct EncryptReq;
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
             struct EncryptTask;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
-                fn exec(&mut self, _input: Self::Input) {}
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
             }
         }
     }
 }
 
-/// A sender application: declares the stub with which it spawns the task.
-fn sender_app() -> syn::ItemMod {
+/// A producer application: since M5.5 it declares nothing (the pass generates
+/// its sender stubs from the synced view).
+fn producer_app() -> syn::ItemMod {
     syn::parse_quote! {
-        mod app {
-            #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-            struct EncryptTask;
-
-            impl CrossBinSpawn for EncryptTask {
-                type Input = ipc_types::EncryptReq;
-            }
-        }
+        mod app {}
     }
 }
 
@@ -85,21 +88,22 @@ fn receiver_fixture_produces_the_expected_manifest() {
     assert_eq!(manifest.cores, 1);
     assert_eq!(manifest.core_ids.as_deref(), Some(&[1][..]));
     assert_eq!(manifest.external_cores, &[0][..]);
-    assert_eq!(manifest.types, vec!["ipc_types::EncryptReq".to_string()]);
+    assert_eq!(manifest.types, vec!["EncryptReq".to_string()]);
 
-    assert_eq!(manifest.senders.len(), 0);
     assert_eq!(manifest.receivers.len(), 1);
     let receiver = &manifest.receivers[0];
     assert_eq!(receiver.name, "EncryptTask");
     assert_eq!(receiver.priority, 3);
     assert_eq!(receiver.capacity, 2);
     assert_eq!(receiver.core, 0, "receiver core defaults to 0");
-    assert_eq!(receiver.spawned_by.as_deref(), Some(&[0][..]));
-    assert_eq!(receiver.input_type, "ipc_types::EncryptReq");
+    assert_eq!(receiver.spawn_by, 0, "the global producer core id");
+    assert_eq!(receiver.input_type, "EncryptReq");
     assert_eq!(receiver.input_type_name(), "EncryptReq");
 
     let json = manifest.to_json();
     assert!(json.contains("\"schema_version\": 1"), "{json}");
+    assert!(json.contains("\"spawn_by\": 0"), "{json}");
+    assert!(!json.contains("senders"), "no sender declarations: {json}");
     assert!(json.contains("\"kind\": \"bin\""), "{json}");
     assert!(json.contains("\"source_hash\": \"0x"), "{json}");
 }
@@ -109,7 +113,12 @@ fn manifest_records_the_resolved_core_ids() {
     // A declared mapping is recorded as written.
     let (_dir, manifest) = run_manifest(
         receiver_app(),
-        quote!(device = mypac, cores = 2, core_ids = [4, 5]),
+        quote!(
+            device = mypac,
+            cores = 2,
+            core_ids = [4, 5],
+            external_cores = [0]
+        ),
         "app-m4",
         "m4",
     );
@@ -123,29 +132,28 @@ fn manifest_records_the_resolved_core_ids() {
 }
 
 #[test]
-fn sender_fixture_produces_the_expected_manifest() {
+fn producer_fixture_produces_an_empty_manifest() {
     let args = quote!(
         device = mypac,
         cores = 1,
         core_ids = [0],
         external_cores = [1]
     );
-    let (_dir, manifest) = run_manifest(sender_app(), args, "app-m7", "m7");
+    let (_dir, manifest) = run_manifest(producer_app(), args, "app-m7", "m7");
 
-    assert_eq!(manifest.receivers.len(), 0);
-    assert_eq!(manifest.senders.len(), 1);
-    let sender = &manifest.senders[0];
-    assert_eq!(sender.name, "EncryptTask");
-    assert_eq!(sender.core, 1, "sender `core` is the global target core id");
-    assert_eq!(sender.priority, 3);
-    assert_eq!(sender.capacity, 2);
-    assert_eq!(sender.input_type.as_deref(), Some("ipc_types::EncryptReq"));
-    assert_eq!(sender.input_type_name(), Some("EncryptReq"));
+    assert!(manifest.receivers.is_empty());
+    assert!(manifest.types.is_empty());
+    assert_eq!(manifest.external_cores, [1]);
 }
 
 #[test]
 fn manifests_are_deterministic() {
-    let args = quote!(device = mypac, cores = 1, core_ids = [1]);
+    let args = quote!(
+        device = mypac,
+        cores = 1,
+        core_ids = [1],
+        external_cores = [0]
+    );
     let (first_dir, _) = run_manifest(receiver_app(), args.clone(), "app-m4", "m4");
     let (second_dir, _) = run_manifest(receiver_app(), args, "app-m4", "m4");
 
@@ -160,7 +168,12 @@ fn manifests_are_deterministic() {
 #[test]
 fn source_hash_covers_the_source_before_stripping() {
     let app_mod = receiver_app();
-    let args = quote!(device = mypac, cores = 1, core_ids = [1]);
+    let args = quote!(
+        device = mypac,
+        cores = 1,
+        core_ids = [1],
+        external_cores = [0]
+    );
 
     let mut expected_source = args.to_string();
     expected_source.push('\n');
@@ -234,7 +247,10 @@ fn env_detection_switches_on_metadata_mode() {
     assert!(pass.is_metadata_mode(), "detected at the macro level");
 
     let (_, _) = pass
-        .run_pass(quote!(device = mypac, core_ids = [1]), receiver_app())
+        .run_pass(
+            quote!(device = mypac, core_ids = [1], external_cores = [0]),
+            receiver_app(),
+        )
         .expect("pass succeeds");
 
     let manifest = AppManifest::from_json(
@@ -277,12 +293,17 @@ fn full_pipeline_writes_the_manifest() {
                 }
             }
 
-            #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
             struct EncryptTask;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
-                fn exec(&mut self, _input: Self::Input) {}
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
             }
         }
     };
@@ -312,15 +333,31 @@ fn manifest_declaration_order_is_normalized() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_spawn(core = 2, priority = 2)]
+            #[sw_task(priority = 2, spawn_by = 0)]
             struct Zeta;
 
-            #[cross_bin_spawn(core = 1, priority = 1)]
+            impl RticSwTask for Zeta {
+                type SpawnInput = ipc_types::Msg;
+            }
+
+            #[sw_task(priority = 1, spawn_by = 0)]
             struct Alpha;
+
+            impl RticSwTask for Alpha {
+                type SpawnInput = ipc_types::Msg;
+            }
         }
     };
     XbinPass::with_manifest(dir.path(), "app", "app")
-        .run_pass(quote!(device = mypac), app_mod)
+        .run_pass(
+            quote!(
+                device = mypac,
+                cores = 1,
+                core_ids = [1],
+                external_cores = [0]
+            ),
+            app_mod,
+        )
         .expect("pass succeeds");
 
     let manifest = AppManifest::from_json(
@@ -328,9 +365,9 @@ fn manifest_declaration_order_is_normalized() {
     )
     .expect("parse");
     let names: Vec<&str> = manifest
-        .senders
+        .receivers
         .iter()
-        .map(|sender| sender.name.as_str())
+        .map(|receiver| receiver.name.as_str())
         .collect();
     assert_eq!(names, ["Alpha", "Zeta"]);
 }
@@ -367,19 +404,4 @@ fn malformed_extensions_are_rejected_with_precise_errors() {
             "expected `{expected}` in `{error}`"
         );
     }
-}
-
-#[test]
-fn cross_attributes_must_be_on_structs() {
-    let app_mod: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[cross_bin_task(priority = 3)]
-            fn not_a_struct() {}
-        }
-    };
-    let error = XbinPass::disabled()
-        .run_pass(quote!(device = mypac), app_mod)
-        .expect_err("must be rejected")
-        .to_string();
-    assert!(error.contains("must be applied to a struct"), "{error}");
 }

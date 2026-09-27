@@ -4,23 +4,30 @@
 //! In codegen mode the pass has loaded the driver-generated `system.json`
 //! (see `multibinary-multicore-plan.md` §8) and emits code from it:
 //!
-//! - for every `#[cross_bin_spawn(..)]` stub (M3-T1):
+//! - for every view task whose `spawner_core` belongs to this application
+//!   (M5.5: the producer declares nothing; the stubs are generated):
 //!   - a hidden **FIFO view** helper returning the fixed-address
 //!     `rticx_xbin_rt::Fifo` of the task at
 //!     `region.base_for(this_core, source, target) + offset`, where the region
 //!     comes from the distribution's runtime backend and the offset, depth and
 //!     element layout come from the system view (const addresses, no local input
 //!     queue, no forwarder);
-//!   - `Task::cross_spawn(input)`, matching the error semantics of the
-//!     single-binary `cross_spawn`:
+//!   - the task struct itself (`pub struct <Task>;`, the generated sender
+//!     stub) and `Task::cross_spawn(input)`, matching the error semantics of
+//!     the single-binary `cross_spawn`:
 //!     - `Ok(())`: the input is enqueued and the target doorbell was rung;
 //!     - `Err(None)`: the input is enqueued, but ringing the doorbell failed
 //!       (do not retry the enqueue; re-notify the target);
 //!     - `Err(Some(input))`: nothing was enqueued (the FIFO is full, the caller
 //!       does not run on the expected core, …); retry later or raise `capacity`.
-//! - for every `#[cross_bin_task(..)]` receiver (M3-T2):
+//! - for every native `#[sw_task]` cross-binary receiver of this application
+//!   (M3-T2, M5.5):
 //!   - a hidden **FIFO view** helper like the sender's, but resolving the
 //!     consumer view of the region (`base_from_target`);
+//!   - a const assertion that the receiver's `<Task as
+//!     RticSwTask>::SpawnInput` implements `rticx_xbin_rt::CrossCoreMessage`,
+//!     so the guarantee lives in generated code instead of the trait
+//!     definition;
 //!   - one generated **dispatcher** task per doorbell line: a hardware task
 //!     bound to the distribution's doorbell IRQ at the line's priority, whose
 //!     `exec` drains the FIFOs of the line directly (single consumer) and
@@ -28,9 +35,9 @@
 //!
 //! The receiver structs themselves are turned into framework tasks by
 //! [`crate::parse::inject_receiver_tasks`]: `#[task(priority = …,
-//! core = …, task_trait = CrossBinTask, init = generated)]`, the same shape
-//! the single-binary software-task pass uses. The core pass then generates the
-//! task static, runs the user's `impl CrossBinTask`, and checks the trait
+//! core = …, task_trait = RticSwTask, init = generated)]`, the same shape the
+//! single-binary software-task pass uses. The core pass then generates the
+//! task static, runs the user's `impl RticSwTask`, and checks the trait
 //! implementation — no core-pass changes are required.
 //!
 //! - **Init hooks** (M3-T3): codegen mode also emits three hook functions and
@@ -76,10 +83,9 @@ use quote::{format_ident, quote};
 use rticx_core::parser::ast::uppercase_ident;
 use rticx_core::rticx_traits::HWT_TRAIT_TY;
 use rticx_xbin_proto::{
-    AppEntry, DoorbellEntry, Hash64, ReceiverDecl, SenderDecl, SystemView, TaskEntry,
-    simple_type_name,
+    AppEntry, DoorbellEntry, Hash64, ReceiverDecl, SystemView, TaskEntry, simple_type_name,
 };
-use syn::{Item, LitInt, LitStr, Type};
+use syn::{Item, ItemMod, LitInt, LitStr, Type};
 
 use crate::parse::AppExtensions;
 
@@ -112,9 +118,8 @@ pub trait XbinPassBackend {
 
     /// Path to the generated `ipc-types` crate as seen by applications.
     ///
-    /// Used for sender stubs that do not mirror the receiver with an
-    /// `impl CrossBinSpawn { type Input = …; }` block: the IDL input type is
-    /// then reached as `#ipc_types_path::<InputType>`.
+    /// The generated producer stubs reach the IDL input type as
+    /// `#ipc_types_path::<InputType>` (the producer declares nothing, M5.5).
     fn ipc_types_path(&self) -> syn::Path {
         syn::parse_quote!(ipc_types)
     }
@@ -191,55 +196,91 @@ impl HookPlan {
     }
 }
 
-/// Generates the sender items for every `#[cross_bin_spawn]` stub of an
-/// application: one hidden FIFO view per task plus its `cross_spawn` impl.
+/// Generates the producer-side items of an application (M5.5): for every view
+/// task whose `spawner_core` is one of its cores, the generated
+/// `pub struct <Task>;` sender stub, its hidden FIFO view and its
+/// `cross_spawn` impl.
 ///
-/// Returns an error naming the offending declaration when the application is
-/// not part of `view`, a sender has no matching task, or the sender
-/// declaration disagrees with the synced view — all of which mean the source
-/// changed after the last `cargo xbin sync`.
+/// The producer source declares nothing, so the stubs are derived from the
+/// synced system view. A user item with the generated stub's name is rejected
+/// with a dedicated error. Applications without producer endpoints generate
+/// nothing and do not need a backend.
 pub(crate) fn generate_sender_items(
+    app_mod: &ItemMod,
     view: &SystemView,
-    package: &str,
-    target: &str,
-    extensions: &AppExtensions,
-    senders: &[SenderDecl],
+    application: &AppEntry,
     backend: Option<&dyn XbinPassBackend>,
 ) -> syn::Result<Vec<Item>> {
-    if senders.is_empty() {
+    let stubs: Vec<&TaskEntry> = view
+        .tasks
+        .iter()
+        .filter(|task| application.core_ids.contains(&task.spawner_core))
+        .collect();
+    if stubs.is_empty() {
         return Ok(Vec::new());
     }
     let Some(backend) = backend else {
         return Err(error(
-            "this application declares `#[cross_bin_spawn]` tasks, but the distribution did not \
-             configure a cross-binary code-generation backend; bind \
+            "the synced system view spawns cross-binary tasks from this application, but the \
+             distribution did not configure a cross-binary code-generation backend; bind \
              `XbinPass::from_env().with_backend(...)` in the distribution macro",
         ));
     };
 
-    let application = check_application(view, package, target, extensions)?;
-
-    let mut items = Vec::with_capacity(senders.len() * 2);
-    for sender in senders {
-        items.extend(generate_sender(view, application, sender, backend)?);
+    let mut items = Vec::with_capacity(stubs.len() * 3);
+    for task in stubs {
+        check_stub_collision(app_mod, task)?;
+        items.extend(generate_sender(view, task, backend)?);
     }
     Ok(items)
 }
 
-/// Generates the receiver items for every `#[cross_bin_task]` declaration of
-/// an application (M3-T2): one hidden FIFO view per task plus one doorbell
-/// dispatcher per `(source -> target, priority)` line.
+/// Rejects a generated sender stub whose name collides with a user item of
+/// the `#[app]` module (M5.5).
 ///
-/// Returns an error naming the offending declaration when the application is
-/// not part of `view`, a declaration disagrees with the synced view, or the
-/// view places a task on this application's cores without a matching
-/// declaration — all of which mean the source changed after the last
-/// `cargo xbin sync`.
+/// The producer source never declares the stub, so any same-named item is a
+/// collision; naming the task in the error makes the generated name easy to
+/// fix (rename the user item).
+fn check_stub_collision(app_mod: &ItemMod, task: &TaskEntry) -> syn::Result<()> {
+    let Some((_, items)) = app_mod.content.as_ref() else {
+        return Ok(());
+    };
+    for item in items {
+        let name = match item {
+            Item::Struct(item) => Some(&item.ident),
+            Item::Enum(item) => Some(&item.ident),
+            Item::Union(item) => Some(&item.ident),
+            Item::Type(item) => Some(&item.ident),
+            Item::Trait(item) => Some(&item.ident),
+            Item::Fn(item) => Some(&item.sig.ident),
+            Item::Const(item) => Some(&item.ident),
+            Item::Static(item) => Some(&item.ident),
+            _ => None,
+        };
+        if name.is_some_and(|name| *name == task.name) {
+            return Err(error(format!(
+                "the cross-binary pass generates `pub struct {};` for the task spawned by \
+                 global core {}, but the `#[app]` module already defines an item with that \
+                 name; rename the item",
+                task.name, task.spawner_core
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Generates the receiver items for every native cross-binary receiver of an
+/// application (M3-T2, M5.5): the `SpawnInput: CrossCoreMessage` assertion,
+/// one hidden FIFO view per task plus one doorbell dispatcher per
+/// `(source -> target, priority)` line.
+///
+/// Returns an error naming the offending declaration when a declaration
+/// disagrees with the synced view, or the view places a task on this
+/// application's cores without a matching declaration — both mean the source
+/// changed after the last `cargo xbin sync`.
 pub(crate) fn generate_receiver_items(
     view: &SystemView,
-    package: &str,
-    target: &str,
-    extensions: &AppExtensions,
+    application: &AppEntry,
     receivers: &[ReceiverDecl],
     backend: Option<&dyn XbinPassBackend>,
 ) -> syn::Result<Vec<Item>> {
@@ -248,13 +289,12 @@ pub(crate) fn generate_receiver_items(
     }
     let Some(backend) = backend else {
         return Err(error(
-            "this application declares `#[cross_bin_task]` tasks, but the distribution did not \
+            "this application declares cross-binary receivers, but the distribution did not \
              configure a cross-binary code-generation backend; bind \
              `XbinPass::from_env().with_backend(...)` in the distribution macro",
         ));
     };
-
-    let application = check_application(view, package, target, extensions)?;
+    let package = &application.package;
 
     // A view task owned by this application without a receiver declaration
     // would otherwise be silently undrained after a `sync` removed the task
@@ -267,13 +307,13 @@ pub(crate) fn generate_receiver_items(
         if owned && !receivers.iter().any(|receiver| receiver.name == task.name) {
             return Err(error(format!(
                 "the synced system view has task `{}` for application `{package}`, but the source \
-                 declares no `#[cross_bin_task]` for it; run `cargo xbin sync`",
+                 declares no cross-binary receiver for it; run `cargo xbin sync`",
                 task.name
             )));
         }
     }
 
-    // One dispatcher per doorbell line: the tasks are grouped by
+    // ~ One dispatcher per doorbell line: the tasks are grouped by
     // `(source, target, priority)`, the key of their `system.json` doorbell.
     let mut lines: BTreeMap<(u32, u32, u16), Vec<ResolvedReceiver<'_>>> = BTreeMap::new();
     for receiver in receivers {
@@ -285,7 +325,34 @@ pub(crate) fn generate_receiver_items(
             .push(resolved);
     }
 
-    let mut items = Vec::with_capacity(receivers.len() * 2);
+    // ~ The receiver's `SpawnInput` must be a cross-core message; a generated
+    // const assertion pins the guarantee to the native `RticSwTask` trait
+    // (M5.5) instead of relying on a bound in its definition.
+    let rt_path = backend.rt_path();
+    let assertions = receivers
+        .iter()
+        .map(|receiver| {
+            let task_ident = ident(&receiver.name)?;
+            Ok(quote! {
+                __rticx_xbin_assert_cross_core_message::<<#task_ident as RticSwTask>::SpawnInput>();
+            })
+        })
+        .collect::<syn::Result<Vec<TokenStream>>>()?;
+    let assert_doc = "Compile-time assertion that every cross-binary receiver's `SpawnInput` \
+         implements `CrossCoreMessage` (M5.5).";
+    let mut items = Vec::with_capacity(receivers.len() * 2 + 1);
+    items.push(syn::parse_quote! {
+        #[doc = #assert_doc]
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        const _: () = {
+            fn __rticx_xbin_assert_cross_core_message<T: #rt_path::CrossCoreMessage>() {}
+            fn __rticx_xbin_check() {
+                #(#assertions)*
+            }
+        };
+    });
+
     for ((source, target_core, priority), group) in &lines {
         items.extend(generate_dispatcher(
             group,
@@ -587,16 +654,12 @@ fn resolve_receiver<'a>(
             receiver.name, receiver.input_type, task.input_type
         )));
     }
-    if let Some(spawned_by) = &receiver.spawned_by {
-        let mut declared = spawned_by.clone();
-        declared.sort_unstable();
-        if declared != task.spawner_cores {
-            return Err(error(format!(
-                "receiver `{}` declares `spawned_by = {spawned_by:?}`, but the synced system view \
-                 has {:?}; run `cargo xbin sync`",
-                receiver.name, task.spawner_cores
-            )));
-        }
+    if receiver.spawn_by != task.spawner_core {
+        return Err(error(format!(
+            "receiver `{}` declares `spawn_by = {}`, but the synced system view has {}; \
+             run `cargo xbin sync`",
+            receiver.name, receiver.spawn_by, task.spawner_core
+        )));
     }
 
     let doorbell = view
@@ -898,17 +961,14 @@ pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::R
     ])
 }
 
-/// Generates the FIFO view and the `cross_spawn` impl of one sender stub.
-///
-/// `items` are pushed into the `#[app]` module, so the generated
-/// `impl <Task>` block extends the user-declared unit struct.
+/// Generates the sender stub of one view task: the `pub struct <Task>;` the
+/// producer's source does not declare (M5.5), its FIFO view and its
+/// `cross_spawn` impl.
 fn generate_sender(
     view: &SystemView,
-    application: &AppEntry,
-    sender: &SenderDecl,
+    task: &TaskEntry,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<Vec<Item>> {
-    let task = find_task(view, application, sender)?;
     let doorbell = view
         .doorbells
         .iter()
@@ -926,7 +986,7 @@ fn generate_sender(
         })?;
 
     let task_ident = ident(&task.name)?;
-    let input_ty = input_type(task, sender, backend)?;
+    let input_ty = input_type(task, backend)?;
     let rt_path = backend.rt_path();
     let backend_expr = backend.backend();
 
@@ -963,8 +1023,17 @@ fn generate_sender(
          run on global core {source}). Retry later or raise `capacity`.",
         task.name
     );
+    let stub_doc = format!(
+        "Generated sender stub of the cross-binary task `{}` (M5.5). The producer application \
+         declares nothing; `cargo xbin sync` derived this stub from the synced system view.",
+        task.name
+    );
 
     Ok(vec![
+        syn::parse_quote! {
+            #[doc = #stub_doc]
+            pub struct #task_ident;
+        },
         syn::parse_quote! {
             #[doc = #fifo_doc]
             #[doc(hidden)]
@@ -1053,88 +1122,11 @@ fn generate_sender(
     ])
 }
 
-/// Finds the task named by `sender` and checks it against the sender stub.
-fn find_task<'a>(
-    view: &'a SystemView,
-    application: &AppEntry,
-    sender: &SenderDecl,
-) -> syn::Result<&'a TaskEntry> {
-    let task = view
-        .tasks
-        .iter()
-        .find(|task| task.name == sender.name)
-        .ok_or_else(|| {
-            error(format!(
-                "the synced system view has no task named `{}`; run `cargo xbin sync`",
-                sender.name
-            ))
-        })?;
-
-    let owned = view
-        .cores
-        .iter()
-        .any(|core| core.global_id == task.fifo.source && core.app == application.package);
-    if !owned || !task.spawner_cores.contains(&task.fifo.source) {
-        return Err(error(format!(
-            "task `{}` is spawned by global core {}, which is not part of application `{}`; \
-             run `cargo xbin sync`",
-            task.name, task.fifo.source, application.package
-        )));
-    }
-
-    if sender.core != task.fifo.target {
-        return Err(error(format!(
-            "sender `{}` targets global core {}, but the synced system view has {}; \
-             run `cargo xbin sync`",
-            sender.name, sender.core, task.fifo.target
-        )));
-    }
-    if sender.priority != task.priority {
-        return Err(error(format!(
-            "sender `{}` declares priority {}, but the synced system view has {}; \
-             run `cargo xbin sync`",
-            sender.name, sender.priority, task.priority
-        )));
-    }
-    if sender.capacity + 1 != task.fifo.depth as usize {
-        return Err(error(format!(
-            "sender `{}` declares capacity {}, but the synced system view has {}; \
-             run `cargo xbin sync`",
-            sender.name, sender.capacity, task.capacity
-        )));
-    }
-    if let Some(input) = &sender.input_type
-        && simple_type_name(input) != task.input_type
-    {
-        return Err(error(format!(
-            "sender `{}` declares input type `{}`, but the synced system view has `{}`; \
-             run `cargo xbin sync`",
-            sender.name, input, task.input_type
-        )));
-    }
-
-    Ok(task)
-}
-
-/// Resolves the Rust type of the spawn input.
+/// Resolves the Rust type of the sender stub's spawn input.
 ///
-/// A mirrored `impl CrossBinSpawn { type Input = …; }` keeps the user's exact
-/// path; without it the IDL type is reached through the backend's
-/// `ipc_types_path` (default `ipc_types`).
-fn input_type(
-    task: &TaskEntry,
-    sender: &SenderDecl,
-    backend: &dyn XbinPassBackend,
-) -> syn::Result<Type> {
-    if let Some(path) = &sender.input_type {
-        return syn::parse_str(path).map_err(|parse_error| {
-            error(format!(
-                "cannot parse the input type `{path}` of sender `{}`: {parse_error}",
-                sender.name
-            ))
-        });
-    }
-
+/// The producer declares nothing, so the IDL type is reached through the
+/// backend's `ipc_types_path` (default `ipc_types`).
+fn input_type(task: &TaskEntry, backend: &dyn XbinPassBackend) -> syn::Result<Type> {
     let ipc_types = backend.ipc_types_path();
     let type_ident = ident(&task.input_type)?;
     Ok(syn::parse_quote!(#ipc_types::#type_ident))

@@ -276,10 +276,10 @@ pub enum MergeError {
         cores: u32,
     },
 
-    /// A receiver's `spawned_by` lists a core owned by its own application.
+    /// A receiver's `spawn_by` names a core owned by its own application.
     #[error(
-        "receiver `{task}` in `{package}` lists global core id {core} in `spawned_by`, \
-         but the application owns it; spawners must belong to another binary"
+        "receiver `{task}` in `{package}` declares `spawn_by = {core}`, but the application \
+         owns that core; cross-binary spawners must belong to another binary"
     )]
     OwnSpawnerCore {
         /// The package.
@@ -304,59 +304,22 @@ pub enum MergeError {
         second: String,
     },
 
-    /// A sender stub has no matching receiver.
+    /// The producer application does not list the receiver's core in its own
+    /// `external_cores`.
     #[error(
-        "sender `{task}` in `{package}` has no matching `#[cross_bin_task]` receiver in any application"
-    )]
-    SenderWithoutReceiver {
-        /// The sending package.
-        package: String,
-        /// The task name.
-        task: String,
-    },
-
-    /// A receiver is never spawned.
-    #[error(
-        "receiver `{task}` in `{package}` is never spawned; add a `#[cross_bin_spawn]` stub or remove the receiver"
-    )]
-    ReceiverWithoutSender {
-        /// The receiving package.
-        package: String,
-        /// The task name.
-        task: String,
-    },
-
-    /// A sender targets a core different from the receiver's core.
-    #[error(
-        "sender `{task}` in `{package}` targets global core {found}, but the receiver runs \
-         on global core {expected}"
-    )]
-    TargetCoreMismatch {
-        /// The task name.
-        task: String,
-        /// The sending package.
-        package: String,
-        /// Global core id of the receiver.
-        expected: u32,
-        /// Global core id targeted by the sender.
-        found: u32,
-    },
-
-    /// A sender targets a core not listed in its own `external_cores`.
-    #[error(
-        "sender `{task}` in `{package}` targets global core {core}, but the application \
-         does not list it in `external_cores`"
+        "task `{task}` runs on global core {core}, but its producer application `{package}` \
+         does not list that core in `external_cores`"
     )]
     TargetCoreNotVisible {
-        /// The sending package.
+        /// The producer package.
         package: String,
         /// The task name.
         task: String,
-        /// The target core id.
+        /// The receiver core id.
         core: u32,
     },
 
-    /// A receiver's application does not list one of its spawner cores.
+    /// A receiver's application does not list its producer core.
     #[error(
         "receiver `{task}` in `{package}` is spawned by global core {core}, but the \
          application does not list it in `external_cores`"
@@ -366,70 +329,8 @@ pub enum MergeError {
         package: String,
         /// The task name.
         task: String,
-        /// The spawner core id.
+        /// The producer core id.
         core: u32,
-    },
-
-    /// A sender targets a core owned by its own application.
-    #[error(
-        "sender `{task}` in `{package}` targets global core {core}, which the application \
-         owns; cross-binary spawns must target another binary"
-    )]
-    SelfTarget {
-        /// The package.
-        package: String,
-        /// The task name.
-        task: String,
-        /// The locally owned target core id.
-        core: u32,
-    },
-
-    /// Sender and receiver priorities disagree.
-    #[error(
-        "sender `{task}` in `{package}` declares `priority = {sender}`, but the receiver \
-         declares `priority = {receiver}`"
-    )]
-    PriorityMismatch {
-        /// The task name.
-        task: String,
-        /// The sending package.
-        package: String,
-        /// Priority declared by the receiver.
-        receiver: u16,
-        /// Priority declared by the sender.
-        sender: u16,
-    },
-
-    /// Sender and receiver capacities disagree.
-    #[error(
-        "sender `{task}` in `{package}` declares `capacity = {sender}`, but the receiver \
-         declares `capacity = {receiver}`"
-    )]
-    CapacityMismatch {
-        /// The task name.
-        task: String,
-        /// The sending package.
-        package: String,
-        /// Capacity declared by the receiver.
-        receiver: usize,
-        /// Capacity declared by the sender.
-        sender: usize,
-    },
-
-    /// Sender and receiver input types disagree.
-    #[error(
-        "sender `{task}` in `{package}` declares input type `{sender}`, but the receiver \
-         uses `{receiver}`"
-    )]
-    InputTypeMismatch {
-        /// The task name.
-        task: String,
-        /// The sending package.
-        package: String,
-        /// Input type declared by the receiver.
-        receiver: String,
-        /// Input type declared by the sender.
-        sender: String,
     },
 
     /// A declared input type does not exist in the IDL.
@@ -443,43 +344,6 @@ pub enum MergeError {
         task: String,
         /// The missing IDL type name.
         type_name: String,
-    },
-
-    /// A task is spawned by more than one core.
-    #[error(
-        "task `{task}` is spawned by global cores {spawners:?}; v1 supports exactly one \
-         producer core per task, multi-source tasks land in M6-T1"
-    )]
-    MultipleSpawners {
-        /// The task name.
-        task: String,
-        /// The global ids of every core that would spawn the task.
-        spawners: Vec<u32>,
-    },
-
-    /// A receiver's `spawned_by` does not list an actual spawner.
-    #[error(
-        "task `{task}` is spawned by global core {producer}, but its receiver declares \
-         `spawned_by = {allowed:?}`"
-    )]
-    SpawnerNotAllowed {
-        /// The task name.
-        task: String,
-        /// The actual spawner core id.
-        producer: u32,
-        /// The declared allowed spawners.
-        allowed: Vec<u32>,
-    },
-
-    /// A receiver's `spawned_by` lists a core that never spawns the task.
-    #[error(
-        "receiver `{task}` declares `spawned_by` core {core}, but no sender spawns it from that core"
-    )]
-    PhantomSpawner {
-        /// The task name.
-        task: String,
-        /// The declared but unused spawner core id.
-        core: u32,
     },
 
     /// Two tasks from different source cores share a priority line.

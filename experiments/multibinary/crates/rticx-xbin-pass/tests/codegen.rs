@@ -1,14 +1,15 @@
 //! Acceptance tests for cross-binary code generation (M3-T1 sender side,
-//! M3-T2 receiver side).
+//! M3-T2 receiver side, M5.5 native syntax).
 //!
-//! The pass runs in codegen mode over a fixture `system.json`: for every
-//! `#[cross_bin_spawn]` stub it emits the FIFO view helper and the
-//! `cross_spawn` impl; for every `#[cross_bin_task]` receiver it rewrites the
-//! struct into a core `#[task(.., task_trait = CrossBinTask)]`, emits its
-//! consumer FIFO view and a doorbell dispatcher draining it. The tests
-//! snapshot the generated sections (the `assert_section_present` approach of
-//! the root pass tests) and cover the documented stale-view and configuration
-//! errors.
+//! The pass runs in codegen mode over a fixture `system.json`: for every view
+//! task whose `spawner_core` belongs to the application it emits the sender
+//! stub (`pub struct <Task>;`), the FIFO view helper and the `cross_spawn`
+//! impl; for every native `#[sw_task]` cross receiver it rewrites the struct
+//! into a core `#[task(.., task_trait = RticSwTask)]`, emits the
+//! `SpawnInput: CrossCoreMessage` assertion, its consumer FIFO view and a
+//! doorbell dispatcher draining it. The tests snapshot the generated sections
+//! (the `assert_section_present` approach of the root pass tests) and cover
+//! the documented stale-view and configuration errors.
 //!
 //! Environment-variable tests are serialized behind [`ENV_LOCK`] because the
 //! process environment is global.
@@ -102,7 +103,7 @@ const SYSTEM_JSON: &str = r#"{
       "id": 1,
       "name": "EncryptTask",
       "receiver_core": 1,
-      "spawner_cores": [0],
+      "spawner_core": 0,
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
@@ -152,13 +153,11 @@ impl XbinPassBackend for TestBackend {
     }
 }
 
-/// The sender fixture application: one stub, no mirrored `type Input`.
+/// The producer fixture application: it declares nothing; the pass generates
+/// the `EncryptTask` stub from the view (M5.5).
 fn sender_app() -> syn::ItemMod {
     syn::parse_quote! {
-        mod app {
-            #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-            struct EncryptTask;
-        }
+        mod app {}
     }
 }
 
@@ -171,22 +170,22 @@ fn sender_args() -> TokenStream {
     )
 }
 
-/// The receiver fixture application: one task, input declared through the
-/// mirrored `impl CrossBinTask`.
+/// The receiver fixture application: one native cross receiver with its
+/// `impl RticSwTask { type SpawnInput }` block.
 fn receiver_app() -> syn::ItemMod {
     syn::parse_quote! {
         mod app {
-            trait CrossBinTask {
-                type Input;
-                fn exec(&mut self, input: Self::Input);
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
             }
 
-            #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
             struct EncryptTask;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
-                fn exec(&mut self, _input: Self::Input) {}
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
             }
         }
     }
@@ -225,7 +224,7 @@ fn with_source_hashes(contents: &str, patches: &[(&str, &TokenStream, &syn::Item
     view.to_json()
 }
 
-/// Writes a fixture view whose sender application records the hash of
+/// Writes a fixture view whose producer application records the hash of
 /// `(sender_args, sender_app)`, as `cargo xbin sync` would (M3-T4).
 fn write_sender_system() -> (tempfile::TempDir, PathBuf) {
     write_system(&with_source_hashes(
@@ -253,6 +252,16 @@ fn write_both_system() -> (tempfile::TempDir, PathBuf) {
     ))
 }
 
+/// Writes the fixture view with a fresh `topology_hash` but no re-recorded
+/// source hashes.
+///
+/// Used by tests whose error is raised before the freshness checks; the
+/// hard-coded `source_hash` values of [`SYSTEM_JSON`] then never match, which
+/// is irrelevant for those tests.
+fn write_base_system() -> (tempfile::TempDir, PathBuf) {
+    write_system(&system_with(|_| {}))
+}
+
 /// Parses [`SYSTEM_JSON`], lets `mutate` edit the value and re-serializes the
 /// **resealed** view.
 fn system_with(mutate: impl FnOnce(&mut serde_json::Value)) -> String {
@@ -278,7 +287,7 @@ fn system_tampered(mutate: impl FnOnce(&mut serde_json::Value)) -> String {
     serde_json::to_string(&view).expect("JSON")
 }
 
-/// Runs the codegen pass over the sender fixture and returns the generated
+/// Runs the codegen pass over the producer fixture and returns the generated
 /// module as a token string.
 fn generate(path: &Path) -> syn::Result<String> {
     let pass = XbinPass::with_system(path, "app-m7", "m7").with_backend(TestBackend);
@@ -320,9 +329,11 @@ fn sender_codegen_snapshot() {
     let (_dir, path) = write_sender_system();
     let generated = generate_ok(&path);
 
-    // The original attribute is consumed; the stub struct stays.
-    assert!(!generated.contains("cross_bin_spawn"), "{generated}");
-    assert!(generated.contains("struct EncryptTask ;"), "{generated}");
+    // The producer source declares nothing: the pass generates the stub.
+    assert!(
+        generated.contains("pub struct EncryptTask ;"),
+        "the generated sender stub is missing: {generated}"
+    );
 
     // ---- FIFO view ----
     assert_section_present(
@@ -501,14 +512,11 @@ fn stale_topology_hash_is_rejected() {
 
 #[test]
 fn stale_application_source_is_rejected() {
-    // Same declarations, different tokens: a source edit between `sync` and a
+    // Same arguments, different tokens: a source edit between `sync` and a
     // plain `cargo build` must be caught by the recorded source hash (M3-T4).
     let (_dir, path) = write_sender_system();
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-            struct EncryptTask;
-
             const EXTRA: u32 = 1;
         }
     };
@@ -526,60 +534,39 @@ fn stale_application_source_is_rejected() {
 }
 
 #[test]
-fn mirrored_input_type_uses_the_declared_path() {
-    let app_mod: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-            struct EncryptTask;
-
-            impl CrossBinSpawn for EncryptTask {
-                type Input = crate::messages::EncryptReq;
-            }
-        }
-    };
-    let (_dir, path) = write_system(&with_source_hashes(
-        SYSTEM_JSON,
-        &[("app-m7", &sender_args(), &app_mod)],
-    ));
-    let pass = XbinPass::with_system(&path, "app-m7", "m7").with_backend(TestBackend);
-    let (_, module) = pass
-        .run_pass(sender_args(), app_mod)
-        .expect("codegen succeeds");
-    let generated = module.to_token_stream().to_string();
-
-    assert_section_present(
-        &generated,
-        quote! {
-            fn __rticx_xbin_fifo_EncryptTask (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend ,
-            ) -> * mut rticx_xbin_rt :: Fifo < crate :: messages :: EncryptReq , 3usize >
-        },
-        "mirrored input type",
-    );
-    // The owner init hook views the FIFO through the IDL path (it may have
-    // no sender declaration for the task), but the task items must keep the
-    // user's declared path.
-    assert!(
-        !generated.contains("Fifo < ipc_types :: EncryptReq"),
-        "the declared path replaces the ipc-types fallback: {generated}"
-    );
-}
-
-#[test]
 fn receiver_codegen_snapshot() {
     let (_dir, path) = write_receiver_system();
     let generated = generate_receiver_ok(&path);
 
-    // The extension attribute is replaced by the core `#[task]` shape, which
+    // The native `#[sw_task]` is replaced by the core `#[task]` shape, which
     // is exactly what the core pass consumes (`task_trait` external path).
-    assert!(!generated.contains("cross_bin_task"), "{generated}");
+    assert!(
+        !generated.contains("sw_task"),
+        "the native attribute must be replaced: {generated}"
+    );
     assert_section_present(
         &generated,
         quote! {
-            #[task(priority = 3, core = 0, task_trait = CrossBinTask, init = generated)]
+            #[task(priority = 3, core = 0, task_trait = RticSwTask, init = generated)]
             struct EncryptTask;
         },
         "receiver task attribute",
+    );
+
+    // ---- `SpawnInput: CrossCoreMessage` assertion ----
+    assert_section_present(
+        &generated,
+        quote! {
+            __rticx_xbin_assert_cross_core_message :: < < EncryptTask as RticSwTask > :: SpawnInput > () ;
+        },
+        "CrossCoreMessage assertion",
+    );
+    assert_section_present(
+        &generated,
+        quote! {
+            fn __rticx_xbin_assert_cross_core_message < T : rticx_xbin_rt :: CrossCoreMessage > () {}
+        },
+        "CrossCoreMessage assertion bound",
     );
 
     // ---- consumer FIFO view ----
@@ -878,17 +865,17 @@ fn init_hooks_are_wired_into_the_entry_functions() {
 fn the_owner_is_the_lowest_global_core_id() {
     let receiver_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            trait CrossBinTask {
-                type Input;
-                fn exec(&mut self, input: Self::Input);
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
             }
 
-            #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [5])]
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 5)]
             struct EncryptTask;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
-                fn exec(&mut self, _input: Self::Input) {}
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
             }
         }
     };
@@ -899,10 +886,7 @@ fn the_owner_is_the_lowest_global_core_id() {
         external_cores = [5]
     );
     let sender_mod: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[cross_bin_spawn(core = 2, priority = 3, capacity = 2)]
-            struct EncryptTask;
-        }
+        mod app {}
     };
     let sender_args = quote!(
         device = mypac,
@@ -922,7 +906,7 @@ fn the_owner_is_the_lowest_global_core_id() {
             view["cores"][0]["global_id"] = serde_json::json!(5);
             view["cores"][1]["global_id"] = serde_json::json!(2);
             view["tasks"][0]["receiver_core"] = serde_json::json!(2);
-            view["tasks"][0]["spawner_cores"] = serde_json::json!([5]);
+            view["tasks"][0]["spawner_core"] = serde_json::json!(5);
             view["tasks"][0]["fifo"]["source"] = serde_json::json!(5);
             view["tasks"][0]["fifo"]["target"] = serde_json::json!(2);
             view["regions"][0]["source"] = serde_json::json!(5);
@@ -975,49 +959,6 @@ fn the_owner_is_the_lowest_global_core_id() {
 }
 
 #[test]
-fn mirrored_receiver_input_type_uses_the_declared_path() {
-    let app_mod: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            trait CrossBinTask {
-                type Input;
-                fn exec(&mut self, input: Self::Input);
-            }
-
-            #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
-            struct EncryptTask;
-
-            impl CrossBinTask for EncryptTask {
-                type Input = crate::messages::EncryptReq;
-                fn exec(&mut self, _input: Self::Input) {}
-            }
-        }
-    };
-    let (_dir, path) = write_system(&with_source_hashes(
-        SYSTEM_JSON,
-        &[("app-m4", &receiver_args(), &app_mod)],
-    ));
-    let pass = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
-    let (_, module) = pass
-        .run_pass(receiver_args(), app_mod)
-        .expect("codegen succeeds");
-    let generated = module.to_token_stream().to_string();
-
-    assert_section_present(
-        &generated,
-        quote! {
-            fn __rticx_xbin_fifo_EncryptTask (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend ,
-            ) -> * mut rticx_xbin_rt :: Fifo < crate :: messages :: EncryptReq , 3usize >
-        },
-        "mirrored receiver input type",
-    );
-    assert!(
-        !generated.contains("ipc_types :: EncryptReq"),
-        "the declared path replaces the ipc-types fallback: {generated}"
-    );
-}
-
-#[test]
 fn metadata_mode_never_rewrites_receivers() {
     let dir = tempfile::tempdir().expect("tempdir");
     let pass = XbinPass::with_manifest(dir.path(), "app-m4", "m4").with_backend(TestBackend);
@@ -1026,9 +967,41 @@ fn metadata_mode_never_rewrites_receivers() {
         .expect("metadata pass succeeds");
     let generated = module.to_token_stream().to_string();
 
-    assert!(!generated.contains("cross_bin_task"), "{generated}");
+    assert!(
+        !generated.contains("sw_task"),
+        "the parsed attribute is stripped: {generated}"
+    );
     assert!(!generated.contains("task_trait"), "{generated}");
     assert!(generated.contains("struct EncryptTask ;"), "{generated}");
+    assert!(
+        generated.contains("impl RticSwTask for EncryptTask"),
+        "the user impl stays: {generated}"
+    );
+}
+
+#[test]
+fn stub_name_collision_is_reported() {
+    let (_dir, path) = write_sender_system();
+    // The collision check runs before the freshness checks, so the source
+    // hash of the fixture view does not matter here.
+    let app_mod: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            struct EncryptTask;
+        }
+    };
+    let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_backend(TestBackend)
+        .run_pass(sender_args(), app_mod)
+        .expect_err("a stub name collision must be rejected")
+        .to_string();
+    assert!(
+        error.contains("generates `pub struct EncryptTask;` for the task spawned by global core 0"),
+        "{error}"
+    );
+    assert!(
+        error.contains("already defines an item with that name"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1044,87 +1017,19 @@ fn missing_system_view_is_reported() {
 }
 
 #[test]
-fn missing_backend_is_reported() {
-    let (_dir, path) = write_system(SYSTEM_JSON);
+fn missing_producer_backend_is_reported() {
+    let (_dir, path) = write_base_system();
     let error = XbinPass::with_system(&path, "app-m7", "m7")
         .run_pass(sender_args(), sender_app())
-        .expect_err("a sender without a backend must fail")
+        .expect_err("a producer without a backend must fail")
         .to_string();
     assert!(
-        error.contains("did not configure a cross-binary code-generation backend"),
+        error.contains(
+            "the synced system view spawns cross-binary tasks from this application, but the \
+             distribution did not configure a cross-binary code-generation backend"
+        ),
         "{error}"
     );
-}
-
-#[test]
-fn stale_sender_declarations_are_rejected() {
-    // (application args, module, expected error fragment)
-    let cases: Vec<(TokenStream, syn::ItemMod, &str)> = vec![
-        (
-            sender_args(),
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_spawn(core = 2, priority = 3, capacity = 2)]
-                    struct EncryptTask;
-                }
-            },
-            "targets global core 2, but the synced system view has 1",
-        ),
-        (
-            sender_args(),
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_spawn(core = 1, priority = 4, capacity = 2)]
-                    struct EncryptTask;
-                }
-            },
-            "declares priority 4, but the synced system view has 3",
-        ),
-        (
-            sender_args(),
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_spawn(core = 1, priority = 3, capacity = 1)]
-                    struct EncryptTask;
-                }
-            },
-            "declares capacity 1, but the synced system view has 2",
-        ),
-        (
-            sender_args(),
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-                    struct OtherTask;
-                }
-            },
-            "has no task named `OtherTask`",
-        ),
-        (
-            quote!(
-                device = mypac,
-                cores = 1,
-                core_ids = [9],
-                external_cores = [1]
-            ),
-            sender_app(),
-            "maps its local cores to [9], but the synced system view has [0]",
-        ),
-    ];
-
-    let (_dir, path) = write_system(SYSTEM_JSON);
-    for (args, app_mod, expected) in cases {
-        let error = XbinPass::with_system(&path, "app-m7", "m7")
-            .with_backend(TestBackend)
-            .run_pass(args, app_mod)
-            .expect_err("stale declaration must be rejected")
-            .to_string();
-        assert!(
-            error.contains(expected),
-            "expected `{expected}` in `{error}`"
-        );
-        assert!(error.contains("cargo xbin sync"), "{error}");
-    }
 }
 
 #[test]
@@ -1135,11 +1040,17 @@ fn stale_receiver_declarations_are_rejected() {
             receiver_args(),
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(priority = 4, capacity = 2, spawned_by = [0])]
+                    trait RticSwTask {
+                        type SpawnInput;
+                        fn exec(&mut self, input: Self::SpawnInput);
+                    }
+
+                    #[sw_task(priority = 4, capacity = 2, spawn_by = 0)]
                     struct EncryptTask;
 
-                    impl CrossBinTask for EncryptTask {
-                        type Input = ipc_types::EncryptReq;
+                    impl RticSwTask for EncryptTask {
+                        type SpawnInput = ipc_types::EncryptReq;
+                        fn exec(&mut self, _input: Self::SpawnInput) {}
                     }
                 }
             },
@@ -1149,11 +1060,17 @@ fn stale_receiver_declarations_are_rejected() {
             receiver_args(),
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(priority = 3, capacity = 1, spawned_by = [0])]
+                    trait RticSwTask {
+                        type SpawnInput;
+                        fn exec(&mut self, input: Self::SpawnInput);
+                    }
+
+                    #[sw_task(priority = 3, capacity = 1, spawn_by = 0)]
                     struct EncryptTask;
 
-                    impl CrossBinTask for EncryptTask {
-                        type Input = ipc_types::EncryptReq;
+                    impl RticSwTask for EncryptTask {
+                        type SpawnInput = ipc_types::EncryptReq;
+                        fn exec(&mut self, _input: Self::SpawnInput) {}
                     }
                 }
             },
@@ -1163,11 +1080,17 @@ fn stale_receiver_declarations_are_rejected() {
             receiver_args(),
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+                    trait RticSwTask {
+                        type SpawnInput;
+                        fn exec(&mut self, input: Self::SpawnInput);
+                    }
+
+                    #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
                     struct EncryptTask;
 
-                    impl CrossBinTask for EncryptTask {
-                        type Input = ipc_types::OtherReq;
+                    impl RticSwTask for EncryptTask {
+                        type SpawnInput = ipc_types::OtherReq;
+                        fn exec(&mut self, _input: Self::SpawnInput) {}
                     }
                 }
             },
@@ -1177,36 +1100,21 @@ fn stale_receiver_declarations_are_rejected() {
             receiver_args(),
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [2])]
+                    trait RticSwTask {
+                        type SpawnInput;
+                        fn exec(&mut self, input: Self::SpawnInput);
+                    }
+
+                    #[sw_task(priority = 3, capacity = 2, spawn_by = 2)]
                     struct EncryptTask;
 
-                    impl CrossBinTask for EncryptTask {
-                        type Input = ipc_types::EncryptReq;
+                    impl RticSwTask for EncryptTask {
+                        type SpawnInput = ipc_types::EncryptReq;
+                        fn exec(&mut self, _input: Self::SpawnInput) {}
                     }
                 }
             },
-            "declares `spawned_by = [2]`, but the synced system view has [0]",
-        ),
-        (
-            receiver_args(),
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
-                    struct EncryptTask;
-
-                    impl CrossBinTask for EncryptTask {
-                        type Input = ipc_types::EncryptReq;
-                    }
-
-                    #[cross_bin_task(priority = 3, capacity = 2)]
-                    struct OtherTask;
-
-                    impl CrossBinTask for OtherTask {
-                        type Input = ipc_types::EncryptReq;
-                    }
-                }
-            },
-            "has no task named `OtherTask`",
+            "declares `spawn_by = 2`, which is not a known core",
         ),
         (
             quote!(
@@ -1227,11 +1135,17 @@ fn stale_receiver_declarations_are_rejected() {
             ),
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(core = 1, priority = 3, capacity = 2, spawned_by = [0])]
+                    trait RticSwTask {
+                        type SpawnInput;
+                        fn exec(&mut self, input: Self::SpawnInput);
+                    }
+
+                    #[sw_task(core = 1, priority = 3, capacity = 2, spawn_by = 0)]
                     struct EncryptTask;
 
-                    impl CrossBinTask for EncryptTask {
-                        type Input = ipc_types::EncryptReq;
+                    impl RticSwTask for EncryptTask {
+                        type SpawnInput = ipc_types::EncryptReq;
+                        fn exec(&mut self, _input: Self::SpawnInput) {}
                     }
                 }
             },
@@ -1244,11 +1158,11 @@ fn stale_receiver_declarations_are_rejected() {
     let two_cores = system_with(|view| {
         view["apps"][1]["core_ids"] = serde_json::json!([1, 7]);
     });
-    let (_dir, path) = write_system(SYSTEM_JSON);
+    let (_dir, path) = write_base_system();
     let (_two_dir, two_path) = write_system(&two_cores);
 
     for (index, (args, app_mod, expected)) in cases.into_iter().enumerate() {
-        let path = if index == 6 { &two_path } else { &path };
+        let path = if index == 5 { &two_path } else { &path };
         let error = XbinPass::with_system(path, "app-m4", "m4")
             .with_backend(TestBackend)
             .run_pass(args, app_mod)
@@ -1258,26 +1172,10 @@ fn stale_receiver_declarations_are_rejected() {
             error.contains(expected),
             "expected `{expected}` in `{error}`"
         );
-        assert!(error.contains("cargo xbin sync"), "{error}");
+        if !expected.contains("not a known core") {
+            assert!(error.contains("cargo xbin sync"), "{error}");
+        }
     }
-}
-
-#[test]
-fn receiver_of_another_application_is_rejected() {
-    let (_dir, path) = write_system(SYSTEM_JSON);
-    let error = XbinPass::with_system(&path, "app-m7", "m7")
-        .with_backend(TestBackend)
-        .run_pass(sender_args(), receiver_app())
-        .expect_err("a task of another binary must be rejected")
-        .to_string();
-    assert!(
-        error.contains(
-            "task `EncryptTask` runs on global core 1, which is not part of \
-                        application `app-m7`"
-        ),
-        "{error}"
-    );
-    assert!(error.contains("cargo xbin sync"), "{error}");
 }
 
 #[test]
@@ -1297,7 +1195,7 @@ fn a_view_task_without_receiver_declaration_is_rejected() {
     assert!(
         error.contains(
             "has task `OtherTask` for application `app-m4`, but the source declares \
-                        no `#[cross_bin_task]` for it"
+                        no cross-binary receiver for it"
         ),
         "{error}"
     );
@@ -1324,15 +1222,15 @@ fn a_receiver_without_doorbell_is_rejected() {
 
 #[test]
 fn missing_receiver_backend_is_reported() {
-    let (_dir, path) = write_system(SYSTEM_JSON);
+    let (_dir, path) = write_base_system();
     let error = XbinPass::with_system(&path, "app-m4", "m4")
         .run_pass(receiver_args(), receiver_app())
         .expect_err("a receiver without a backend must fail")
         .to_string();
     assert!(
         error.contains(
-            "declares `#[cross_bin_task]` tasks, but the distribution did not \
-                        configure a cross-binary code-generation backend"
+            "this application declares cross-binary receivers, but the distribution did not \
+             configure a cross-binary code-generation backend"
         ),
         "{error}"
     );
@@ -1340,7 +1238,7 @@ fn missing_receiver_backend_is_reported() {
 
 #[test]
 fn unknown_application_is_rejected() {
-    let (_dir, path) = write_system(SYSTEM_JSON);
+    let (_dir, path) = write_base_system();
     let error = XbinPass::with_system(&path, "app-m0", "m0")
         .with_backend(TestBackend)
         .run_pass(sender_args(), sender_app())
@@ -1353,19 +1251,32 @@ fn unknown_application_is_rejected() {
 }
 
 #[test]
-fn applications_without_cross_declarations_generate_nothing() {
+fn applications_without_cross_declarations_still_load_the_view() {
+    // `app-m4` neither produces a view task nor declares a receiver: it still
+    // loads the view and gets its init hooks (M5.5 removed the gate).
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
             struct Plain;
         }
     };
-    let pass =
-        XbinPass::with_system("/nonexistent/system.json", "app-m7", "m7").with_backend(TestBackend);
+    let (_dir, path) = write_system(&with_source_hashes(
+        SYSTEM_JSON,
+        &[("app-m4", &receiver_args(), &app_mod)],
+    ));
+    let pass = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
     let (_, module) = pass
-        .run_pass(sender_args(), app_mod)
-        .expect("a plain application never loads the system view");
+        .run_pass(receiver_args(), app_mod)
+        .expect("a plain application still loads the view (M5.5)");
     let generated = module.to_token_stream().to_string();
     assert!(!generated.contains("cross_spawn"), "{generated}");
+    assert!(
+        generated.contains("__rticx_xbin_configure_shared_memory"),
+        "the init hooks are generated for every application: {generated}"
+    );
+    assert!(
+        generated.contains("__rticx_xbin_mark_ready_core0"),
+        "every local core is marked ready: {generated}"
+    );
 }
 
 #[test]
@@ -1405,8 +1316,8 @@ fn discovered_project_root_without_a_synced_view_is_a_hard_error() {
     std::fs::write(dir.path().join("rticx.toml"), "schema = 1\n").expect("rticx.toml");
 
     // A discovered project root selects codegen mode even before the first
-    // `cargo xbin sync` wrote the view, so an application with cross-binary
-    // declarations fails instead of silently generating no code.
+    // `cargo xbin sync` wrote the view, so any application fails instead of
+    // silently generating no code (M5.5 removed the cross-declaration gate).
     let _env = EnvGuard::set_all(&[
         ("CARGO_MANIFEST_DIR", dir.path().as_os_str()),
         ("CARGO_PKG_NAME", std::ffi::OsStr::new("app-m7")),
@@ -1418,7 +1329,7 @@ fn discovered_project_root_without_a_synced_view_is_a_hard_error() {
     let error = pass
         .with_backend(TestBackend)
         .run_pass(sender_args(), sender_app())
-        .expect_err("a cross-binary application without a synced view must fail")
+        .expect_err("an application without a synced view must fail")
         .to_string();
     assert!(error.contains("failed to read the system view"), "{error}");
     assert!(error.contains("run `cargo xbin sync`"), "{error}");

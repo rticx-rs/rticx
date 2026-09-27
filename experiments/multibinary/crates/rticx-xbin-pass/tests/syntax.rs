@@ -1,12 +1,17 @@
-//! Acceptance tests for the task attribute syntax (M1-T3).
+//! Acceptance tests for the native cross-binary task syntax (M5.5).
 //!
 //! Covers the confirmed syntax of `multibinary-multicore-plan.md` §6.4/§6.5:
 //!
-//! - `#[app(core_ids = [..], external_cores = [..])]` and the
-//!   `#[cross_bin_task(..)]` / `#[cross_bin_spawn(..)]` task attributes parse
-//!   into declarations with the documented defaults;
+//! - `#[app(core_ids = [..], external_cores = [..])]` and the native
+//!   `#[sw_task(..)]` + `impl RticSwTask { type SpawnInput = …; }` receiver
+//!   syntax parse into declarations with the documented defaults;
+//! - `spawn_by` in an application declaring `external_cores` resolves in the
+//!   global namespace: in-app ids are mapped back to local indexes, external
+//!   ids classify the task as a cross receiver and unknown ids are rejected;
+//! - without `external_cores` the native local reading is kept;
 //! - unknown and malformed keys fail with precise errors;
-//! - the extension pass strips its syntax before the core pass runs;
+//! - metadata mode strips the parsed receiver attributes, codegen mode is
+//!   covered by the codegen snapshot tests;
 //! - a distribution *without* the extension pass only warns about the `#[app]`
 //!   extensions (it never errors on them).
 
@@ -43,30 +48,49 @@ fn manifest_for(args: TokenStream, app_mod: syn::ItemMod) -> (tempfile::TempDir,
     )
 }
 
+/// Runs the pass in metadata mode and returns the emitted module as tokens.
+fn metadata_module(args: TokenStream, app_mod: syn::ItemMod) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_, module) = XbinPass::with_manifest(dir.path(), "app", "app")
+        .run_pass(args, app_mod)
+        .expect("metadata pass succeeds");
+    module.to_token_stream().to_string()
+}
+
+/// The arguments of a two-core application with the global mapping `[4, 5]`
+/// and the external core `7`.
+fn mapped_args() -> TokenStream {
+    quote!(
+        device = mypac,
+        cores = 2,
+        core_ids = [4, 5],
+        external_cores = [7]
+    )
+}
+
 #[test]
 fn receiver_syntax_parses_all_keys_and_defaults() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_task(core = 1, priority = 3, capacity = 2, spawned_by = [0, 2])]
+            struct Msg;
+
+            #[sw_task(core = 1, priority = 3, capacity = 2, spawn_by = 7)]
             struct Full;
 
-            impl CrossBinTask for Full {
-                type Input = ipc_types::FullReq;
-                fn exec(&mut self, _input: Self::Input) {}
+            impl RticSwTask for Full {
+                type SpawnInput = ipc_types::FullReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
             }
 
-            #[cross_bin_task]
+            #[sw_task(spawn_by = 7)]
             struct Bare;
 
-            impl CrossBinTask for Bare {
-                type Input = ipc_types::BareMsg;
+            impl RticSwTask for Bare {
+                type SpawnInput = ipc_types::BareMsg;
             }
         }
     };
-    let (_dir, manifest) = manifest_for(
-        quote!(device = mypac, cores = 2, core_ids = [4, 5]),
-        app_mod,
-    );
+    let (_dir, manifest) = manifest_for(mapped_args(), app_mod);
 
     assert_eq!(
         manifest
@@ -82,198 +106,192 @@ fn receiver_syntax_parses_all_keys_and_defaults() {
     assert_eq!(bare.priority, 1, "priority defaults to 1");
     assert_eq!(bare.capacity, 1, "capacity defaults to 1");
     assert_eq!(bare.core, 0, "receiver `core` defaults to local core 0");
-    assert_eq!(bare.spawned_by, None);
+    assert_eq!(bare.spawn_by, 7, "the global producer id is recorded");
     assert_eq!(bare.input_type, "ipc_types::BareMsg");
 
     let full = &manifest.receivers[1];
     assert_eq!(full.priority, 3);
     assert_eq!(full.capacity, 2);
     assert_eq!(full.core, 1, "receiver `core` is a local index");
-    assert_eq!(full.spawned_by.as_deref(), Some(&[0, 2][..]));
+    assert_eq!(full.spawn_by, 7);
     assert_eq!(full.input_type_name(), "FullReq");
 }
 
 #[test]
-fn sender_syntax_parses_all_keys_and_defaults() {
+fn identity_default_keeps_the_native_local_spawn_by() {
+    // Without `external_cores` the native local-index reading applies: the
+    // task is not a cross receiver and `spawn_by` stays local. The identity
+    // `core_ids` default keeps existing syntax unchanged.
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-            struct WithInput;
+            #[sw_task(core = 0, spawn_by = 1)]
+            struct Local;
 
-            impl CrossBinSpawn for WithInput {
-                type Input = ipc_types::EncryptReq;
+            impl RticSwTask for Local {
+                type SpawnInput = u32;
             }
-
-            #[cross_bin_spawn(core = 2)]
-            struct WithoutInput;
         }
     };
-    let (_dir, manifest) = manifest_for(quote!(device = mypac, cores = 1, core_ids = [0]), app_mod);
+    let args = quote!(device = mypac, cores = 2);
+    let (_dir, manifest) = manifest_for(args.clone(), app_mod.clone());
+    assert_eq!(
+        manifest.core_ids.as_deref(),
+        Some(&[0, 1][..]),
+        "the identity mapping is recorded"
+    );
+    assert!(manifest.receivers.is_empty(), "no cross receiver");
 
-    assert_eq!(manifest.senders.len(), 2);
-    let with_input = &manifest.senders[0];
-    assert_eq!(with_input.name, "WithInput");
-    assert_eq!(with_input.core, 1, "sender `core` is the global target id");
-    assert_eq!(with_input.priority, 3);
-    assert_eq!(with_input.capacity, 2);
-    assert_eq!(with_input.input_type_name(), Some("EncryptReq"));
-
-    let without_input = &manifest.senders[1];
-    assert_eq!(without_input.name, "WithoutInput");
-    assert_eq!(without_input.core, 2);
-    assert_eq!(without_input.priority, 1, "priority defaults to 1");
-    assert_eq!(without_input.capacity, 1, "capacity defaults to 1");
-    assert_eq!(without_input.input_type, None, "sender input is optional");
+    let (_, out) = run(args, app_mod).expect("pass succeeds");
+    let tokens = out.to_token_stream().to_string();
+    assert!(tokens.contains("spawn_by = 1"), "kept local: {tokens}");
 }
 
 #[test]
-fn extension_syntax_is_stripped_before_the_next_pass() {
+fn local_spawn_by_stays_local_with_an_identity_mapping_and_external_cores() {
+    // An application that declares `external_cores` resolves `spawn_by` in
+    // the global namespace; with the identity mapping, global ids equal
+    // local indexes, so `spawn_by = 1` stays 1.
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[derive(Debug)]
-            #[cross_bin_spawn(core = 1, priority = 3)]
-            struct EncryptTask;
+            #[sw_task(core = 0, spawn_by = 1)]
+            struct Local;
+
+            impl RticSwTask for Local {
+                type SpawnInput = u32;
+            }
         }
     };
-    let (args, out) = run(
-        quote!(
-            device = mypac,
-            cores = 1,
-            core_ids = [0],
-            external_cores = [1]
-        ),
-        app_mod,
-    )
-    .expect("pass succeeds");
-
-    let args = args.to_string();
-    assert!(args.contains("device"), "{args}");
-    assert!(args.contains("cores"), "{args}");
+    let args = quote!(device = mypac, cores = 2, external_cores = [7]);
+    let (_dir, manifest) = manifest_for(args.clone(), app_mod.clone());
     assert!(
-        args.contains("core_ids"),
-        "`core_ids` is left for the core pass (M5-T3): {args}"
+        manifest.receivers.is_empty(),
+        "in-app, not a cross receiver"
     );
-    assert!(!args.contains("external_cores"), "consumed: {args}");
 
-    let out = out.to_token_stream().to_string();
-    assert!(!out.contains("cross_bin_spawn"), "stripped: {out}");
-    assert!(
-        out.contains("derive"),
-        "unrelated attributes survive: {out}"
-    );
-    assert!(out.contains("struct EncryptTask"), "{out}");
+    let (_, out) = run(args, app_mod).expect("pass succeeds");
+    let tokens = out.to_token_stream().to_string();
+    assert!(tokens.contains("spawn_by = 1"), "kept local: {tokens}");
 }
 
 #[test]
-fn unknown_app_arguments_are_left_for_other_distributions() {
+fn in_app_global_spawn_by_is_mapped_back_to_the_local_index() {
+    // `spawn_by = 5` is one of this application's own `core_ids`: an in-app
+    // cross-core task, mapped to local index 1 for the software pass.
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_spawn(core = 1)]
-            struct EncryptTask;
+            #[sw_task(core = 0, spawn_by = 5)]
+            struct InApp;
+
+            impl RticSwTask for InApp {
+                type SpawnInput = u32;
+            }
         }
     };
-    let (args, _) =
-        run(quote!(device = mypac, cores = 1, custom_key = 7), app_mod).expect("pass succeeds");
+    let (_dir, manifest) = manifest_for(mapped_args(), app_mod.clone());
+    assert!(manifest.receivers.is_empty(), "not a cross receiver");
+
+    let (_, out) = run(mapped_args(), app_mod).expect("pass succeeds");
+    let tokens = out.to_token_stream().to_string();
     assert!(
-        args.to_string().contains("custom_key"),
-        "arguments owned by other distributions are not consumed: {args}"
+        tokens.contains("spawn_by = 1"),
+        "the global id is mapped to the local index: {tokens}"
     );
+    assert!(!tokens.contains("spawn_by = 5"), "{tokens}");
 }
 
 #[test]
-fn task_attributes_only_apply_to_structs() {
-    let function: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[cross_bin_task(priority = 3)]
-            fn not_a_struct() {}
-        }
-    };
-    let error = rejected(quote!(device = mypac), function);
-    assert!(error.contains("must be applied to a struct"), "{error}");
-
-    let enumeration: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[cross_bin_spawn(core = 1)]
-            enum NotAStruct {}
-        }
-    };
-    let error = rejected(quote!(device = mypac), enumeration);
-    assert!(error.contains("must be applied to a struct"), "{error}");
-}
-
-#[test]
-fn both_task_attributes_on_one_item_are_rejected() {
+fn external_spawn_by_classifies_and_strips_the_receiver() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_task(priority = 3)]
-            #[cross_bin_spawn(core = 1)]
-            struct EncryptTask;
+            #[sw_task(priority = 3, spawn_by = 7)]
+            struct Cross;
+
+            impl RticSwTask for Cross {
+                type SpawnInput = ipc_types::Msg;
+            }
         }
     };
-    let error = rejected(quote!(device = mypac), app_mod);
-    assert!(
-        error.contains("at most one of `#[cross_bin_task]` and `#[cross_bin_spawn]`"),
-        "{error}"
-    );
+
+    // The manifest records the global producer.
+    let (_dir, manifest) = manifest_for(mapped_args(), app_mod.clone());
+    assert_eq!(manifest.receivers.len(), 1);
+    assert_eq!(manifest.receivers[0].spawn_by, 7);
+    assert_eq!(manifest.types, ["ipc_types::Msg"]);
+
+    // The emitted module strips `spawn_by` so the software pass never sees an
+    // external id.
+    let (_, out) = run(mapped_args(), app_mod).expect("pass succeeds");
+    let tokens = out.to_token_stream().to_string();
+    assert!(!tokens.contains("spawn_by"), "{tokens}");
+    assert!(tokens.contains("impl RticSwTask for Cross"), "{tokens}");
 }
 
 #[test]
-fn unknown_task_keys_are_rejected_with_the_supported_list() {
-    let receiver: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[cross_bin_task(priority = 3, bogus = 1)]
-            struct EncryptTask;
-        }
-    };
-    let error = rejected(quote!(device = mypac), receiver);
-    assert!(
-        error.contains(
-            "unknown argument `bogus`; expected one of: priority, capacity, spawned_by, core"
-        ),
-        "{error}"
-    );
-
-    let sender: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[cross_bin_spawn(core = 1, bogus = 1)]
-            struct EncryptTask;
-        }
-    };
-    let error = rejected(quote!(device = mypac), sender);
-    assert!(
-        error.contains("unknown argument `bogus`; expected one of: core, priority, capacity"),
-        "{error}"
-    );
-}
-
-#[test]
-fn duplicate_task_keys_are_rejected() {
+fn metadata_strips_the_cross_receiver_attributes() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_spawn(core = 1, core = 2)]
-            struct EncryptTask;
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 7)]
+            struct Cross;
+
+            impl RticSwTask for Cross {
+                type SpawnInput = ipc_types::Msg;
+            }
         }
     };
-    let error = rejected(quote!(device = mypac), app_mod);
+    let tokens = metadata_module(mapped_args(), app_mod);
+
+    assert!(!tokens.contains("sw_task"), "{tokens}");
+    assert!(!tokens.contains("spawn_by"), "{tokens}");
     assert!(
-        error.contains("duplicate argument `core` in `cross_bin_spawn`"),
-        "{error}"
+        tokens.contains("struct Cross ;"),
+        "the struct itself stays: {tokens}"
+    );
+    assert!(
+        tokens.contains("impl RticSwTask for Cross"),
+        "the user impl stays: {tokens}"
     );
 }
 
 #[test]
-fn multi_segment_task_keys_are_rejected() {
+fn unknown_spawn_by_core_is_rejected() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_spawn(core = 1, foo::bar = 2)]
-            struct EncryptTask;
+            #[sw_task(spawn_by = 9)]
+            struct Cross;
+
+            impl RticSwTask for Cross {
+                type SpawnInput = ipc_types::Msg;
+            }
         }
     };
-    let error = rejected(quote!(device = mypac), app_mod);
+    let error = rejected(mapped_args(), app_mod);
     assert!(
-        error.contains("`cross_bin_spawn` arguments must use single-segment keys"),
+        error.contains("receiver `Cross` declares `spawn_by = 9`"),
         "{error}"
     );
+    assert!(error.contains("not a known core"), "{error}");
+    assert!(error.contains("core_ids"), "{error}");
+    assert!(error.contains("external_cores"), "{error}");
+}
+
+#[test]
+fn spawn_by_arrays_are_rejected() {
+    let app_mod: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[sw_task(spawn_by = [7, 9])]
+            struct Cross;
+
+            impl RticSwTask for Cross {
+                type SpawnInput = ipc_types::Msg;
+            }
+        }
+    };
+    let error = rejected(mapped_args(), app_mod);
+    assert!(
+        error.contains("`spawn_by` must be a single core id, not an array"),
+        "{error}"
+    );
+    assert!(error.contains("one producer core"), "{error}");
 }
 
 #[test]
@@ -282,8 +300,12 @@ fn malformed_task_values_are_rejected() {
         (
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(priority = "high")]
+                    #[sw_task(priority = "high", spawn_by = 7)]
                     struct Task;
+
+                    impl RticSwTask for Task {
+                        type SpawnInput = ipc_types::Msg;
+                    }
                 }
             },
             "`priority` must be an integer literal",
@@ -291,10 +313,24 @@ fn malformed_task_values_are_rejected() {
         (
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(capacity = 0)]
+                    #[sw_task(priority = 0, spawn_by = 7)]
                     struct Task;
-                    impl CrossBinTask for Task {
-                        type Input = ipc_types::Msg;
+
+                    impl RticSwTask for Task {
+                        type SpawnInput = ipc_types::Msg;
+                    }
+                }
+            },
+            "requires `priority >= 1`",
+        ),
+        (
+            syn::parse_quote! {
+                mod app {
+                    #[sw_task(capacity = 0, spawn_by = 7)]
+                    struct Task;
+
+                    impl RticSwTask for Task {
+                        type SpawnInput = ipc_types::Msg;
                     }
                 }
             },
@@ -303,64 +339,29 @@ fn malformed_task_values_are_rejected() {
         (
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(spawned_by = 3)]
+                    #[sw_task(core = 2, spawn_by = 7)]
                     struct Task;
-                    impl CrossBinTask for Task {
-                        type Input = ipc_types::Msg;
+
+                    impl RticSwTask for Task {
+                        type SpawnInput = ipc_types::Msg;
                     }
                 }
             },
-            "`spawned_by` must be an array of integers",
+            "declares local `core = 2`, but the application has only 2 local core(s)",
         ),
         (
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_task(priority = 3)]
+                    #[sw_task(priority = 3, spawn_by = 7)]
                     struct Task;
                 }
             },
-            "must have an `impl CrossBinTask for Task` block declaring `type Input = …;`",
+            "must have an `impl RticSwTask for Task` block declaring `type SpawnInput = …;`",
         ),
         (
             syn::parse_quote! {
                 mod app {
-                    #[cross_bin_spawn(priority = 3)]
-                    struct Task;
-                }
-            },
-            "sender stubs must declare the global target core id",
-        ),
-        (
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_spawn]
-                    struct Task;
-                }
-            },
-            "sender stubs must declare the global target core id",
-        ),
-        (
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_spawn(core = "one")]
-                    struct Task;
-                }
-            },
-            "`core` must be an integer literal",
-        ),
-        (
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_spawn(core = 1, capacity = 0)]
-                    struct Task;
-                }
-            },
-            "The `capacity` argument must be at least 1.",
-        ),
-        (
-            syn::parse_quote! {
-                mod app {
-                    #[cross_bin_task = "receiver"]
+                    #[sw_task = "receiver"]
                     struct Task;
                 }
             },
@@ -369,7 +370,7 @@ fn malformed_task_values_are_rejected() {
     ];
 
     for (app_mod, expected) in cases {
-        let error = rejected(quote!(device = mypac), app_mod);
+        let error = rejected(mapped_args(), app_mod);
         assert!(
             error.contains(expected),
             "expected `{expected}` in `{error}`"
@@ -378,43 +379,80 @@ fn malformed_task_values_are_rejected() {
 }
 
 #[test]
-fn receiver_core_must_be_a_local_core_index() {
+fn unknown_task_keys_are_rejected_with_the_supported_list() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[cross_bin_task(core = 2, priority = 3)]
-            struct EncryptTask;
+            #[sw_task(priority = 3, spawn_by = 7, bogus = 1)]
+            struct Task;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
+            impl RticSwTask for Task {
+                type SpawnInput = ipc_types::Msg;
             }
         }
     };
-    let error = rejected(
-        quote!(device = mypac, cores = 2, core_ids = [4, 5]),
-        app_mod,
-    );
+    let error = rejected(mapped_args(), app_mod);
     assert!(
-        error.contains("declares local `core = 2`, but the application has only 2 local core(s)"),
+        error.contains(
+            "unknown argument `bogus`; expected one of: priority, capacity, core, spawn_by, shared"
+        ),
         "{error}"
     );
 }
 
 #[test]
-fn duplicate_input_impls_are_rejected() {
+fn duplicate_task_keys_are_rejected() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
-            }
+            #[sw_task(spawn_by = 7, spawn_by = 9)]
+            struct Task;
 
-            impl CrossBinTask for EncryptTask {
-                type Input = ipc_types::EncryptReq;
+            impl RticSwTask for Task {
+                type SpawnInput = ipc_types::Msg;
             }
         }
     };
-    let error = rejected(quote!(device = mypac), app_mod);
+    let error = rejected(mapped_args(), app_mod);
     assert!(
-        error.contains("duplicate `impl CrossBinTask` for `EncryptTask`"),
+        error.contains("duplicate argument `spawn_by` in `sw_task`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn multi_segment_task_keys_are_rejected() {
+    let app_mod: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[sw_task(spawn_by = 7, foo::bar = 2)]
+            struct Task;
+
+            impl RticSwTask for Task {
+                type SpawnInput = ipc_types::Msg;
+            }
+        }
+    };
+    let error = rejected(mapped_args(), app_mod);
+    assert!(
+        error.contains("`sw_task` arguments must use single-segment keys"),
+        "{error}"
+    );
+}
+
+#[test]
+fn duplicate_spawn_input_impls_are_rejected() {
+    let app_mod: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+            }
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+            }
+        }
+    };
+    let error = rejected(mapped_args(), app_mod);
+    assert!(
+        error.contains("duplicate `impl RticSwTask` for `EncryptTask`"),
         "{error}"
     );
 }
@@ -556,4 +594,21 @@ fn other_distributions_only_warn_about_app_extensions() {
         .to_string();
     assert!(!code.contains("compile_error"), "{code}");
     assert!(!code.contains("rticx_warn_unknown_app"), "{code}");
+}
+
+#[test]
+fn shared_is_preserved_for_the_software_pass() {
+    let app_mod: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[sw_task(priority = 3, spawn_by = 7, shared = [counter])]
+            struct Cross;
+
+            impl RticSwTask for Cross {
+                type SpawnInput = ipc_types::Msg;
+            }
+        }
+    };
+    let (_, out) = run(mapped_args(), app_mod).expect("pass succeeds");
+    let tokens = out.to_token_stream().to_string();
+    assert!(tokens.contains("shared = [counter]"), "{tokens}");
 }

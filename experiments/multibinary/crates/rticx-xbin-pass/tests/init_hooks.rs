@@ -68,7 +68,7 @@ const SYSTEM_JSON: &str = r#"{
       "id": 1,
       "name": "DecryptTask",
       "receiver_core": 0,
-      "spawner_cores": [1],
+      "spawner_core": 1,
       "priority": 4,
       "capacity": 1,
       "input_type": "EncryptReq",
@@ -78,7 +78,7 @@ const SYSTEM_JSON: &str = r#"{
       "id": 2,
       "name": "EncryptTask",
       "receiver_core": 1,
-      "spawner_cores": [0],
+      "spawner_core": 0,
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
@@ -129,8 +129,9 @@ impl XbinPassBackend for TestBackend {
     }
 }
 
-/// The owner fixture application: one sender stub plus the mock backend its
-/// generated code calls, and `pub` wrappers over the generated private hooks.
+/// The owner fixture application: it declares nothing (the pass generates the
+/// `EncryptTask` stub from the view) plus the mock backend its generated code
+/// calls and `pub` wrappers over the generated private hooks.
 fn owner_app() -> syn::ItemMod {
     syn::parse_quote! {
         pub mod app {
@@ -158,9 +159,6 @@ fn owner_app() -> syn::ItemMod {
             fn __rticx_interrupt_free<R>(f: impl FnOnce() -> R) -> R {
                 f()
             }
-
-            #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-            pub struct EncryptTask;
 
             pub fn test_system() -> &'static MockSystem {
                 __rticx_xbin_system()

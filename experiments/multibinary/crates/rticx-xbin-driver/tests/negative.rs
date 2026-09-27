@@ -206,41 +206,32 @@ fn plain_build_rejects_a_missing_or_stale_sync() {
 const ENCRYPT_IDL: &str = "schema = 1\n\n\
      [message.EncryptReq]\nfields = { addr = \"u32\", len = \"u32\", key = \"u32\" }\n";
 
-/// `app-m7` (global core 0) sends `Alpha` to global core 1.
-const SENDER_ALPHA: &str = r#"
+/// `app-m7` (global core 0) produces `Alpha` on global core 1.
+const PRODUCER_ALPHA: &str = r#"
 use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [0], external_cores = [1])]
-mod app {
-    #[cross_bin_spawn(core = 1, priority = 3, capacity = 1)]
-    struct Alpha;
-}
+mod app {}
 
 fn main() {}
 "#;
 
-/// `app-m5` (global core 2) sends `Beta` to global core 1.
-const SENDER_BETA: &str = r#"
+/// `app-m5` (global core 2) produces `Beta` on global core 1.
+const PRODUCER_BETA: &str = r#"
 use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [2], external_cores = [1])]
-mod app {
-    #[cross_bin_spawn(core = 1, priority = 3, capacity = 1)]
-    struct Beta;
-}
+mod app {}
 
 fn main() {}
 "#;
 
-/// `app-m7` sends `EncryptTask` to global core 1.
-const SENDER_ENCRYPT: &str = r#"
+/// `app-m7` produces `EncryptTask` on global core 1.
+const PRODUCER_ENCRYPT: &str = r#"
 use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [0], external_cores = [1])]
-mod app {
-    #[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-    struct EncryptTask;
-}
+mod app {}
 
 fn main() {}
 "#;
@@ -251,27 +242,27 @@ use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [1], external_cores = [0, 2])]
 mod app {
-    trait CrossBinTask {
-        type Input;
-        fn exec(&mut self, input: Self::Input);
+    trait RticSwTask {
+        type SpawnInput;
+        fn exec(&mut self, input: Self::SpawnInput);
     }
 
     struct EncryptReq;
 
-    #[cross_bin_task(priority = 3, capacity = 1, spawned_by = [0])]
+    #[sw_task(priority = 3, capacity = 1, spawn_by = 0)]
     struct Alpha;
 
-    impl CrossBinTask for Alpha {
-        type Input = EncryptReq;
-        fn exec(&mut self, _input: Self::Input) {}
+    impl RticSwTask for Alpha {
+        type SpawnInput = EncryptReq;
+        fn exec(&mut self, _input: Self::SpawnInput) {}
     }
 
-    #[cross_bin_task(priority = 3, capacity = 1, spawned_by = [2])]
+    #[sw_task(priority = 3, capacity = 1, spawn_by = 2)]
     struct Beta;
 
-    impl CrossBinTask for Beta {
-        type Input = EncryptReq;
-        fn exec(&mut self, _input: Self::Input) {}
+    impl RticSwTask for Beta {
+        type SpawnInput = EncryptReq;
+        fn exec(&mut self, _input: Self::SpawnInput) {}
     }
 }
 
@@ -284,19 +275,19 @@ use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [1], external_cores = [0])]
 mod app {
-    trait CrossBinTask {
-        type Input;
-        fn exec(&mut self, input: Self::Input);
+    trait RticSwTask {
+        type SpawnInput;
+        fn exec(&mut self, input: Self::SpawnInput);
     }
 
     struct MissingRequest;
 
-    #[cross_bin_task(priority = 3, capacity = 1, spawned_by = [0])]
+    #[sw_task(priority = 3, capacity = 1, spawn_by = 0)]
     struct EncryptTask;
 
-    impl CrossBinTask for EncryptTask {
-        type Input = MissingRequest;
-        fn exec(&mut self, _input: Self::Input) {}
+    impl RticSwTask for EncryptTask {
+        type SpawnInput = MissingRequest;
+        fn exec(&mut self, _input: Self::SpawnInput) {}
     }
 }
 
@@ -309,19 +300,19 @@ use metadata_macro::app;
 
 #[app(device = fixture, cores = 1, core_ids = [1], external_cores = [0])]
 mod app {
-    trait CrossBinTask {
-        type Input;
-        fn exec(&mut self, input: Self::Input);
+    trait RticSwTask {
+        type SpawnInput;
+        fn exec(&mut self, input: Self::SpawnInput);
     }
 
     struct EncryptReq;
 
-    #[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
+    #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
     struct EncryptTask;
 
-    impl CrossBinTask for EncryptTask {
-        type Input = EncryptReq;
-        fn exec(&mut self, _input: Self::Input) {}
+    impl RticSwTask for EncryptTask {
+        type SpawnInput = EncryptReq;
+        fn exec(&mut self, _input: Self::SpawnInput) {}
     }
 }
 
@@ -387,9 +378,9 @@ fn sync_rejects_a_priority_conflict_between_sources() {
         config,
         ENCRYPT_IDL,
         &[
-            ("app-m7", "m7", SENDER_ALPHA),
+            ("app-m7", "m7", PRODUCER_ALPHA),
             ("app-m4", "m4", RECEIVER_ALPHA_BETA),
-            ("app-m5", "m5", SENDER_BETA),
+            ("app-m5", "m5", PRODUCER_BETA),
         ],
     );
 
@@ -418,7 +409,7 @@ fn sync_rejects_an_unknown_input_type() {
         config,
         ENCRYPT_IDL,
         &[
-            ("app-m7", "m7", SENDER_ENCRYPT),
+            ("app-m7", "m7", PRODUCER_ENCRYPT),
             ("app-m4", "m4", RECEIVER_UNKNOWN_TYPE),
         ],
     );
@@ -449,7 +440,7 @@ fn sync_rejects_region_overflow() {
         config,
         ENCRYPT_IDL,
         &[
-            ("app-m7", "m7", SENDER_ENCRYPT),
+            ("app-m7", "m7", PRODUCER_ENCRYPT),
             ("app-m4", "m4", RECEIVER_ENCRYPT),
         ],
     );

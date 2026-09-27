@@ -60,6 +60,11 @@ fn args() -> TokenStream {
 
 /// A two-core application with a local software task per core and one
 /// cross-core software task spawned from local core 0.
+///
+/// The application declares `external_cores`, so `spawn_by = 1` names the
+/// **global** producer core (local core 0 maps to global 1 through
+/// `core_ids`); the pass maps it back to the local index for the software
+/// pass, whose runtime guard then checks global 1.
 fn app() -> syn::ItemMod {
     syn::parse_quote! {
         mod app {
@@ -81,7 +86,7 @@ fn app() -> syn::ItemMod {
                 fn exec(&mut self, _input: u32) {}
             }
 
-            #[sw_task(priority = 3, core = 1, spawn_by = 0)]
+            #[sw_task(priority = 3, core = 1, spawn_by = 1)]
             struct Cross;
 
             impl RticSwTask for Cross {

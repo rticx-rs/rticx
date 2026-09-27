@@ -12,14 +12,13 @@
 //!   manifest; `cores` and `core_ids` agree with `rticx.toml` (which is
 //!   authoritative); every referenced external core exists and is owned by
 //!   another binary;
-//! - **sender/receiver match**: task names are unique, every sender has a
-//!   receiver (and vice versa), target core, priority, capacity and input type
-//!   agree, and `spawned_by` matches the actual spawners;
+//! - **receiver topology**: task names are unique, each receiver's local
+//!   `core` is in range, its single `spawn_by` names an existing producer in
+//!   another application, both applications list the peer's core in
+//!   `external_cores`, and the input type exists in `ipc-types.toml`;
 //! - **priority disjointness**: on one target core, tasks from different
 //!   source cores never share a priority line (local tasks are checked by the
 //!   core pass in phase 2);
-//! - **type existence**: every declared input type exists in
-//!   `ipc-types.toml`;
 //! - **region fit**: every used `(source -> target)` direction has a region
 //!   and the per-task FIFOs fit it, using the canonical [`crate::fifo`] image.
 //!
@@ -30,9 +29,9 @@
 //! ([`MergeError::RegionOverflow`]). The `system.json` emit of M1-T6
 //! ([`crate::system_view`]) then copies the resolved offsets.
 //!
-//! v1 supports exactly one producer core per task; senders shared by several
-//! cores (or declared by several applications) are rejected with
-//! [`MergeError::MultipleSpawners`] until M6-T1.
+//! v1 supports exactly one producer core per task, so the producer of every
+//! task is its receiver's singular `spawn_by` (M5.5); multi-producer tasks
+//! are rejected by the pass that parses the task attribute.
 //!
 //! [`merge_project`] is a pure function of its inputs and emits tasks sorted
 //! by name with deterministic ids, so identical inputs always produce an
@@ -284,8 +283,10 @@ pub fn merge_project(
     struct Receiver<'a> {
         manifest: &'a AppManifest,
         decl: &'a ReceiverDecl,
+        /// Global id of the core that executes the task.
         core: u32,
-        spawner: Option<u32>,
+        /// Global id of the single producer core (`spawn_by`).
+        spawner: u32,
     }
 
     let mut receivers: Vec<Receiver<'_>> = Vec::new();
@@ -311,160 +312,46 @@ pub fn merge_project(
                     cores: application.core_ids().len() as u32,
                 })?;
             check_input_type(&manifest.package, &decl.name, &decl.input_type, idl)?;
-            if let Some(allowed) = &decl.spawned_by {
-                for &global in allowed {
-                    match owner.get(&global) {
-                        None => {
-                            return Err(MergeError::UnknownCore {
-                                package: manifest.package.clone(),
-                                core: global,
-                                context: format!("`spawned_by` of receiver `{}`", decl.name),
-                            });
-                        }
-                        Some((app, _)) if *app == manifest.package => {
-                            return Err(MergeError::OwnSpawnerCore {
-                                package: manifest.package.clone(),
-                                task: decl.name.clone(),
-                                core: global,
-                            });
-                        }
-                        Some(_) => {}
-                    }
-                }
+
+            // The pass resolves `spawn_by` in the global namespace, so the
+            // manifest always carries a global core id of another binary.
+            let Some((producer_app, _)) = owner.get(&decl.spawn_by) else {
+                return Err(MergeError::UnknownCore {
+                    package: manifest.package.clone(),
+                    core: decl.spawn_by,
+                    context: format!("`spawn_by` of receiver `{}`", decl.name),
+                });
+            };
+            if *producer_app == manifest.package {
+                return Err(MergeError::OwnSpawnerCore {
+                    package: manifest.package.clone(),
+                    task: decl.name.clone(),
+                    core: decl.spawn_by,
+                });
             }
+            if !manifest.external_cores.contains(&decl.spawn_by) {
+                return Err(MergeError::SpawnerCoreNotVisible {
+                    package: manifest.package.clone(),
+                    task: decl.name.clone(),
+                    core: decl.spawn_by,
+                });
+            }
+            let producer = manifest_of[producer_app];
+            if !producer.external_cores.contains(&core) {
+                return Err(MergeError::TargetCoreNotVisible {
+                    package: producer.package.clone(),
+                    task: decl.name.clone(),
+                    core,
+                });
+            }
+
             receiver_index.insert(decl.name.as_str(), receivers.len());
             receivers.push(Receiver {
                 manifest,
                 decl,
                 core,
-                spawner: None,
+                spawner: decl.spawn_by,
             });
-        }
-    }
-
-    // -- senders -------------------------------------------------------------
-    for application in applications {
-        let manifest = manifest_of[application.package()];
-        for sender in &manifest.senders {
-            if let Some(input) = &sender.input_type {
-                check_input_type(&manifest.package, &sender.name, input, idl)?;
-            }
-            let Some((target_owner, _)) = owner.get(&sender.core) else {
-                return Err(MergeError::UnknownCore {
-                    package: manifest.package.clone(),
-                    core: sender.core,
-                    context: format!("sender `{}`'s target", sender.name),
-                });
-            };
-            if *target_owner == manifest.package {
-                return Err(MergeError::SelfTarget {
-                    package: manifest.package.clone(),
-                    task: sender.name.clone(),
-                    core: sender.core,
-                });
-            }
-            if !manifest.external_cores.contains(&sender.core) {
-                return Err(MergeError::TargetCoreNotVisible {
-                    package: manifest.package.clone(),
-                    task: sender.name.clone(),
-                    core: sender.core,
-                });
-            }
-            let Some(&index) = receiver_index.get(sender.name.as_str()) else {
-                return Err(MergeError::SenderWithoutReceiver {
-                    package: manifest.package.clone(),
-                    task: sender.name.clone(),
-                });
-            };
-            let receiver = &mut receivers[index];
-            if sender.core != receiver.core {
-                return Err(MergeError::TargetCoreMismatch {
-                    task: sender.name.clone(),
-                    package: manifest.package.clone(),
-                    expected: receiver.core,
-                    found: sender.core,
-                });
-            }
-            let spawner = match application.core_ids() {
-                [only] => *only,
-                many => {
-                    return Err(MergeError::MultipleSpawners {
-                        task: sender.name.clone(),
-                        spawners: many.to_vec(),
-                    });
-                }
-            };
-            if !receiver.manifest.external_cores.contains(&spawner) {
-                return Err(MergeError::SpawnerCoreNotVisible {
-                    package: receiver.manifest.package.clone(),
-                    task: receiver.decl.name.clone(),
-                    core: spawner,
-                });
-            }
-            if let Some(previous) = receiver.spawner {
-                if previous != spawner {
-                    return Err(MergeError::MultipleSpawners {
-                        task: sender.name.clone(),
-                        spawners: vec![previous, spawner],
-                    });
-                }
-            } else {
-                receiver.spawner = Some(spawner);
-            }
-            if sender.priority != receiver.decl.priority {
-                return Err(MergeError::PriorityMismatch {
-                    task: sender.name.clone(),
-                    package: manifest.package.clone(),
-                    receiver: receiver.decl.priority,
-                    sender: sender.priority,
-                });
-            }
-            if sender.capacity != receiver.decl.capacity {
-                return Err(MergeError::CapacityMismatch {
-                    task: sender.name.clone(),
-                    package: manifest.package.clone(),
-                    receiver: receiver.decl.capacity,
-                    sender: sender.capacity,
-                });
-            }
-            if let Some(input) = &sender.input_type
-                && simple_type_name(input) != simple_type_name(&receiver.decl.input_type)
-            {
-                return Err(MergeError::InputTypeMismatch {
-                    task: sender.name.clone(),
-                    package: manifest.package.clone(),
-                    receiver: receiver.decl.input_type.clone(),
-                    sender: input.clone(),
-                });
-            }
-            if let Some(allowed) = &receiver.decl.spawned_by
-                && !allowed.contains(&spawner)
-            {
-                return Err(MergeError::SpawnerNotAllowed {
-                    task: receiver.decl.name.clone(),
-                    producer: spawner,
-                    allowed: allowed.clone(),
-                });
-            }
-        }
-    }
-
-    // -- sender/receiver completeness ----------------------------------------
-    for receiver in &receivers {
-        if receiver.spawner.is_none() {
-            return Err(MergeError::ReceiverWithoutSender {
-                package: receiver.manifest.package.clone(),
-                task: receiver.decl.name.clone(),
-            });
-        }
-        if let Some(allowed) = &receiver.decl.spawned_by {
-            let source = receiver.spawner.expect("checked above");
-            if let Some(&phantom) = allowed.iter().find(|&&core| core != source) {
-                return Err(MergeError::PhantomSpawner {
-                    task: receiver.decl.name.clone(),
-                    core: phantom,
-                });
-            }
         }
     }
 
@@ -482,7 +369,7 @@ pub fn merge_project(
             id: 0,
             name: receiver.decl.name.clone(),
             receiver_core: receiver.core,
-            spawner_core: receiver.spawner.expect("checked above"),
+            spawner_core: receiver.spawner,
             priority: receiver.decl.priority,
             capacity: receiver.decl.capacity,
             input_type,

@@ -180,12 +180,12 @@ impl SystemView {
         for task in &self.tasks {
             let _ = writeln!(
                 out,
-                "task id={} name={} receiver_core={} spawner_cores={:?} priority={} \
+                "task id={} name={} receiver_core={} spawner_core={} priority={} \
                  capacity={} input_type={} fifo={{source={} target={} offset={} elem_size={} depth={}}}",
                 task.id,
                 task.name,
                 task.receiver_core,
-                task.spawner_cores,
+                task.spawner_core,
                 task.priority,
                 task.capacity,
                 task.input_type,
@@ -302,12 +302,13 @@ pub struct VariantEntry {
 pub struct TaskEntry {
     /// Deterministic task id, unique across the project.
     pub id: u32,
-    /// Task name (shared by the receiver and every sender).
+    /// Task name (shared by the receiver and its generated producer stub).
     pub name: String,
     /// Global id of the core that executes the task.
     pub receiver_core: u32,
-    /// Global ids of the cores that spawn the task, sorted.
-    pub spawner_cores: Vec<u32>,
+    /// Global id of the single core that spawns the task (v1: exactly one
+    /// producer per task).
+    pub spawner_core: u32,
     /// Priority line on the receiver core.
     pub priority: u16,
     /// Number of pending inputs the FIFO can hold.

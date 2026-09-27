@@ -85,7 +85,7 @@ fn sample_view() -> SystemView {
         id: 1,
         name: "EncryptTask".to_string(),
         receiver_core: 1,
-        spawner_cores: vec![0],
+        spawner_core: 0,
         priority: 3,
         capacity: 2,
         input_type: "EncryptReq".to_string(),

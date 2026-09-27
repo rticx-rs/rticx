@@ -15,18 +15,19 @@ use std::sync::LazyLock;
 pub use rticx_xbin_mock::{MockBackend, MockSystem};
 pub use rticx_xbin_rt as xbin_rt;
 
-/// Receiver-side trait implemented by `#[cross_bin_task]` structs.
+/// Software-task trait implemented by native cross-binary receivers.
 ///
-/// A real distribution provides this trait (or one like it) from its runtime;
-/// the generated receiver `#[task(.., task_trait = CrossBinTask)]` and its
-/// dispatcher enforce the user's implementation. `Self::Input` is the IDL type
-/// travelling through the task's FIFO.
-pub trait CrossBinTask {
+/// A real distribution gets this trait from `rticx-sw-pass` (the `swtasks`
+/// feature); the mock distribution binds no software pass, so it provides the
+/// trait itself. The generated receiver `#[task(.., task_trait = RticSwTask)]`
+/// and its dispatcher enforce the user's implementation. `Self::SpawnInput`
+/// is the IDL type travelling through the task's FIFO.
+pub trait RticSwTask {
     /// Spawn input of the task (a generated `ipc_types` message or enum).
-    type Input;
+    type SpawnInput;
 
     /// Executes one spawn of the task on the receiver core.
-    fn exec(&mut self, input: Self::Input);
+    fn exec(&mut self, input: Self::SpawnInput);
 }
 
 /// The fixture project's IPC region, in process memory.

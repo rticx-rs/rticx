@@ -9,8 +9,8 @@
 //! - [`manifest`]: the per-application `<target>.xbin.json` metadata written
 //!   by the compilation pass in phase 1;
 //! - [`merge`]: merge the manifests into a validated whole-project view
-//!   (sender/receiver match, priority disjointness, type existence, region
-//!   fit, core-id consistency);
+//!   (receiver topology, priority disjointness, type existence, region fit,
+//!   core-id consistency);
 //! - [`system`]: the driver-generated `system.json` system view;
 //! - [`alloc`]: the M1-T6 emission of that view (FIFOs, doorbell lines,
 //!   layout hash, sealed topology hash);
@@ -54,8 +54,8 @@ pub use idl::{
 };
 pub use layout::{EnumLayout, FieldLayout, Layout, Layouts, MessageLayout, VariantLayout};
 pub use manifest::{
-    AppManifest, MANIFEST_FILE_SUFFIX, MANIFEST_SCHEMA_VERSION, ReceiverDecl, SenderDecl,
-    TargetRef, simple_type_name,
+    AppManifest, MANIFEST_FILE_SUFFIX, MANIFEST_SCHEMA_VERSION, ReceiverDecl, TargetRef,
+    simple_type_name,
 };
 pub use merge::{MergedProject, MergedTask, merge_project};
 pub use project::{

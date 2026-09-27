@@ -13,8 +13,10 @@
 //! - the local core count plus the local -> global `core_ids` mapping (the
 //!   identity `0..cores` when the application does not declare the key) and
 //!   the `external_cores` visible to this application (§6.4);
-//! - the `#[cross_bin_task]` receivers and `#[cross_bin_spawn]` senders
-//!   declared by this application (§6.5), including the full input-type paths.
+//! - the native `#[sw_task]` cross-binary receivers declared by this
+//!   application (§6.5), including the full `SpawnInput` paths. There are no
+//!   sender declarations (M5.5): the driver infers each task's single producer
+//!   application from the receivers' `spawn_by`.
 //!
 //! Like `system.json`, the manifest is JSON with a `schema_version` and is
 //! serialized deterministically: declarations are sorted by task name and the
@@ -64,12 +66,9 @@ pub struct AppManifest {
     /// sorted and deduplicated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<String>,
-    /// `#[cross_bin_task]` receivers (this application executes them).
+    /// Native `#[sw_task]` receivers (this application executes them).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub receivers: Vec<ReceiverDecl>,
-    /// `#[cross_bin_spawn]` senders (this application spawns them).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub senders: Vec<SenderDecl>,
 }
 
 impl AppManifest {
@@ -119,8 +118,8 @@ impl TargetRef {
     }
 }
 
-/// A `#[cross_bin_task]` declaration: a task executed by this application on
-/// behalf of remote cores.
+/// A native `#[sw_task]` cross-binary receiver: a task executed by this
+/// application on behalf of a single remote producer core (M5.5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReceiverDecl {
     /// Task name (the declared struct identifier).
@@ -131,10 +130,11 @@ pub struct ReceiverDecl {
     pub capacity: usize,
     /// Local core index the task runs on.
     pub core: u32,
-    /// Global ids of the cores allowed to spawn this task, when declared.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spawned_by: Option<Vec<u32>>,
-    /// Full path of the task input type as written in `impl … { type Input = … }`.
+    /// Global id of the single producer core that spawns this task (the
+    /// receiver's `spawn_by`, resolved in the global namespace).
+    pub spawn_by: u32,
+    /// Full path of the task input type as written in the receiver's
+    /// `impl RticSwTask { type SpawnInput = … }`.
     pub input_type: String,
 }
 
@@ -142,31 +142,6 @@ impl ReceiverDecl {
     /// Returns the IDL name (last path segment) of the input type.
     pub fn input_type_name(&self) -> &str {
         simple_type_name(&self.input_type)
-    }
-}
-
-/// A `#[cross_bin_spawn]` declaration: a stub with which this application
-/// spawns a task running in another binary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SenderDecl {
-    /// Task name; must match the receiver declaration in the target binary.
-    pub name: String,
-    /// Global id of the target core that executes the task.
-    pub core: u32,
-    /// Priority line on the target core; must match the receiver.
-    pub priority: u16,
-    /// Number of pending inputs; must match the receiver.
-    pub capacity: usize,
-    /// Full input-type path, when the sender mirrors the receiver's
-    /// `impl CrossBinSpawn { type Input = … }`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_type: Option<String>,
-}
-
-impl SenderDecl {
-    /// Returns the IDL name (last path segment) of the input type, if declared.
-    pub fn input_type_name(&self) -> Option<&str> {
-        self.input_type.as_deref().map(simple_type_name)
     }
 }
 
