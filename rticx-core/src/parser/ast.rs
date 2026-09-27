@@ -177,11 +177,23 @@ pub struct AppArgs {
     // path to peripheral crate
     pub pacs: Vec<syn::Path>,
     pub cores: u32,
+    /// Global core id of each local core index (`core_ids[local]`), declared
+    /// with `core_ids = [..]` and defaulting to the identity `0..cores`.
+    pub core_ids: Vec<u32>,
     /// Warning items generated for unsupported arguments, to be emitted by codegen.
     pub warnings: Vec<proc_macro2::TokenStream>,
 }
 
 impl AppArgs {
+    /// Global core id of the local core index `local` (`core_ids[local]`).
+    ///
+    /// The task `core`/`spawn_by` syntax is local (`0..cores`); runtime core
+    /// checks, `external_cores` and the multi-binary system view use global
+    /// ids.
+    pub fn global_core(&self, local: u32) -> u32 {
+        self.core_ids[local as usize]
+    }
+
     pub fn parse(args: proc_macro2::TokenStream) -> syn::Result<Self> {
         let args_span = args.span();
 
@@ -189,6 +201,23 @@ impl AppArgs {
 
         // parse the number of cores
         let cores = attr.take_u32("cores")?.unwrap_or(1);
+
+        // parse the optional local -> global core id mapping
+        let core_ids_span = attr.get_expr("core_ids").map(Spanned::span);
+        let core_ids = match attr.take_u32_array("core_ids")? {
+            Some(ids) => {
+                if ids.len() != cores as usize {
+                    return Err(ParseError::CoreIdsCoresMismatch(cores, ids.len())
+                        .to_syn(core_ids_span.unwrap_or(args_span)));
+                }
+                if let Some(duplicate) = first_duplicate(&ids) {
+                    return Err(ParseError::DuplicateCoreId(duplicate)
+                        .to_syn(core_ids_span.unwrap_or(args_span)));
+                }
+                ids
+            }
+            None => (0..cores).collect(),
+        };
 
         // parse the path(s) to PAC(s)
         let device = attr
@@ -225,12 +254,19 @@ impl AppArgs {
         };
 
         // warn about unsupported arguments instead of failing
-        let warnings = attr.unsupported_warnings(&["device", "cores"]);
+        let warnings = attr.unsupported_warnings(&["device", "cores", "core_ids"]);
 
         Ok(Self {
             pacs,
             cores,
+            core_ids,
             warnings,
         })
     }
+}
+
+/// First value occurring more than once in `values`, if any.
+fn first_duplicate(values: &[u32]) -> Option<u32> {
+    let mut seen = std::collections::BTreeSet::new();
+    values.iter().copied().find(|value| !seen.insert(*value))
 }

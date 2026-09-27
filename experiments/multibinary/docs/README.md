@@ -32,5 +32,8 @@ Status legend:
   mock runtime (spawn → dispatcher → input verification, FIFO backpressure),
   and M4-T3 asserts the documented errors for a missing sync, a stale view or
   source, priority conflicts, unknown types and region overflow.
-- M5 (native `core_ids` in `rticx-core`) and M6 (multi-source/target,
-  ready/epoch, complete docs) are still pending.
+- M5 makes the local -> global `core_ids` mapping native to `rticx-core`: the
+  core/software passes emit runtime core checks against the global ids and the
+  extension pass only *reads* the mapping (leaving the key to the core pass)
+  while `external_cores` stays pass-owned.
+- M6 (multi-source/target, ready/epoch, complete docs) is still pending.

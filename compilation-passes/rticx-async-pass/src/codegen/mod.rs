@@ -2,7 +2,7 @@ mod utils;
 
 use crate::AsyncPassBackend;
 use crate::analyze::{Analysis, SubAnalysis};
-use crate::parse::ast::AsyncTask;
+use crate::parse::ast::{AppParameters, AsyncTask};
 use crate::parse::{ASYNC_TASK_TRAIT_TY, App};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
@@ -233,7 +233,7 @@ impl<'a> CodeGen<'a> {
                         let is_prio_0 = task.params.priority == 0;
 
                         let spawn_impl = if is_prio_0 {
-                            task.generate_spawn_api_prio_0(&queue_path, self.backend)
+                            task.generate_spawn_api_prio_0(&queue_path, self.backend, app_params)
                         } else {
                             let dispatcher_irq = sub_analysis
                                 .dispatcher_priority_map
@@ -245,6 +245,7 @@ impl<'a> CodeGen<'a> {
                                 self.backend,
                                 num_cores,
                                 &queue_path,
+                                app_params,
                             )
                         };
 
@@ -675,6 +676,7 @@ impl AsyncTask {
         &self,
         queue_path: &Path,
         backend: &dyn AsyncPassBackend,
+        app_params: &AppParameters,
     ) -> TokenStream {
         let task_name = self.name();
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
@@ -685,8 +687,10 @@ impl AsyncTask {
         // ring buffer holds one slot more than the queue capacity
         let queue_buffer_size = self.params.capacity + 1;
 
-        // Optional runtime check that the caller runs on this task's core.
-        let core_lit = LitInt::new(&self.params.core.to_string(), Span::call_site());
+        // Optional runtime check that the caller runs on this task's core
+        // (global id: `core_ids[core]`).
+        let core_global = app_params.global_core(self.params.core);
+        let core_lit = LitInt::new(&core_global.to_string(), Span::call_site());
         let core_check = backend.current_core_id().map(|current_core_id| {
             quote! {
                 if #current_core_id != #core_lit {
@@ -719,6 +723,7 @@ impl AsyncTask {
         backend: &dyn AsyncPassBackend,
         num_cores: usize,
         queue_path: &Path,
+        app_params: &AppParameters,
     ) -> TokenStream {
         let task_name = self.name();
         let task_trait_name = format_ident!("{}", ASYNC_TASK_TRAIT_TY);
@@ -742,27 +747,34 @@ impl AsyncTask {
         };
         let pend_stmt = Some(pend_stmt);
 
-        let core_check = if cross {
-            // Multicore-only Runtime check that the caller runs on this task's `spawn_by` core.
-            let spawn_by_lit = LitInt::new(&self.params.spawn_by.to_string(), Span::call_site());
-            backend.current_core_id().map(|current_core_id| {
+        // The runtime core check compares against the **global** core id:
+        // `core_ids[spawn_by]` for cross-core tasks, `core_ids[core]`
+        // otherwise.  Task `core`/`spawn_by` syntax stays local (M5-T2).
+        let expected_core = if cross {
+            self.params.spawn_by
+        } else {
+            self.params.core
+        };
+        let expected_global = app_params.global_core(expected_core);
+        let expected_lit = LitInt::new(&expected_global.to_string(), Span::call_site());
+        let core_check = backend.current_core_id().map(|current_core_id| {
+            if cross {
+                // Multicore-only runtime check that the caller runs on the
+                // core that is allowed to spawn this task.
                 quote! {
-                    if #current_core_id != #spawn_by_lit {
+                    if #current_core_id != #expected_lit {
                         return Err(Some(input));
                     }
                 }
-            })
-        } else {
-            // Optional runtime check that the caller runs on this task's core.
-            let core_lit = LitInt::new(&self.params.core.to_string(), Span::call_site());
-            backend.current_core_id().map(|current_core_id| {
+            } else {
+                // Optional runtime check that the caller runs on this task's core.
                 quote! {
-                    if #current_core_id != #core_lit {
+                    if #current_core_id != #expected_lit {
                         return Err(input);
                     }
                 }
-            })
-        };
+            }
+        });
 
         let system_initialized_flag = format_ident!("__rticx_async_system_initialized");
         generate_spawn_api(&SpawnApiParams {

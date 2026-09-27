@@ -45,6 +45,60 @@ fn app_params_cores_explicit() {
 }
 
 #[test]
+fn app_params_core_ids_default_to_identity() {
+    let params = parse_app_params(common::multi_core_args()).expect("valid args");
+    assert_eq!(params.core_ids, vec![0, 1]);
+    assert_eq!(params.global_core(0), 0);
+    assert_eq!(params.global_core(1), 1);
+}
+
+#[test]
+fn app_params_core_ids_explicit_mapping() {
+    let args: TokenStream = quote!(
+        device = mypac,
+        cores = 2,
+        dispatchers = [[IRQ0], [IRQ1]],
+        core_ids = [1, 2]
+    );
+    let params = parse_app_params(args).expect("valid args");
+    assert_eq!(params.core_ids, vec![1, 2]);
+    assert_eq!(params.global_core(1), 2);
+}
+
+#[test]
+fn app_params_core_ids_length_mismatch_errors() {
+    let args: TokenStream = quote!(device = mypac, cores = 2, core_ids = [1]);
+    assert_err_contains(
+        parse_app_params(args),
+        "`core_ids` must map every local core: expected 2 entries, found 1",
+    );
+}
+
+#[test]
+fn app_params_core_ids_duplicates_error() {
+    let args: TokenStream = quote!(device = mypac, cores = 2, core_ids = [1, 1]);
+    assert_err_contains(
+        parse_app_params(args),
+        "`core_ids` lists global core id 1 more than once",
+    );
+}
+
+#[test]
+fn app_subapps_expose_global_core_ids() {
+    let args: TokenStream = quote!(
+        device = mypac,
+        cores = 2,
+        dispatchers = [[IRQ0], [IRQ1]],
+        core_ids = [1, 2]
+    );
+    let app = parse_app(args, quote!()).expect("valid app");
+    assert_eq!(app.sub_apps[0].core, 0);
+    assert_eq!(app.sub_apps[0].global_core, 1);
+    assert_eq!(app.sub_apps[1].core, 1);
+    assert_eq!(app.sub_apps[1].global_core, 2);
+}
+
+#[test]
 fn app_params_missing_device_errors() {
     let args: TokenStream = quote!(cores = 2);
     assert_err_contains(parse_app_params(args), "device");

@@ -35,6 +35,87 @@ fn parse_app_args_missing_device_fails() {
 }
 
 #[test]
+fn parse_app_args_core_ids_default_to_identity() {
+    let args: TokenStream = quote!(device = mypac, cores = 3);
+    let parsed = AppArgs::parse(args).expect("valid app args");
+    assert_eq!(parsed.core_ids, vec![0, 1, 2]);
+    assert_eq!(parsed.global_core(0), 0);
+    assert_eq!(parsed.global_core(2), 2);
+    assert!(parsed.warnings.is_empty());
+}
+
+#[test]
+fn parse_app_args_explicit_core_ids() {
+    let args: TokenStream = quote!(device = mypac, cores = 2, core_ids = [1, 3]);
+    let parsed = AppArgs::parse(args).expect("valid app args");
+    assert_eq!(parsed.core_ids, vec![1, 3]);
+    assert_eq!(parsed.global_core(0), 1);
+    assert_eq!(parsed.global_core(1), 3);
+    assert!(
+        parsed.warnings.is_empty(),
+        "`core_ids` must not warn as an unknown argument"
+    );
+}
+
+#[test]
+fn parse_app_args_core_ids_length_mismatch_fails() {
+    let args: TokenStream = quote!(device = mypac, cores = 2, core_ids = [0]);
+    let err = AppArgs::parse(args).expect_err("incomplete mapping must fail");
+    assert!(
+        err.to_string().contains("expected 2 entries, found 1"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_app_args_core_ids_duplicates_fail() {
+    let args: TokenStream = quote!(device = mypac, cores = 2, core_ids = [1, 1]);
+    let err = AppArgs::parse(args).expect_err("duplicate global ids must fail");
+    assert!(
+        err.to_string()
+            .contains("lists global core id 1 more than once"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_app_args_core_ids_non_array_fails() {
+    let args: TokenStream = quote!(device = mypac, core_ids = 0);
+    let err = AppArgs::parse(args).expect_err("non-array core_ids must fail");
+    assert!(
+        err.to_string().contains("`core_ids` must be an array"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_multi_core_app_exposes_global_core_mapping() {
+    let args: TokenStream = quote!(device = mypac, cores = 2, core_ids = [5, 7]);
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[shared(core = 0)]
+            struct Shared0 {}
+
+            #[shared(core = 1)]
+            struct Shared1 {}
+
+            #[init(core = 0)]
+            fn init0() -> (Shared0, TaskInitsCore0) {
+                (Shared0 {}, TaskInitsCore0 {})
+            }
+
+            #[init(core = 1)]
+            fn init1() -> (Shared1, TaskInitsCore1) {
+                (Shared1 {}, TaskInitsCore1 {})
+            }
+        }
+    };
+    let app = App::parse(args, module).expect("valid multi-core app");
+    assert_eq!(app.global_core(0), 5);
+    assert_eq!(app.global_core(1), 7);
+}
+
+#[test]
 fn parse_single_core_app() {
     let args = common::single_core_app_args();
     let module = common::single_core_app_module();

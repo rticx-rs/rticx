@@ -676,6 +676,33 @@ fn codegen_expands_prio_0_executor() {
 }
 
 #[test]
+fn codegen_core_checks_use_global_core_ids() {
+    // Local core 0 -> global 1, local core 1 -> global 2.  Both the core-local
+    // spawn guard (`core_ids[core]`) and the cross-core guard
+    // (`core_ids[spawn_by]`) must compare against the global ids.
+    let args: TokenStream = quote!(
+        device = mypac,
+        cores = 2,
+        dispatchers = [[IRQ0], [IRQ1]],
+        core_ids = [1, 2]
+    );
+    let generated = run_pass(args, common::multi_core_sw_app_module(), true, true);
+
+    assert!(
+        generated.contains("if mock_current_core_id () != 1 { return Err (input) ; }"),
+        "core-local spawn guard must use the global id:\n{generated}"
+    );
+    assert!(
+        generated.contains("if mock_current_core_id () != 1 { return Err (Some (input)) ; }"),
+        "cross_spawn guard must use the spawn_by global id:\n{generated}"
+    );
+    assert!(
+        !generated.contains("mock_current_core_id () != 0"),
+        "the local core literal leaked into a runtime core check:\n{generated}"
+    );
+}
+
+#[test]
 fn codegen_cross_core_tasks_require_current_core_id() {
     let pass = AsyncPass::new(MockAsyncBackend {
         cross: true,

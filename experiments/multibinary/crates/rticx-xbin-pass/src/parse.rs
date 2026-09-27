@@ -3,8 +3,11 @@
 //! This module owns the syntax that the multi-binary extension adds on top of
 //! the core RTIC syntax (see `multibinary-multicore-plan.md` §6.4 and §6.5):
 //!
-//! - `#[app(core_ids = [..], external_cores = [..])]`, consumed here so the
-//!   core pass never sees them (it would warn about unknown arguments);
+//! - `#[app(core_ids = [..], external_cores = [..])]`: `core_ids` is read
+//!   through the core parser (`rticx_core` owns the key since M5) and left in
+//!   the arguments for the core pass; only `external_cores` is consumed here,
+//!   so the core pass never sees it (it would warn about an unknown
+//!   argument);
 //! - `#[cross_bin_task(..)]` receiver structs, whose input type is declared by
 //!   `impl CrossBinTask for <Name> { type Input = …; }`;
 //! - `#[cross_bin_spawn(..)]` sender stubs, optionally mirrored by an
@@ -24,15 +27,17 @@
 //!   receiver `spawned_by` lists **global** source core ids;
 //! - defaults: `priority = 1`, `capacity = 1`, receiver `core = 0`;
 //! - unknown, duplicate and multi-segment keys as well as malformed values
-//!   are hard errors; `core_ids`/`external_cores` are validated against each
-//!   other and against `cores`;
+//!   are hard errors; `external_cores` is validated against the `core_ids`
+//!   mapping the core parser resolves (identity when not declared);
 //! - stripping happens in both modes and for every distribution that binds
 //!   the pass. Without the pass, the core pass only *warns* about
-//!   `core_ids`/`external_cores` as unknown `#[app]` arguments.
+//!   `external_cores` as an unknown `#[app]` argument (`core_ids` is native
+//!   to `rticx-core` since M5 and is understood with or without the pass).
 //!
-//! TODO(extract): `parse_attr_int`, `take_u32_array` and `item_attrs`
-//! duplicate helpers in `rticx-sw-pass`'s internal `common::parse` module.
-//! They may be promoted into `rticx-core` once a second pass needs them.
+//! TODO(extract): `parse_attr_int` and `item_attrs` duplicate helpers in
+//! `rticx-sw-pass`'s internal `common::parse` module. They may be promoted
+//! into `rticx-core` once a second pass needs them (`take_u32_array` already
+//! lives on [`RticAttr`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
@@ -41,6 +46,7 @@ use std::str::FromStr;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident};
 use rticx_core::parse_utils::RticAttr;
+use rticx_core::parser::ast::AppArgs;
 use rticx_xbin_proto::{ReceiverDecl, SenderDecl};
 use syn::{
     Attribute, Expr, ExprLit, ImplItem, Item, ItemImpl, ItemMod, Lit, LitInt, Meta, PathArguments,
@@ -71,8 +77,12 @@ const DEFAULT_CAPACITY: usize = 1;
 pub(crate) struct AppExtensions {
     /// Local core count (`cores`, default 1).
     pub cores: u32,
-    /// `core_ids` mapping, when declared.
-    pub core_ids: Option<Vec<u32>>,
+    /// Resolved `core_ids` mapping (local index -> global id), the identity
+    /// `0..cores` when the application does not declare the key.
+    ///
+    /// Parsed and validated by `rticx-core` (M5), which owns `core_ids`; this
+    /// pass only reads the mapping (and leaves the key in the arguments).
+    pub core_ids: Vec<u32>,
     /// `external_cores`, empty when not declared.
     pub external_cores: Vec<u32>,
 }
@@ -96,52 +106,37 @@ enum DeclKind {
 /// Parses the `#[app]` arguments owned by this pass and returns them together
 /// with the argument token stream stripped of the consumed keys.
 ///
-/// `cores` and `device` are left untouched for the core pass; `core_ids` and
-/// `external_cores` are consumed.
+/// `cores`, `device` and `core_ids` are left untouched for the core pass;
+/// `core_ids` is parsed through [`AppArgs`] (the core parser owns and
+/// validates it since M5) so the pass reads the resolved mapping, and only
+/// `external_cores` is consumed.
 pub(crate) fn parse_app_args(args: TokenStream) -> syn::Result<(AppExtensions, TokenStream)> {
     let args_span = args.span();
-    let mut attr = parse_attr_tokens(args, format_ident!("app"))?;
 
-    let cores = parse_attr_int(&attr, "cores", 1u32)?;
+    // `rticx-core` owns `core_ids` (M5): parsing through `AppArgs` resolves
+    // the identity default and validates the length and uniqueness with the
+    // core pass's own errors. The arguments themselves are not consumed here.
+    let app_args = AppArgs::parse(args.clone())?;
+    let cores = app_args.cores;
     if cores == 0 {
         return Err(syn::Error::new(
             args_span,
             "The `cores` argument must be at least 1.",
         ));
     }
+    let core_ids = app_args.core_ids;
 
-    let core_ids_span = attr.get_expr(CORE_IDS_ARG).map(Spanned::span);
-    let core_ids = take_u32_array(&mut attr, CORE_IDS_ARG)?;
-    if let Some(ids) = &core_ids {
-        if ids.len() != cores as usize {
-            return Err(syn::Error::new(
-                core_ids_span.unwrap_or(args_span),
-                format!(
-                    "`{CORE_IDS_ARG}` must map every local core: expected {cores} entries, found {}",
-                    ids.len()
-                ),
-            ));
-        }
-        if let Some(duplicate) = first_duplicate(ids) {
-            return Err(syn::Error::new(
-                core_ids_span.unwrap_or(args_span),
-                format!("`{CORE_IDS_ARG}` lists global core id {duplicate} more than once"),
-            ));
-        }
-    }
+    let mut attr = parse_attr_tokens(args, format_ident!("app"))?;
 
     let external_cores_span = attr.get_expr(EXTERNAL_CORES_ARG).map(Spanned::span);
-    let external_cores = take_u32_array(&mut attr, EXTERNAL_CORES_ARG)?.unwrap_or_default();
+    let external_cores = attr.take_u32_array(EXTERNAL_CORES_ARG)?.unwrap_or_default();
     if let Some(duplicate) = first_duplicate(&external_cores) {
         return Err(syn::Error::new(
             external_cores_span.unwrap_or(args_span),
             format!("`{EXTERNAL_CORES_ARG}` lists global core id {duplicate} more than once"),
         ));
     }
-    if let Some(owned) = core_ids
-        .as_deref()
-        .and_then(|ids| external_cores.iter().find(|id| ids.contains(id)))
-    {
+    if let Some(owned) = external_cores.iter().find(|id| core_ids.contains(id)) {
         return Err(syn::Error::new(
             external_cores_span.unwrap_or(args_span),
             format!(
@@ -374,7 +369,7 @@ fn parse_receiver(
             ),
         ));
     }
-    let spawned_by = take_u32_array(&mut args, "spawned_by")?;
+    let spawned_by = args.take_u32_array("spawned_by")?;
 
     let input_type = input.ok_or_else(|| {
         syn::Error::new(
@@ -577,43 +572,6 @@ where
             format!("`{key}` must be an integer literal"),
         )),
     }
-}
-
-/// Removes `key` and parses it as an array of `u32` literals.
-fn take_u32_array(attr: &mut RticAttr, key: &str) -> syn::Result<Option<Vec<u32>>> {
-    let Some(expr) = attr.take_expr(key) else {
-        return Ok(None);
-    };
-    let Expr::Array(array) = expr else {
-        return Err(syn::Error::new(
-            expr.span(),
-            format!("`{key}` must be an array of integers, e.g. `{key} = [0, 1]`"),
-        ));
-    };
-
-    let mut values = Vec::with_capacity(array.elems.len());
-    for element in array.elems {
-        match element {
-            Expr::Lit(ExprLit {
-                lit: Lit::Int(int), ..
-            }) => {
-                let value = int.base10_parse::<u32>().map_err(|error| {
-                    syn::Error::new(
-                        int.span(),
-                        format!("`{key}` entries must be integers: {error}"),
-                    )
-                })?;
-                values.push(value);
-            }
-            other => {
-                return Err(syn::Error::new(
-                    other.span(),
-                    format!("`{key}` entries must be integer literals"),
-                ));
-            }
-        }
-    }
-    Ok(Some(values))
 }
 
 /// Returns the first value occurring more than once in `values`.

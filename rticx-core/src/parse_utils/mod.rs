@@ -137,6 +137,44 @@ impl RticAttr {
             .map(Some)
     }
 
+    /// Remove and parse `key` as an array of `u32` literals, e.g.
+    /// `core_ids = [0, 1]`.
+    pub fn take_u32_array(&mut self, key: &str) -> syn::Result<Option<Vec<u32>>> {
+        let Some(expr) = self.elements.remove(key) else {
+            return Ok(None);
+        };
+        let Expr::Array(array) = expr else {
+            return Err(syn::Error::new(
+                expr.span(),
+                format!("`{key}` must be an array of integers, e.g. `{key} = [0, 1]`"),
+            ));
+        };
+
+        let mut values = Vec::with_capacity(array.elems.len());
+        for element in array.elems {
+            match element {
+                Expr::Lit(ExprLit {
+                    lit: Lit::Int(int), ..
+                }) => {
+                    let value = int.base10_parse::<u32>().map_err(|error| {
+                        syn::Error::new(
+                            int.span(),
+                            format!("`{key}` entries must be integers: {error}"),
+                        )
+                    })?;
+                    values.push(value);
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        other.span(),
+                        format!("`{key}` entries must be integer literals"),
+                    ));
+                }
+            }
+        }
+        Ok(Some(values))
+    }
+
     /// Remove and parse `key` as an array of identifiers, e.g. `shared = [a, b]`,
     /// keeping the original spans of the identifiers.
     pub fn take_ident_array(&mut self, key: &str) -> syn::Result<Option<Vec<Ident>>> {

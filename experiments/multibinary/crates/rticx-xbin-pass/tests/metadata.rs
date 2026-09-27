@@ -105,6 +105,24 @@ fn receiver_fixture_produces_the_expected_manifest() {
 }
 
 #[test]
+fn manifest_records_the_resolved_core_ids() {
+    // A declared mapping is recorded as written.
+    let (_dir, manifest) = run_manifest(
+        receiver_app(),
+        quote!(device = mypac, cores = 2, core_ids = [4, 5]),
+        "app-m4",
+        "m4",
+    );
+    assert_eq!(manifest.core_ids.as_deref(), Some(&[4, 5][..]));
+
+    // Without the key, the manifest records the identity default the core
+    // pass resolves (M5-T3), so the driver always validates it against
+    // `rticx.toml`.
+    let (_dir, manifest) = run_manifest(receiver_app(), quote!(device = mypac), "app-m4", "m4");
+    assert_eq!(manifest.core_ids.as_deref(), Some(&[0][..]));
+}
+
+#[test]
 fn sender_fixture_produces_the_expected_manifest() {
     let args = quote!(
         device = mypac,

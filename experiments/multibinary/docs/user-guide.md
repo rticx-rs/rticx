@@ -173,8 +173,10 @@ struct EncryptTask;                 // optionally mirror the input type:
 ```
 
 `#[app(...)]` gains `core_ids = [g...]` (local → global mapping) and
-`external_cores = [g...]`; both are stripped by the extension pass. The
-confirmed argument rules:
+`external_cores = [g...]`. Since M5 `core_ids` is native to `rticx-core`: the
+extension pass reads it (and the core pass uses it for the runtime core
+checks), while only `external_cores` is stripped. The confirmed argument
+rules:
 
 | Attribute | Key | Required | Meaning |
 |---|---|---|---|
@@ -187,8 +189,9 @@ confirmed argument rules:
 | | `capacity` | no (default `1`, `>= 1`) | must match the receiver |
 
 A distribution that does **not** bind the extension pass never errors on these
-arguments: `core_ids` and `external_cores` show up as unknown `#[app]`
-arguments and only warn.
+arguments: `external_cores` shows up as an unknown `#[app]` argument and only
+warns, while `core_ids` is understood natively by `rticx-core` (M5) with or
+without the pass.
 
 Rejected with a precise error: unknown, duplicate or multi-segment keys;
 non-integer `priority`/`capacity`/`core`; `capacity = 0`; non-array

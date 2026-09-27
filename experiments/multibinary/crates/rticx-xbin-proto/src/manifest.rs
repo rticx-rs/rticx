@@ -10,8 +10,9 @@
 //! - package and Cargo target (`<target>.xbin.json` is named after the target);
 //! - a [`Hash64`] of the application source as the pass saw it, used by the
 //!   phase-2 freshness check (§7.3);
-//! - the local core count plus the optional local -> global `core_ids` mapping
-//!   and the `external_cores` visible to this application (§6.4);
+//! - the local core count plus the local -> global `core_ids` mapping (the
+//!   identity `0..cores` when the application does not declare the key) and
+//!   the `external_cores` visible to this application (§6.4);
 //! - the `#[cross_bin_task]` receivers and `#[cross_bin_spawn]` senders
 //!   declared by this application (§6.5), including the full input-type paths.
 //!
@@ -46,8 +47,13 @@ pub struct AppManifest {
     pub source_hash: Hash64,
     /// Number of local cores (`#[app(cores = N)]`, default 1).
     pub cores: u32,
-    /// `#[app(core_ids = [..])]` mapping local core index -> global core id,
-    /// when declared.
+    /// Local core index -> global core id mapping as resolved from
+    /// `#[app(core_ids = [..])]`; the identity `0..cores` when the
+    /// application does not declare the key (M5).
+    ///
+    /// The pass always writes the resolved mapping; the field stays optional
+    /// for hand-written manifests and views, which skip the `rticx.toml`
+    /// consistency check when it is absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_ids: Option<Vec<u32>>,
     /// `#[app(external_cores = [..])]`: global ids of cores in other binaries

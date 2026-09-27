@@ -40,6 +40,7 @@ toml = { version = "0.8.23", features = ["preserve_order"] }
 #     tracks the root generation and is bumped together with out-of-tree
 #     distro opt-ins) ---
 rticx-core = { path = "../../rticx-core", version = "0.2.0" }
+rticx-sw-pass = { path = "../../compilation-passes/rticx-sw-pass", version = "0.2.0" }
 # --- experimental crates ---
 rticx-xbin-proto = { path = "crates/rticx-xbin-proto", version = "0.1.0" }
 rticx-xbin-pass = { path = "crates/rticx-xbin-pass", version = "0.1.0" }

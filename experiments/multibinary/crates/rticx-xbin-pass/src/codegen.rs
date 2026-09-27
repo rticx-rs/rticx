@@ -809,13 +809,14 @@ pub(crate) fn check_application<'a>(
             application.core_ids.len()
         )));
     }
-    if let Some(core_ids) = &extensions.core_ids
-        && core_ids != &application.core_ids
-    {
+    // The mapping the core pass resolves (identity when not declared) is what
+    // the generated runtime core checks compare against, so it must match the
+    // synced view (M5-T3).
+    if extensions.core_ids != application.core_ids {
         return Err(error(format!(
-            "application `{package}` maps its local cores to {core_ids:?}, but the synced system \
-             view has {:?}; run `cargo xbin sync`",
-            application.core_ids
+            "application `{package}` maps its local cores to {:?}, but the synced system view \
+             has {:?}; run `cargo xbin sync`",
+            extensions.core_ids, application.core_ids
         )));
     }
     Ok(application)

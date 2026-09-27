@@ -184,7 +184,10 @@ pub trait SwPassBackend {
     /// The generated `spawn`/`cross_spawn` functions start with a runtime check:
     /// `if <expression> != <expected core> { return Err(input) }`.  The expected
     /// core is the task's own `core` for `spawn`, and its `spawn_by` for
-    /// `cross_spawn`.
+    /// `cross_spawn`, translated to the **global** core id via the
+    /// application's `core_ids` mapping (`core_ids[core]` /
+    /// `core_ids[spawn_by]`).  The identity mapping is used when `core_ids` is
+    /// not declared.
     ///
     /// The expression must side-effect-free read of the actual hardware state (e.g. the `cpuid` register on the RP2040).
     fn current_core_id(&self) -> Option<syn::Expr> {

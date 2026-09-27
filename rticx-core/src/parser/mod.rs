@@ -30,6 +30,13 @@ pub struct App {
 }
 
 impl App {
+    /// Global core id of the local core index `local` (`core_ids[local]`).
+    ///
+    /// See [`AppArgs::global_core`](crate::parser::ast::AppArgs::global_core).
+    pub fn global_core(&self, local: u32) -> u32 {
+        self.args.global_core(local)
+    }
+
     pub fn parse(args: proc_macro2::TokenStream, module: syn::ItemMod) -> syn::Result<Self> {
         let span = module.span();
         let args = AppArgs::parse(args)?;

@@ -6,7 +6,7 @@ use crate::common::codegen::{
     SpawnApiParams, generate_cross_pend_fns, generate_local_pend_fns, generate_spawn_api,
     get_interrupt_path,
 };
-use crate::parse::ast::SoftwareTask;
+use crate::parse::ast::{AppParameters, SoftwareTask};
 use crate::parse::{App, SWT_TRAIT_TY};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
@@ -121,8 +121,14 @@ impl<'a> CodeGen<'a> {
                     .dispatcher_priority_map
                     .get(&task.params.priority)
                     .expect("analysis assigns a dispatcher to every priority group"); // safe to unwrap
-                let spawn_impl =
-                    task.generate_spawn_api(dispatcher, pac, self.backend, num_cores, &queue_path);
+                let spawn_impl = task.generate_spawn_api(
+                    dispatcher,
+                    pac,
+                    self.backend,
+                    num_cores,
+                    &queue_path,
+                    &self.app.app_params,
+                );
 
                 quote! {
                     #task_attr
@@ -225,6 +231,7 @@ impl SoftwareTask {
         backend: &dyn SwPassBackend,
         num_cores: usize,
         queue_path: &Path,
+        app_params: &AppParameters,
     ) -> TokenStream {
         let task_name = self.name();
         let task_trait_name = format_ident!("{}", SWT_TRAIT_TY);
@@ -249,27 +256,34 @@ impl SoftwareTask {
         };
         let pend_stmt = Some(pend_stmt);
 
-        let core_check = if cross {
-            // Multicore-only Runtime check that the caller runs on this task's `spawn_by` core.
-            let spawn_by_lit = LitInt::new(&self.params.spawn_by.to_string(), Span::call_site());
-            backend.current_core_id().map(|current_core_id| {
+        // The runtime core check compares against the **global** core id:
+        // `core_ids[spawn_by]` for cross-core tasks, `core_ids[core]`
+        // otherwise.  Task `core`/`spawn_by` syntax stays local (M5-T2).
+        let expected_core = if cross {
+            self.params.spawn_by
+        } else {
+            self.params.core
+        };
+        let expected_global = app_params.global_core(expected_core);
+        let expected_lit = LitInt::new(&expected_global.to_string(), Span::call_site());
+        let core_check = backend.current_core_id().map(|current_core_id| {
+            if cross {
+                // Multicore-only runtime check that the caller runs on the
+                // core that is allowed to spawn this task.
                 quote! {
-                    if #current_core_id != #spawn_by_lit {
+                    if #current_core_id != #expected_lit {
                         return Err(Some(input));
                     }
                 }
-            })
-        } else {
-            // Optional runtime check that the caller runs on this task's core.
-            let core_lit = LitInt::new(&self.params.core.to_string(), Span::call_site());
-            backend.current_core_id().map(|current_core_id| {
+            } else {
+                // Optional runtime check that the caller runs on this task's core.
                 quote! {
-                    if #current_core_id != #core_lit {
+                    if #current_core_id != #expected_lit {
                         return Err(input);
                     }
                 }
-            })
-        };
+            }
+        });
 
         let system_initialized_flag = format_ident!("__rticx_sw_system_initialized");
         generate_spawn_api(&SpawnApiParams {

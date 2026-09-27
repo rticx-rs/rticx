@@ -12,7 +12,10 @@ pub const ASYNC_TASK_TRAIT_TY: &str = "RticAsyncTask";
 /// Type to represent a sub application (application on a single core)
 #[derive(Clone)]
 pub struct SubApp {
+    /// Local core index (`0..cores`).
     pub core: u32,
+    /// Global core id of this sub-application (`core_ids[core]`).
+    pub global_core: u32,
     pub dispatchers: Vec<syn::Path>,
     /// Span of the `dispatchers = [...]` app argument, for error reporting.
     pub dispatchers_span: Option<Span>,
@@ -150,6 +153,7 @@ impl App {
             let mc = mc_sw_tasks.remove(&core).unwrap_or_default();
             sub_apps.push(SubApp {
                 core,
+                global_core: app_params.global_core(core),
                 dispatchers,
                 dispatchers_span: app_params.dispatchers_span,
                 sw_tasks: sw,

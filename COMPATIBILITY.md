@@ -94,6 +94,31 @@ published at the same version.
 - Out-of-tree distributions opt into a new generation via follow-up PRs
   after the core release (see Change procedure).
 
+### Recorded generation decisions
+
+The human checklist under [Enforcement](#enforcement) decides additive vs
+breaking; this table records the outcome for changes where the decision is not
+obvious, together with the mechanical `cargo-semver-checks` result against the
+published baseline.
+
+| Change | Mechanical result | Decision |
+|--------|-------------------|----------|
+| **M5** — native global core ids (`#[app(core_ids = …)]`, `AppArgs::global_core`) | **Breaking** (checked against the published `0.2.0` with `cargo-semver-checks 0.50.0`, `cargo semver-checks check-release --baseline-version 0.2.0 -p <crate>`): `constructible_struct_adds_field` for `AppArgs.core_ids` (`rticx-core`), `AppParameters.core_ids` and `SubApp.global_core` (`rticx-sw-pass`), `SubApp.global_core` (`rticx-async-pass`); `enum_variant_added` and `enum_discriminants_undefined_non_unit_variant` for `ParseError` (`rticx-core`). | **Generation bump `0.2` → `0.3.0`**, performed for every root-workspace crate together in the M5 release PR. The new `#[app]` key is optional and additive for users, but the additions touch public, exhaustively constructible types of the frozen parser surface (`AppArgs`, `AppParameters`, `SubApp`) plus the publicly reachable `ParseError`, so the mechanical result is contract-breaking. The bump is recorded here but **deferred to the release PR**: until then the root workspace stays on generation `0.2`. |
+
+#### Out-of-tree adoption (M5)
+
+- **No source changes are required.** The default `core_ids` mapping is the
+  identity `0..cores`: the single-core riscv distributions (`cores = 1`) map
+  `0 → 0`, and the RP2040 (`cores = 2`) maps `0 → 0`, `1 → 1`. `spawn` /
+  `cross_spawn` guards, `spawn_by`, dispatcher priorities and
+  `SwPassBackend::current_core_id` semantics are unchanged for them.
+- **After the `0.3` release**, open the usual follow-up PRs bumping their
+  `rticx-*` requirements (`0.2` → `0.3`). The release PR's
+  `cargo-semver-checks` report shows the lints recorded above and nothing else.
+- **Optional**: expose `core_ids` in multicore examples (rp2040) or adopt it
+  when adding heterogeneous multi-binary support; no backend changes are
+  needed, the runtime core checks already compare against the global id.
+
 ## Change procedure
 
 ### Adding a capability (non-breaking)
@@ -129,3 +154,6 @@ published at the same version.
   - [ ] All in-tree backends updated in the same PR.
   - [ ] Generation bumped across all root-workspace crates when breaking.
   - [ ] No changes to existing signatures or generated-code contracts.
+  - [ ] Outcome recorded under
+        [Recorded generation decisions](#recorded-generation-decisions) when
+        the change is (or may be) breaking.

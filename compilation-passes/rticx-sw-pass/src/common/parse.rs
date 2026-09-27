@@ -17,9 +17,20 @@ pub struct AppParameters {
     pub dispatchers_span: Option<Span>,
     pub pacs: Vec<Path>,
     pub cores: u32,
+    /// Global core id of each local core index (`core_ids[local]`), declared
+    /// with `core_ids = [..]` and defaulting to the identity `0..cores`.
+    pub core_ids: Vec<u32>,
 }
 
 impl AppParameters {
+    /// Global core id of the local core index `local` (`core_ids[local]`).
+    ///
+    /// Task `core`/`spawn_by` syntax is local; the generated runtime core
+    /// checks compare `current_core_id()` against the global id.
+    pub fn global_core(&self, local: u32) -> u32 {
+        self.core_ids[local as usize]
+    }
+
     pub fn parse(args: &TokenStream) -> syn::Result<Self> {
         let args_span = args.span();
         let mut args = RticAttr::parse_from_tokens(args.clone(), format_ident!("app"))?;
@@ -32,6 +43,23 @@ impl AppParameters {
                 "The `cores` argument must be at least 1.",
             ));
         }
+
+        // parse and validate the optional local -> global core id mapping
+        let core_ids_span = args.get_expr("core_ids").map(Spanned::span);
+        let core_ids = match args.take_u32_array("core_ids")? {
+            Some(ids) => {
+                if ids.len() != cores as usize {
+                    return Err(ParseError::CoreIdsCoresMismatch(cores, ids.len())
+                        .to_syn(core_ids_span.unwrap_or(args_span)));
+                }
+                if let Some(duplicate) = first_duplicate(&ids) {
+                    return Err(ParseError::DuplicateCoreId(duplicate)
+                        .to_syn(core_ids_span.unwrap_or(args_span)));
+                }
+                ids
+            }
+            None => (0..cores).collect(),
+        };
 
         // parse the path(s) to PAC(s)
         let device = args
@@ -110,8 +138,15 @@ impl AppParameters {
             dispatchers_span,
             pacs,
             cores,
+            core_ids,
         })
     }
+}
+
+/// First value occurring more than once in `values`, if any.
+fn first_duplicate(values: &[u32]) -> Option<u32> {
+    let mut seen = std::collections::BTreeSet::new();
+    values.iter().copied().find(|value| !seen.insert(*value))
 }
 
 /// Renames a parsed task attribute (`sw_task`/`async_task`) into the

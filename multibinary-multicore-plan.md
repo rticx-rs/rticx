@@ -604,7 +604,7 @@ the extension, so follow `COMPATIBILITY.md`: the key is additive and optional,
 and any field/signature addition that `cargo-semver-checks` classifies as
 breaking triggers the coordinated generation bump.
 
-- [ ] **M5-T1** Parse and validate `core_ids` in `rticx-core`: add
+- [x] **M5-T1** Parse and validate `core_ids` in `rticx-core`: add
       `RticAttr::take_u32_array` (promote the xbin-pass helper marked
       `TODO(extract)`), add `AppArgs.core_ids` defaulting to `(0..cores)` plus a
       `global_core(local)` accessor, validate length/`cores` equality and
@@ -612,7 +612,7 @@ breaking triggers the coordinated generation bump.
       warns.
       *Acceptance:* parser tests for the identity default, an explicit mapping, a
       length mismatch and duplicate ids; `cd rticx-core && cargo test`.
-- [ ] **M5-T2** Translate local → global in the generated runtime core checks:
+- [x] **M5-T2** Translate local → global in the generated runtime core checks:
       read `core_ids` in `AppParameters::parse` (shared by the sw/async passes)
       and emit `core_ids[core]` / `core_ids[spawn_by]` in the `spawn` /
       `cross_spawn` guards instead of the local literals; expose the mapping on
@@ -620,13 +620,13 @@ breaking triggers the coordinated generation bump.
       *Acceptance:* a pass test with a mock backend whose `current_core_id()`
       returns non-identity ids (e.g. `core_ids = [1, 2]`) compiles and passes;
       existing multicore codegen tests are unchanged.
-- [ ] **M5-T3** Integrate the multi-binary pass: stop consuming/stripping
+- [x] **M5-T3** Integrate the multi-binary pass: stop consuming/stripping
       `core_ids` (the core pass owns it now), keep `external_cores` pass-owned,
       and read the mapping from the parsed `App` in codegen mode.
       *Acceptance:* `cargo xbin sync`/`build` stays green on the fixtures and a
       `cores = 2, core_ids = [1, 2]` app compiles without an unknown-arg warning,
       with the runtime core checks using the global ids.
-- [ ] **M5-T4** Update the frozen-surface documentation and consumers: wiki
+- [x] **M5-T4** Update the frozen-surface documentation and consumers: wiki
       `#[app]` syntax page, `COMPATIBILITY.md` checklist decision (additive vs
       generation bump), and adoption notes for the out-of-tree distributions
       (rp2040 ids are the identity `0/1`; riscv is single-core).

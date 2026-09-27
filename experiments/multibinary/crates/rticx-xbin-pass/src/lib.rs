@@ -38,12 +38,14 @@
 //! generation needs a distribution backend ([`XbinPassBackend`]): a
 //! distribution binds it with [`XbinPass::with_backend`].
 //!
-//! Syntax owned by this pass (always consumed, in both modes):
+//! Syntax owned by this pass:
 //!
-//! - `#[app(core_ids = [..], external_cores = [..])]` — see `crate::parse`;
+//! - `#[app(external_cores = [..])]` (always consumed, in both modes);
+//!   `#[app(core_ids = [..])]` is *read* through the core parser and left for
+//!   the core pass, which owns the key since M5 — see `crate::parse`;
 //! - `#[cross_bin_task(..)]` receiver structs and `#[cross_bin_spawn(..)]`
-//!   sender stubs, with their input type taken from the matching
-//!   `impl CrossBinTask`/`impl CrossBinSpawn` block.
+//!   sender stubs (always consumed, in both modes), with their input type
+//!   taken from the matching `impl CrossBinTask`/`impl CrossBinSpawn` block.
 //!
 //! Detection of the metadata environment happens when the pass is
 //! constructed (`XbinPass::from_env`), i.e. at the macro entry point, so a
@@ -472,7 +474,10 @@ fn build_manifest(
         target: TargetRef::bin(target),
         source_hash,
         cores: extensions.cores,
-        core_ids: extensions.core_ids,
+        // The pass records the mapping the core pass resolves (the identity
+        // `0..cores` when the application does not declare `core_ids`), so
+        // the driver always validates it against `rticx.toml` (M5-T3).
+        core_ids: Some(extensions.core_ids),
         external_cores: extensions.external_cores,
         types,
         receivers: decls.receivers,
@@ -533,6 +538,7 @@ mod tests {
     use quote::{ToTokens, quote};
     use rticx_core::RticPass;
     use rticx_core::parse_utils::RticAttr;
+    use rticx_core::parser::ast::AppArgs;
 
     use super::XbinPass;
 
@@ -567,12 +573,18 @@ mod tests {
             .expect("parsing succeeds");
         assert_eq!(pass.pass_name(), "rticx-xbin-pass");
 
-        let parsed = RticAttr::parse_from_tokens(args, quote::format_ident!("app"))
+        let parsed = RticAttr::parse_from_tokens(args.clone(), quote::format_ident!("app"))
             .expect("stripped args stay parseable");
         assert!(parsed.get_expr("device").is_some(), "core args are kept");
         assert!(parsed.get_expr("cores").is_some(), "core args are kept");
-        assert!(parsed.get_expr("core_ids").is_none(), "consumed");
+        assert!(
+            parsed.get_expr("core_ids").is_some(),
+            "the core pass owns `core_ids` (M5-T3)"
+        );
         assert!(parsed.get_expr("external_cores").is_none(), "consumed");
+
+        let app_args = AppArgs::parse(args).expect("the core pass parses the kept `core_ids`");
+        assert_eq!(app_args.core_ids, [0]);
 
         let tokens = out.to_token_stream().to_string();
         assert!(!tokens.contains("cross_bin_task"), "{tokens}");

@@ -10,6 +10,12 @@ pub enum ParseError {
 
     #[error("The value passed to the `device` argument must be a path to a PAC crate.")]
     DeviceNotPath,
+
+    #[error("`core_ids` must map every local core: expected {0} entries, found {1}.")]
+    CoreIdsCoresMismatch(u32, usize),
+
+    #[error("`core_ids` lists global core id {0} more than once.")]
+    DuplicateCoreId(u32),
 }
 impl ParseError {
     pub fn to_syn(&self, span: proc_macro2::Span) -> syn::Error {

@@ -149,7 +149,10 @@ fn extension_syntax_is_stripped_before_the_next_pass() {
     let args = args.to_string();
     assert!(args.contains("device"), "{args}");
     assert!(args.contains("cores"), "{args}");
-    assert!(!args.contains("core_ids"), "consumed: {args}");
+    assert!(
+        args.contains("core_ids"),
+        "`core_ids` is left for the core pass (M5-T3): {args}"
+    );
     assert!(!args.contains("external_cores"), "consumed: {args}");
 
     let out = out.to_token_stream().to_string();
@@ -511,9 +514,10 @@ fn plain_app() -> syn::ItemMod {
 
 #[test]
 fn other_distributions_only_warn_about_app_extensions() {
-    // A distribution that does not bind the extension pass: `core_ids` and
-    // `external_cores` survive into the core pass, which must warn (the
-    // `#[deprecated]` trick) instead of erroring.
+    // A distribution that does not bind the extension pass: `external_cores`
+    // survives into the core pass, which must warn (the `#[deprecated]` trick)
+    // instead of erroring. `core_ids` is native to `rticx-core` since M5, so
+    // it is consumed without a warning even without the extension pass.
     let builder = RticMacroBuilder::new(MockCoreBackend);
     let code = builder
         .build_rtic_macro2(
@@ -528,7 +532,7 @@ fn other_distributions_only_warn_about_app_extensions() {
         )
         .to_string();
     assert!(!code.contains("compile_error"), "{code}");
-    assert!(code.contains("rticx_warn_unknown_app_core_ids"), "{code}");
+    assert!(!code.contains("rticx_warn_unknown_app_core_ids"), "{code}");
     assert!(
         code.contains("rticx_warn_unknown_app_external_cores"),
         "{code}"
