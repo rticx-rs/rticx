@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5.5 and M6.5-T1/T2/T3 complete; M6.5-T4 next, then M6)
+**Status:** in progress (M0–M5.5 and M6.5-T1/T2/T3/T4 complete; M6.5-T5 next, then M6)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -867,7 +867,7 @@ multi-source acceptance is written against this model.
       *Acceptance:* snapshot with one match arm per view task; mock e2e spawn →
       ring → router ISR → pended dispatcher ISR → exec; coalesced and duplicate
       ids lose no spawns.
-- [ ] **M6.5-T4** Line dispatchers from the pool: one dispatcher per line bound
+- [x] **M6.5-T4** Line dispatchers from the pool: one dispatcher per line bound
       to an `ipc_dispatchers` path, ready queue sized to the sum of the line's
       task capacities (so it cannot overflow), existing FIFO drain; remove
       `dispatcher_irq`/`doorbell_irq` and the per-line `doorbell_setup` arming

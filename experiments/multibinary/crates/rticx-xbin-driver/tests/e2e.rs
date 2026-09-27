@@ -6,7 +6,8 @@
 //! and the cross-binary pass generates against a mock `CrossBinBackend`, so
 //! the sender and receiver applications build and link on the host. The
 //! generated code is the real phase-2 output (FIFO views, `cross_spawn`,
-//! doorbell dispatcher, init hooks); only the hardware bindings are mocked.
+//! doorbell router, line dispatcher, init hooks); only the hardware bindings
+//! are mocked.
 
 use std::path::{Path, PathBuf};
 
@@ -39,9 +40,9 @@ fn target_dir(root: &Path) -> PathBuf {
 
 /// Returns whether the built binary at `binary` contains `needle`.
 ///
-/// The generated phase-2 code carries diagnostic strings that exist nowhere in
-/// the fixture sources, so finding one proves the build ran in codegen mode
-/// (not metadata mode) and linked the generated code.
+/// The generated phase-2 code carries diagnostic strings and symbols that
+/// exist nowhere in the fixture sources, so finding one proves the build ran in
+/// codegen mode (not metadata mode) and linked the generated code.
 fn binary_contains(binary: &Path, needle: &str) -> bool {
     let bytes = std::fs::read(binary).expect("read the built binary");
     bytes
@@ -75,9 +76,9 @@ fn cargo_xbin_build_builds_the_fixture_applications() {
         );
     }
 
-    // Phase 2 really ran: the sender's generated FIFO view and the receiver's
-    // generated mark-ready hook both leave their diagnostics in the linked
-    // binary.
+    // Phase 2 really ran: the sender's generated FIFO view diagnostic and the
+    // receiver's generated router/dispatcher task statics both leave their
+    // traces in the linked binaries.
     assert!(
         binary_contains(
             &binaries.join("m7"),
@@ -86,11 +87,9 @@ fn cargo_xbin_build_builds_the_fixture_applications() {
         "the sender binary does not contain the generated FIFO view"
     );
     assert!(
-        binary_contains(
-            &binaries.join("m4"),
-            "failed to arm doorbell line 0 of global core 1",
-        ),
-        "the receiver binary does not contain the generated mark-ready hook"
+        binary_contains(&binaries.join("m4"), "RTICX_XBIN_ROUTER0_TO1")
+            && binary_contains(&binaries.join("m4"), "RTICX_XBIN_DISPATCHER0_TO1_P3"),
+        "the receiver binary does not contain the generated router/dispatcher tasks"
     );
 
     // The synced view places the single task on the `0->1` direction.

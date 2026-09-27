@@ -6,8 +6,9 @@
 //! stub `ipc-types` crate and the in-tree mock, and is **run** on the host:
 //! the generated `__rticx_xbin_init_shared` must zero the FIFO indices and
 //! publish the shared state, and the generated
-//! `__rticx_xbin_mark_ready_core0` must arm the receiver's doorbell and mark
-//! the owner core ready.
+//! `__rticx_xbin_mark_ready_core0` must publish the owner core's ready bit
+//! without arming any doorbell (M6.5-T4: the router IRQs are configured by the
+//! core pass's used-IRQ machinery, which the harness simulates itself).
 //!
 //! The hooks are private to the `#[app]` module, so the fixture declares
 //! `pub` wrappers next to them for the harness to call.
@@ -24,7 +25,7 @@ use rticx_xbin_proto::SystemView;
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, and `app-m4`
 /// spawns `DecryptTask` back on `app-m7` at priority 4. The reverse direction
 /// gives the owner a doorbell targeting itself, so the executed test covers
-/// both the `init_shared` FIFO zeroing and the `mark_ready` doorbell arming.
+/// both the `init_shared` FIFO zeroing and the `mark_ready` ready publication.
 const SYSTEM_JSON: &str = r#"{
   "schema_version": 1,
   "rticx_generation": "0.2",
@@ -141,10 +142,6 @@ impl XbinPassBackend for TestBackend {
             __rticx_xbin_backend().take_message(#source, #target)
         });
         template
-    }
-
-    fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
-        100 + (target * 10 + line) as u16
     }
 }
 
@@ -317,17 +314,25 @@ fn write_project(root: &Path, expanded: &str) {
                  system.state().is_ready_at(0, system.state().epoch()),\n\
                  \"the ready bit belongs to the published epoch\"\n\
              );\n\n\
-             // mark_ready arms the doorbell lines targeting this core before\n\
-             // publishing its ready bit.\n\
+             // Generated code never arms doorbells (M6.5-T4): the core pass\n\
+             // enables the router IRQ through its used-IRQ machinery. This\n\
+             // harness simulates that arming step itself.\n\
+             assert!(\n\
+                 backend.doorbell_ring(0, 0).is_err(),\n\
+                 \"mark_ready publishes the ready bit without arming doorbells\"\n\
+             );\n\
+             backend\n\
+                 .doorbell_setup(0, 0, 100)\n\
+                 .expect(\"the simulated used-IRQ machinery arms the router line\");\n\
              backend\n\
                  .doorbell_ring(0, 0)\n\
-                 .expect(\"mark_ready armed this core's doorbell\");\n\
+                 .expect(\"the router line rings once armed\");\n\
              assert!(backend.doorbell_take(0, 0));\n\n\
-             // The 0 -> 1 doorbell belongs to the receiver core, which arms\n\
-             // its own line: the owner does not set it up.\n\
+             // The 1 -> 0 doorbell belongs to the receiver core: this harness\n\
+             // never arms it.\n\
              assert!(\n\
                  backend.doorbell_ring(1, 0).is_err(),\n\
-                 \"the receiver arms its own doorbell\"\n\
+                 \"the receiver core arms its own router line\"\n\
              );\n\n\
              println!(\"xbin: owner ready\");\n\
          }\n",
@@ -385,8 +390,8 @@ fn mock_app_reaches_ready_state() {
         "the owner mark-ready hook is missing: {expanded}"
     );
     assert!(
-        expanded.contains("doorbell_setup (0u32 , 0u32 , 100u16)"),
-        "the owner does not arm the doorbell targeting itself: {expanded}"
+        !expanded.contains("doorbell_setup"),
+        "generated code must not arm doorbells (M6.5-T4): {expanded}"
     );
 
     let project = dir.path().join("project");

@@ -127,10 +127,6 @@ impl XbinPassBackend for CompileBackend {
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         Some(syn::parse_quote!(__XbinInterrupt))
     }
-
-    fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
-        (target * 10 + line) as u16
-    }
 }
 
 /// The core backend of the receiver fixture: [`MockCoreBackend`] with a
@@ -456,8 +452,8 @@ fn receiver_fixture_expands_and_compiles() {
     );
 
     // The init hooks are wired into the generated entry function: the
-    // receiver is not the owner, so it only arms its doorbell and marks
-    // itself ready (M3-T3).
+    // receiver is not the owner, so it only marks itself ready (M3-T3); no
+    // generated code arms doorbells (M6.5-T4).
     assert!(
         expanded.contains("fn __rticx_xbin_mark_ready_core0"),
         "the mark-ready hook is missing: {expanded}"

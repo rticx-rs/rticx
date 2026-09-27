@@ -166,10 +166,6 @@ impl XbinPassBackend for TestBackend {
         });
         template
     }
-
-    fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
-        100 + (target * 10 + line) as u16
-    }
 }
 
 /// The producer fixture application: it declares nothing; the pass generates
@@ -1003,11 +999,11 @@ fn owner_codegen_init_hooks_snapshot() {
         },
         "owner mark-ready hook header",
     );
-    // The owner is the source of the fixture's only doorbell (0 -> 1): it
-    // arms nothing and just publishes its ready bit.
+    // No generated code arms doorbells (M6.5-T4): the router IRQs are
+    // configured by the core pass's used-IRQ machinery.
     assert!(
-        !generated.contains("doorbell_setup (1u32 , 0u32 , 110u16)"),
-        "the owner must not arm the receiver's doorbell: {generated}"
+        !generated.contains("doorbell_setup"),
+        "the generated init hooks must not arm doorbells: {generated}"
     );
     assert_section_present(
         &generated,
@@ -1022,8 +1018,8 @@ fn receiver_codegen_init_hooks_snapshot() {
     let generated = generate_receiver_ok(&path);
 
     // `app-m4` (global core 1) is not the owner, but still configures its
-    // region view and arms its own doorbell line before publishing its ready
-    // bit.
+    // region view and publishes its ready bit; no generated code arms the
+    // doorbell line (M6.5-T4).
     assert!(
         !generated.contains("__rticx_xbin_init_shared"),
         "a non-owner application must not initialize the shared state: {generated}"
@@ -1048,10 +1044,9 @@ fn receiver_codegen_init_hooks_snapshot() {
         },
         "receiver mark-ready hook header",
     );
-    assert_section_present(
-        &generated,
-        quote! { __rticx_xbin_backend . doorbell_setup (1u32 , 0u32 , 110u16) },
-        "receiver doorbell arming",
+    assert!(
+        !generated.contains("doorbell_setup"),
+        "the generated init hooks must not arm doorbells: {generated}"
     );
     assert_section_present(
         &generated,
@@ -1094,8 +1089,7 @@ fn init_hooks_are_wired_into_the_entry_functions() {
         "only the owner core initializes the shared state"
     );
 
-    // Every core arms its doorbells and marks itself ready before the idle
-    // loop.
+    // Every core marks itself ready before the idle loop.
     let before_idle = pass
         .main_injection(&MainInjectionPoint::BeforeIdle, 0)
         .expect("every core marks itself ready before idle");

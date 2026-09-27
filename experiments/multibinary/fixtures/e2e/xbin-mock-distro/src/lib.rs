@@ -64,10 +64,6 @@ impl XbinPassBackend for MockDistroBackend {
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         Some(syn::parse_quote!(__XbinInterrupt))
     }
-
-    fn doorbell_irq(&self, target: u32, line: u32) -> u16 {
-        (target * 16 + line) as u16
-    }
 }
 
 /// The mock distribution's `#[app]` attribute macro.

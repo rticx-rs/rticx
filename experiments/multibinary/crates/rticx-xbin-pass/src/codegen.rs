@@ -71,10 +71,10 @@
 //!     task FIFO, before the owner's `mark_ready` and before any peer may
 //!     rely on the shared memory (`MainInjectionPoint::BeforePostInit`);
 //!   - `__rticx_xbin_mark_ready_core<N>` runs on every core at the end of its
-//!     `post_init` (`MainInjectionPoint::BeforeIdle`): it arms the doorbell
-//!     lines targeting that core (`doorbell_setup`) and then calls
-//!     `mark_ready(core)`, so a core is never advertised ready before its
-//!     doorbells are armed.
+//!     `post_init` (`MainInjectionPoint::BeforeIdle`): it calls
+//!     `mark_ready(core)`. The router IRQs are enabled and prioritized by the
+//!     core pass's used-IRQ machinery through the generated router `#[task]`,
+//!     so no per-line arming step remains (M6.5-T4).
 //!
 //!   Boot sequencing itself stays distribution-owned (for example the H7
 //!   release of the M4 core): the owner must run its init before peers rely
@@ -198,13 +198,6 @@ pub trait XbinPassBackend {
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         None
     }
-
-    /// Numeric IRQ of the doorbell line `line` of `target`.
-    ///
-    /// Used by the init hook of `target`'s application to arm the line
-    /// (`CrossBinBackend::doorbell_setup`) before the core is marked ready
-    /// (M3-T3).
-    fn doorbell_irq(&self, target: u32, line: u32) -> u16;
 }
 
 /// The init hooks generated for one application (M3-T3).
@@ -869,31 +862,10 @@ pub(crate) fn generate_init_hooks(
     });
 
     for (local, &global) in application.core_ids.iter().enumerate() {
-        let setups: Vec<TokenStream> = view
-            .doorbells
-            .iter()
-            .filter(|doorbell| doorbell.target == global)
-            .map(|doorbell| {
-                let line = doorbell.line;
-                let irq = LitInt::new(
-                    &format!("{}u16", backend.doorbell_irq(global, line)),
-                    Span::call_site(),
-                );
-                let setup_error = format!(
-                    "failed to arm doorbell line {line} of global core {global}; the distribution \
-                     must implement `CrossBinBackend::doorbell_setup` for it"
-                );
-                quote! {
-                    __rticx_xbin_backend
-                        .doorbell_setup(#global, #line, #irq)
-                        .expect(#setup_error);
-                }
-            })
-            .collect();
-
         let mark_ready_doc = format!(
-            "Marks this core (global core {global}) ready at the end of its `post_init`: arms its \
-             doorbell lines and publishes its ready bit (M3-T3)."
+            "Marks this core (global core {global}) ready at the end of its `post_init` (M3-T3). \
+             The router IRQs are enabled and prioritized by the core pass's used-IRQ machinery, so \
+             no per-line doorbell arming step remains (M6.5-T4)."
         );
         let mark_ready_fn = format_ident!("__rticx_xbin_mark_ready_core{local}");
         items.push(syn::parse_quote! {
@@ -901,7 +873,6 @@ pub(crate) fn generate_init_hooks(
             #[doc(hidden)]
             #[allow(non_snake_case)]
             fn #mark_ready_fn(__rticx_xbin_backend: &impl #rt_path::CrossBinBackend) {
-                #(#setups)*
                 __rticx_xbin_backend.mark_ready(#global);
             }
         });
@@ -1123,9 +1094,8 @@ fn resolve_receiver<'a>(
         )));
     }
 
-    // The pair router is generated from the view's doorbell table (the
-    // distribution arms its lines at `mark_ready`), so a task without its
-    // `(source, target, priority)` doorbell entry is a stale view.
+    // The pair router is generated from the view's doorbell table, so a task
+    // without its `(source, target, priority)` doorbell entry is a stale view.
     view.doorbells
         .iter()
         .find(|doorbell| {
