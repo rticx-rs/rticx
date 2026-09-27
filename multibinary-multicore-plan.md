@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5 complete; M5.5 in progress — T1/T2 done)
+**Status:** in progress (M0–M5.5 complete; M6 next)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -775,7 +775,7 @@ breaking triggers the coordinated generation bump.
       producer application with zero declarations gets its stubs; the documented
       `swtasks` requirement (missing the feature leaves `RticSwTask` undefined
       and fails to compile).
-- [ ] **M5.5-T3** Migrate the fixtures (`e2e`, `metadata`), driver/negative tests,
+- [x] **M5.5-T3** Migrate the fixtures (`e2e`, `metadata`), driver/negative tests,
       user guide, architecture doc and the wiki note to the native syntax;
       document the `swtasks` requirement and defer async explicitly.
       *Acceptance:* all fixture builds and workspace tests green; no

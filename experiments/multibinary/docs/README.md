@@ -19,15 +19,15 @@ Status legend:
   [M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
 - **stub** — placeholder with a `TODO(M6-T4)` marker.
 
-## Status snapshot (M4, through M4-T3)
+## Status snapshot (M5.5)
 
 - `cargo xbin sync` validates `rticx.toml`, collects `<app>.xbin.json`
   per application, merges/validates the project, allocates the per-task FIFOs,
   emits the sealed `target/rticx-xbin/system.json` and generates/updates the
   `ipc-types/` crate, rewriting only changed files.
 - Phase-2 codegen (M3) and `cargo xbin build` (M4-T1) generate and link the
-  sender `cross_spawn`, the receiver doorbell dispatchers and the init hooks
-  for the in-tree `fixtures/e2e` mock distribution.
+  producer `cross_spawn` stubs, the receiver doorbell dispatchers and the init
+  hooks for the in-tree `fixtures/e2e` mock distribution.
 - M4-T2 runs the generated sender and receiver in one host process over the
   mock runtime (spawn → dispatcher → input verification, FIFO backpressure),
   and M4-T3 asserts the documented errors for a missing sync, a stale view or
@@ -36,4 +36,9 @@ Status legend:
   core/software passes emit runtime core checks against the global ids and the
   extension pass only *reads* the mapping (leaving the key to the core pass)
   while `external_cores` stays pass-owned.
+- M5.5 moves cross-binary declarations to the native `#[sw_task]` +
+  `impl RticSwTask` syntax: receivers are the only declaration of a task, the
+  producer applications declare nothing and get their `Task::cross_spawn`
+  stubs generated from the system view, and the pass requires the
+  distribution's `swtasks` feature. Async cross-binary tasks are out of scope.
 - M6 (multi-source/target, ready/epoch, complete docs) is still pending.

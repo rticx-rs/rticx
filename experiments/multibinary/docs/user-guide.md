@@ -1,16 +1,15 @@
 # User guide (outline)
 
 Status: **outline**. Sections marked *implemented* describe behaviour that
-exists in M0; the rest is the target workflow, completed by
-[M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs)
-once M1–M4 land.
+exists through M5.5; the worked examples and troubleshooting are completed by
+[M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
 
 1. [Installing `cargo-xbin`](#1-installing-cargo-xbin)
 2. [Project layout](#2-project-layout)
 3. [Writing `rticx.toml`](#3-writing-rticxtoml) — *implemented*
 4. [Writing `ipc-types.toml`](#4-writing-ipc-typestoml) — *implemented*
-5. [Declaring cross-binary tasks](#5-declaring-cross-binary-tasks) — *planned (M1)*
-6. [Building and running](#6-building-and-running) — *skeleton implemented*
+5. [Declaring cross-binary tasks](#5-declaring-cross-binary-tasks) — *implemented (M5.5)*
+6. [Building and running](#6-building-and-running) — *implemented (M4)*
 7. [Common errors](#7-common-errors)
 
 ---
@@ -145,67 +144,127 @@ discriminants in `0..=u32::MAX`.
 
 ## 5. Declaring cross-binary tasks
 
-*Syntax confirmed and implemented (M1-T3).* The extension pass parses both
-attributes and strips them (together with the `#[app]` extensions) before the
-core pass runs, so other passes and distributions never see them.
+*Implemented (M5.5).* Cross-binary receivers are **ordinary native software
+tasks**: a `#[sw_task]` struct plus `impl RticSwTask` with a `SpawnInput`
+associated type. The extension adds no xbin-specific attribute or trait, and
+the receiver declaration is the only declaration of the task. The pass parses
+and strips its syntax (the `#[app]` extensions and the cross-receiver
+declaration) before the software/core passes run, so other passes and
+distributions never see it.
 
 Receiver binary (the task runs here):
 
 ```rust
-#[cross_bin_task(priority = 3, capacity = 2, spawned_by = [0])]
-struct EncryptTask;
+use my_distro::app;
 
-impl CrossBinTask for EncryptTask {
-    type Input = ipc_types::EncryptReq;
-    fn exec(&mut self, input: Self::Input) {}
+#[app(device = my_pac, cores = 1, core_ids = [1], external_cores = [0])]
+mod app {
+    use my_distro::RticSwTask;
+
+    #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+    pub struct EncryptTask;
+
+    impl RticSwTask for EncryptTask {
+        type SpawnInput = ipc_types::EncryptReq;
+
+        fn exec(&mut self, input: Self::SpawnInput) {
+            // runs on this binary's core when the producer spawns the task
+        }
+    }
 }
 ```
 
-Sender binary (lightweight stub; the name must match the receiver):
+Producer binary (declares nothing; the pass generates the stub from the
+synced system view):
 
 ```rust
-#[cross_bin_spawn(core = 1, priority = 3, capacity = 2)]
-struct EncryptTask;                 // optionally mirror the input type:
-                                    //
-                                    // impl CrossBinSpawn for EncryptTask {
-                                    //     type Input = ipc_types::EncryptReq;
-                                    // }
+use my_distro::app;
+
+#[app(device = my_pac, cores = 1, core_ids = [0], external_cores = [1])]
+mod app {
+    // ... `#[idle]`, `#[init]`, local tasks ...
+
+    fn some_task() {
+        EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
+    }
+}
 ```
 
-`#[app(...)]` gains `core_ids = [g...]` (local → global mapping) and
-`external_cores = [g...]`. Since M5 `core_ids` is native to `rticx-core`: the
-extension pass reads it (and the core pass uses it for the runtime core
-checks), while only `external_cores` is stripped. The confirmed argument
-rules:
+The pass generates `pub struct EncryptTask;` and
+`EncryptTask::cross_spawn(input) -> Result<(), Option<Input>>` inside the
+producer's `#[app]` module for every view task whose producer core belongs to
+the application; the producer source never mentions the task and only adds the
+generated `ipc-types` crate as a dependency. A generated stub name colliding
+with a user item is a dedicated compile error. The error semantics match the
+single-binary `cross_spawn`:
 
-| Attribute | Key | Required | Meaning |
-|---|---|---|---|
-| `cross_bin_task` | `priority` | no (default `1`) | priority line on the receiver core |
-| | `capacity` | no (default `1`, `>= 1`) | pending inputs the FIFO holds |
-| | `core` | no (default `0`) | **local** core index running the task (`< cores`) |
-| | `spawned_by` | no | **global** ids of the cores allowed to spawn |
-| `cross_bin_spawn` | `core` | yes | **global** id of the target core that runs the task |
-| | `priority` | no (default `1`) | must match the receiver |
-| | `capacity` | no (default `1`, `>= 1`) | must match the receiver |
+| Result | Meaning |
+|---|---|
+| `Ok(())` | input enqueued, target doorbell rung |
+| `Err(None)` | input enqueued, but the doorbell could not be rung; re-notify the target |
+| `Err(Some(input))` | nothing enqueued (FIFO full, wrong core, target not ready); retry later or raise `capacity` |
 
-A distribution that does **not** bind the extension pass never errors on these
-arguments: `external_cores` shows up as an unknown `#[app]` argument and only
-warns, while `core_ids` is understood natively by `rticx-core` (M5) with or
-without the pass.
+### `#[app]` arguments
+
+| Key | Required | Meaning |
+|---|---|---|
+| `core_ids = [g...]` | no | local core index `i` → global id `g_i` (identity `0..cores` by default); native to `rticx-core` since M5, understood with or without the pass |
+| `external_cores = [g...]` | no | global ids of cores in other binaries visible to this application; consumed by the pass |
+
+### `spawn_by` resolution
+
+`spawn_by` names the producer core. Without `external_cores` the native
+local-index reading applies (`spawn_by < cores`, validated by `rticx-sw-pass`).
+In an application that declares `external_cores`, the pass resolves it in the
+**global** namespace:
+
+| `spawn_by` | Classification |
+|---|---|
+| absent | plain native `#[sw_task]`, left untouched |
+| ∈ `core_ids` | in-app cross-core task; rewritten to the local index for the software pass |
+| ∈ `external_cores` | cross-binary receiver |
+| anything else | hard error naming the unknown core |
+
+The identity `core_ids` default makes both readings identical. `core` always
+stays a **local** index (`0..cores`, default `0`).
+
+### Cross-receiver arguments
+
+| Key | Required | Meaning |
+|---|---|---|
+| `priority` | no (default `1`) | priority line on the receiver core; cross receivers require `>= 1` |
+| `capacity` | no (default `1`, `>= 1`) | pending inputs the FIFO holds |
+| `core` | no (default `0`) | **local** core index running the task |
+| `spawn_by` | yes | the single **global** producer core id |
+| `init` | no (default `generated`) | must be `generated`; the pass generates the receiver's init |
+| `shared` | no | passed through to the core pass, which computes the SRP ceilings |
 
 Rejected with a precise error: unknown, duplicate or multi-segment keys;
-non-integer `priority`/`capacity`/`core`; `capacity = 0`; non-array
-`spawned_by`; a receiver without `impl CrossBinTask { type Input = … }`; a
-sender without `core`; a receiver `core` outside `0..cores`; `external_cores`
-overlapping the application's own `core_ids` or repeating an id; and either
-attribute on a non-struct item or both on one item.
+non-integer `priority`/`capacity`/`core`; `capacity = 0`; `priority = 0` on a
+cross receiver; `spawn_by` as an array (a task has exactly one producer core);
+a receiver without an `impl RticSwTask { type SpawnInput = …; }` block; a
+receiver `core` outside `0..cores`; `external_cores` overlapping or repeating
+the application's own `core_ids`.
 
-*TODO(M6-T3):* worked example, capacity/backpressure semantics, visibility
-rules, what happens on a rejected spawn (`Err(Some(input))`).
+The receiver's `SpawnInput` must implement `rticx_xbin_rt::CrossCoreMessage`;
+the pass emits a const assertion for it instead of adding a bound to the
+generated task shape. Async cross-binary tasks (`#[async_task]` receivers) are
+**not supported** in v1 and are documented as out of scope.
+
+The pass is bound **before** `rticx-sw-pass` and requires the distribution's
+`swtasks` feature: the software pass generates the `RticSwTask` trait and the
+core pass compiles the receiver through its external `task_trait` mechanism.
+Without the feature `RticSwTask` is undefined and the receiver fails to
+compile. A distribution that does **not** bind the extension pass only warns
+about `external_cores` as an unknown `#[app]` argument (`core_ids` is
+understood natively with or without the pass) and treats `spawn_by` as a local
+index, so cross-binary declarations require the pass.
+
+*TODO(M6-T3):* end-to-end worked example and the diagrams that go with it.
 
 ## 6. Building and running
 
-*Implemented through M4-T1:*
+*Implemented through M5.5:*
 
 ```bash
 cargo xbin --help     # CLI overview
@@ -222,11 +281,15 @@ the driver reads back; a stale manifest is removed before each check, so an
 application that stops expanding its `#[app]` macro fails with a clear error.
 Without `rticx.toml`, `sync` and `build` stay no-ops.
 
-The collected manifests are then merged and validated (M1-T5): sender and
-receiver declarations must agree on name, target core, priority, capacity and
-input type; every `[[application]]`'s `core_ids`/`external_cores` must be
-consistent with `rticx.toml`; every referenced type must exist in the IDL; and
-the per-task FIFOs must fit their `(source → target)` region. The same
+The collected manifests carry only receiver declarations — there are no sender
+declarations since M5.5, the driver infers each task's single producer
+application from the receivers' `spawn_by` — and are then merged and validated
+(M1-T5): every receiver's `spawn_by` must name a single core in another
+application, be listed in the receiver's `external_cores`, and the producer
+application must list the receiver's core in its `external_cores`; every
+`[[application]]`'s `core_ids`/`external_cores` must be consistent with
+`rticx.toml`; every referenced type must exist in the IDL; and the per-task
+FIFOs must fit their `(source → target)` region. The same
 deterministic pass allocates every FIFO address (8-byte aligned, plan order,
 depth `capacity + 1`); the first FIFO that does not fit names its task and
 region in the error. The sealed system view is written to
@@ -245,10 +308,10 @@ the freshness checks reject a stale view or a source changed after `sync`
 (M4-T1). `build` always runs `sync` first; a plain `cargo build` after an
 explicit `sync` is supported, but fails with a staleness error (stale
 `system.json` or a source hash mismatch) once sources changed, until the next
-`sync`. Without a synced view (for example after `cargo clean`), an
-application with cross-binary declarations fails with
+`sync`. Without a synced view (for example after `cargo clean`), every
+application listed in the view — even one declaring no cross task — fails with
 ``failed to read the system view …; run `cargo xbin sync` `` instead of
-silently generating no code.
+silently generating no code (M5.5 removed the cross-declaration gate).
 
 *TODO(M6-T3):* flashing/running per target, QEMU/Renode runners, cache/MPU
 setup checklist, expected boot order.
@@ -287,9 +350,9 @@ setup checklist, expected boot order.
 | ``rticx.toml maps N core(s) for `x`, but its manifest declares `cores = M` `` | keep `core_ids` in `rticx.toml` and `#[app(cores = …)]` in sync |
 | ``… declares `core_ids = …`, but rticx.toml maps …`` | `rticx.toml` is authoritative; reconcile the mapping |
 | ``references global core id N … but no application declares it`` | fix the id or declare the owning application |
-| ``sender `T` … has no matching `#[cross_bin_task]` receiver`` | declare the receiver in the target binary |
-| ``receiver `T` … is never spawned`` | add a `#[cross_bin_spawn]` stub or remove the receiver |
-| ``sender `T` … declares `priority`/`capacity` …, but the receiver declares …`` | mirror the receiver's values in every sender stub |
+| ``receiver `T` in `x` is spawned by global core N, but the application does not list it in `external_cores` `` | add the producer core to the receiver application's `external_cores` |
+| ``task `T` runs on global core N, but its producer application `x` does not list that core in `external_cores` `` | add the receiver's core to the producer application's `external_cores` |
+| ``receiver `T` is declared by both `x` and `y` `` | task names must be unique across the project |
 | ``task `T` … uses type `Y`, which is not declared in `ipc-types.toml` `` | declare `[message.Y]`/`[enum.Y]` or fix the path |
 | ``tasks `A` … and `B` … share priority P on core N`` | give tasks from different source cores disjoint priority lines |
 | ``task `T` needs a `S->T` region`` | add that direction to `[ipc.regions]` |
