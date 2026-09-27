@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5.5 complete; M6.5 next, then M6)
+**Status:** in progress (M0–M5.5 and M6.5-T1 complete; M6.5-T2 next, then M6)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -841,7 +841,7 @@ pends the line dispatcher from the `ipc_dispatchers` pool using the same pend
 function the software/async passes use. **Execute M6.5 before M6-T1**, whose
 multi-source acceptance is written against this model.
 
-- [ ] **M6.5-T1** `ipc_dispatchers` pool: parse the pass-owned per-core list
+- [x] **M6.5-T1** `ipc_dispatchers` pool: parse the pass-owned per-core list
       (same shape as `dispatchers`; single array for `cores = 1`, nested
       otherwise), strip it in both modes before the core/software/async passes,
       and validate one entry per cross line `(source, priority)` in

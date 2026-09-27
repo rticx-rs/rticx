@@ -54,9 +54,11 @@
 //!
 //! Syntax owned by this pass:
 //!
-//! - `#[app(external_cores = [..])]` (always consumed, in both modes);
-//!   `#[app(core_ids = [..])]` is *read* through the core parser and left for
-//!   the core pass, which owns the key since M5 — see `crate::parse`;
+//! - `#[app(external_cores = [..], ipc_dispatchers = [..])]` (always consumed,
+//!   in both modes); `#[app(core_ids = [..])]` is *read* through the core
+//!   parser and left for the core pass, which owns the key since M5 — see
+//!   `crate::parse`. `ipc_dispatchers` is the per-core interrupt pool of the
+//!   generated cross-binary line dispatchers (M6.5-T1);
 //! - native `#[sw_task(..)]` cross-binary receivers (always consumed, in both
 //!   modes), with their input type taken from the matching `impl RticSwTask {
 //!   type SpawnInput = …; }` block. In an application declaring
@@ -85,7 +87,7 @@ use crate::codegen::{
 };
 use crate::parse::{
     AppExtensions, ModuleDecls, inject_receiver_tasks, parse_app_args, parse_module,
-    strip_receiver_tasks,
+    strip_receiver_tasks, validate_ipc_dispatchers,
 };
 
 /// Re-export of the pass trait, so that distributions and fixtures binding
@@ -292,6 +294,13 @@ impl RticPass for XbinPass {
 
         let (extensions, args) = parse_app_args(args)?;
         let decls = parse_module(&mut app_mod, &extensions)?;
+
+        // The pass-owned `ipc_dispatchers` pool is consumed in both modes: the
+        // core/software/async passes must never see it. Its entries are
+        // matched against the cross lines of the parsed declarations before
+        // either mode runs, so a missing, extra, duplicate or overlapping
+        // entry is a hard error (M6.5-T1).
+        validate_ipc_dispatchers(&extensions, &decls)?;
 
         if let Some(meta) = &self.meta {
             let manifest = build_manifest(meta, source_hash, extensions.clone(), decls.clone())?;
@@ -569,7 +578,8 @@ mod tests {
             device = mypac,
             cores = 1,
             core_ids = [0],
-            external_cores = [1]
+            external_cores = [1],
+            ipc_dispatchers = [IRQ0]
         );
 
         let (args, out) = pass
@@ -586,6 +596,10 @@ mod tests {
             "the core pass owns `core_ids` (M5-T3)"
         );
         assert!(parsed.get_expr("external_cores").is_none(), "consumed");
+        assert!(
+            parsed.get_expr("ipc_dispatchers").is_none(),
+            "the pass-owned dispatcher pool is consumed in both modes (M6.5-T1)"
+        );
 
         let app_args = AppArgs::parse(args).expect("the core pass parses the kept `core_ids`");
         assert_eq!(app_args.core_ids, [0]);

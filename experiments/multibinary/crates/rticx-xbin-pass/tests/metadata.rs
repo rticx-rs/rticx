@@ -78,7 +78,8 @@ fn receiver_fixture_produces_the_expected_manifest() {
         device = mypac,
         cores = 1,
         core_ids = [1],
-        external_cores = [0]
+        external_cores = [0],
+        ipc_dispatchers = [IRQ0]
     );
     let (_dir, manifest) = run_manifest(receiver_app(), args, "app-m4", "m4");
 
@@ -117,7 +118,8 @@ fn manifest_records_the_resolved_core_ids() {
             device = mypac,
             cores = 2,
             core_ids = [4, 5],
-            external_cores = [0]
+            external_cores = [0],
+            ipc_dispatchers = [[IRQ0], []]
         ),
         "app-m4",
         "m4",
@@ -152,7 +154,8 @@ fn manifests_are_deterministic() {
         device = mypac,
         cores = 1,
         core_ids = [1],
-        external_cores = [0]
+        external_cores = [0],
+        ipc_dispatchers = [IRQ0]
     );
     let (first_dir, _) = run_manifest(receiver_app(), args.clone(), "app-m4", "m4");
     let (second_dir, _) = run_manifest(receiver_app(), args, "app-m4", "m4");
@@ -172,7 +175,8 @@ fn source_hash_covers_the_source_before_stripping() {
         device = mypac,
         cores = 1,
         core_ids = [1],
-        external_cores = [0]
+        external_cores = [0],
+        ipc_dispatchers = [IRQ0]
     );
 
     let mut expected_source = args.to_string();
@@ -248,7 +252,12 @@ fn env_detection_switches_on_metadata_mode() {
 
     let (_, _) = pass
         .run_pass(
-            quote!(device = mypac, core_ids = [1], external_cores = [0]),
+            quote!(
+                device = mypac,
+                core_ids = [1],
+                external_cores = [0],
+                ipc_dispatchers = [IRQ0]
+            ),
             receiver_app(),
         )
         .expect("pass succeeds");
@@ -311,7 +320,12 @@ fn full_pipeline_writes_the_manifest() {
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(XbinPass::with_manifest(dir.path(), "app-m4", "m4"));
     let code = builder.build_rtic_macro2(
-        quote!(device = mypac, core_ids = [1], external_cores = [0]),
+        quote!(
+            device = mypac,
+            core_ids = [1],
+            external_cores = [0],
+            ipc_dispatchers = [IRQ0]
+        ),
         app_mod,
         None,
     );
@@ -354,7 +368,8 @@ fn manifest_declaration_order_is_normalized() {
                 device = mypac,
                 cores = 1,
                 core_ids = [1],
-                external_cores = [0]
+                external_cores = [0],
+                ipc_dispatchers = [IRQ0, IRQ1]
             ),
             app_mod,
         )

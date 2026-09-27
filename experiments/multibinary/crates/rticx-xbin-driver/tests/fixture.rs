@@ -265,7 +265,13 @@ fn main() {}
 const RECEIVER_MAIN: &str = r#"
 use metadata_macro::app;
 
-#[app(device = fixture, cores = 1, core_ids = [1], external_cores = [0])]
+#[app(
+    device = fixture,
+    cores = 1,
+    core_ids = [1],
+    external_cores = [0],
+    ipc_dispatchers = [IRQ0]
+)]
 mod app {
     trait RticSwTask {
         type SpawnInput;

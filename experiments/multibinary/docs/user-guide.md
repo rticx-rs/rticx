@@ -157,7 +157,13 @@ Receiver binary (the task runs here):
 ```rust
 use my_distro::app;
 
-#[app(device = my_pac, cores = 1, core_ids = [1], external_cores = [0])]
+#[app(
+    device = my_pac,
+    cores = 1,
+    core_ids = [1],
+    external_cores = [0],
+    ipc_dispatchers = [IPC_LINE_0]
+)]
 mod app {
     use my_distro::RticSwTask;
 
@@ -173,6 +179,13 @@ mod app {
     }
 }
 ```
+
+The receiver's `ipc_dispatchers` pool names the interrupt line of every cross
+line on every local core: one entry per distinct `(producer core, priority)`
+pair, in ascending `(producer core, priority)` order (a flat array for
+`cores = 1`, one inner array per core otherwise). The pool is consumed by the
+pass; on each core its entries must be unique and disjoint from that core's
+software `dispatchers` entries.
 
 Producer binary (declares nothing; the pass generates the stub from the
 synced system view):
@@ -210,6 +223,7 @@ single-binary `cross_spawn`:
 |---|---|---|
 | `core_ids = [g...]` | no | local core index `i` → global id `g_i` (identity `0..cores` by default); native to `rticx-core` since M5, understood with or without the pass |
 | `external_cores = [g...]` | no | global ids of cores in other binaries visible to this application; consumed by the pass |
+| `ipc_dispatchers = [IRQ...]` | yes (when the application has cross-binary receivers) | per-core interrupt lines of the cross-binary line dispatchers: one entry per `(source, priority)` cross line of the core, in ascending `(source, priority)` order; consumed by the pass |
 
 ### `spawn_by` resolution
 
@@ -244,7 +258,9 @@ non-integer `priority`/`capacity`/`core`; `capacity = 0`; `priority = 0` on a
 cross receiver; `spawn_by` as an array (a task has exactly one producer core);
 a receiver without an `impl RticSwTask { type SpawnInput = …; }` block; a
 receiver `core` outside `0..cores`; `external_cores` overlapping or repeating
-the application's own `core_ids`.
+the application's own `core_ids`; an `ipc_dispatchers` shape, count, duplicate
+or `dispatchers`-overlap violation (the error names the affected core and,
+for a missing entry, the cross line).
 
 The receiver's `SpawnInput` must implement `rticx_xbin_rt::CrossCoreMessage`;
 the pass emits a const assertion for it instead of adding a bound to the

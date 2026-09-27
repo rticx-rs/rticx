@@ -196,7 +196,20 @@ fn receiver_args() -> TokenStream {
         device = mypac,
         cores = 1,
         core_ids = [1],
-        external_cores = [0]
+        external_cores = [0],
+        ipc_dispatchers = [IRQ0]
+    )
+}
+
+/// Like [`receiver_args`] for an application without cross declarations: the
+/// pass-owned pool must be empty (one entry per cross line, M6.5-T1).
+fn receiver_args_without_cross_declarations() -> TokenStream {
+    quote!(
+        device = mypac,
+        cores = 1,
+        core_ids = [1],
+        external_cores = [0],
+        ipc_dispatchers = []
     )
 }
 
@@ -883,7 +896,8 @@ fn the_owner_is_the_lowest_global_core_id() {
         device = mypac,
         cores = 1,
         core_ids = [2],
-        external_cores = [5]
+        external_cores = [5],
+        ipc_dispatchers = [IRQ0]
     );
     let sender_mod: syn::ItemMod = syn::parse_quote! {
         mod app {}
@@ -1121,7 +1135,8 @@ fn stale_receiver_declarations_are_rejected() {
                 device = mypac,
                 cores = 1,
                 core_ids = [7],
-                external_cores = [0]
+                external_cores = [0],
+                ipc_dispatchers = [IRQ0]
             ),
             receiver_app(),
             "maps its local cores to [7], but the synced system view has [1]",
@@ -1131,7 +1146,8 @@ fn stale_receiver_declarations_are_rejected() {
                 device = mypac,
                 cores = 2,
                 core_ids = [1, 7],
-                external_cores = [0]
+                external_cores = [0],
+                ipc_dispatchers = [[], [IRQ0]]
             ),
             syn::parse_quote! {
                 mod app {
@@ -1261,11 +1277,15 @@ fn applications_without_cross_declarations_still_load_the_view() {
     };
     let (_dir, path) = write_system(&with_source_hashes(
         SYSTEM_JSON,
-        &[("app-m4", &receiver_args(), &app_mod)],
+        &[(
+            "app-m4",
+            &receiver_args_without_cross_declarations(),
+            &app_mod,
+        )],
     ));
     let pass = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
     let (_, module) = pass
-        .run_pass(receiver_args(), app_mod)
+        .run_pass(receiver_args_without_cross_declarations(), app_mod)
         .expect("a plain application still loads the view (M5.5)");
     let generated = module.to_token_stream().to_string();
     assert!(!generated.contains("cross_spawn"), "{generated}");

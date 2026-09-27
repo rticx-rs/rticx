@@ -71,6 +71,30 @@ fn mapped_args() -> TokenStream {
     )
 }
 
+/// Like [`mapped_args`] with the cross lines of the receiver fixtures: local
+/// core 0 carries `(7, 1)`, local core 1 carries `(7, 3)` (M6.5-T1).
+fn receiver_args() -> TokenStream {
+    quote!(
+        device = mypac,
+        cores = 2,
+        core_ids = [4, 5],
+        external_cores = [7],
+        ipc_dispatchers = [[IRQ_IN_0], [IRQ_IN_1]]
+    )
+}
+
+/// Like [`mapped_args`] with the cross line of a single receiver on local core
+/// 0 (`(7, 3)`); local core 1 has no cross line.
+fn one_line_args() -> TokenStream {
+    quote!(
+        device = mypac,
+        cores = 2,
+        core_ids = [4, 5],
+        external_cores = [7],
+        ipc_dispatchers = [[IRQ_IN_0], []]
+    )
+}
+
 #[test]
 fn receiver_syntax_parses_all_keys_and_defaults() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
@@ -93,7 +117,7 @@ fn receiver_syntax_parses_all_keys_and_defaults() {
             }
         }
     };
-    let (_dir, manifest) = manifest_for(mapped_args(), app_mod);
+    let (_dir, manifest) = manifest_for(receiver_args(), app_mod);
 
     assert_eq!(
         manifest
@@ -216,14 +240,14 @@ fn external_spawn_by_classifies_and_strips_the_receiver() {
     };
 
     // The manifest records the global producer.
-    let (_dir, manifest) = manifest_for(mapped_args(), app_mod.clone());
+    let (_dir, manifest) = manifest_for(one_line_args(), app_mod.clone());
     assert_eq!(manifest.receivers.len(), 1);
     assert_eq!(manifest.receivers[0].spawn_by, 7);
     assert_eq!(manifest.types, ["ipc_types::Msg"]);
 
     // The emitted module strips `spawn_by` so the software pass never sees an
     // external id.
-    let (_, out) = run(mapped_args(), app_mod).expect("pass succeeds");
+    let (_, out) = run(one_line_args(), app_mod).expect("pass succeeds");
     let tokens = out.to_token_stream().to_string();
     assert!(!tokens.contains("spawn_by"), "{tokens}");
     assert!(tokens.contains("impl RticSwTask for Cross"), "{tokens}");
@@ -241,7 +265,7 @@ fn metadata_strips_the_cross_receiver_attributes() {
             }
         }
     };
-    let tokens = metadata_module(mapped_args(), app_mod);
+    let tokens = metadata_module(one_line_args(), app_mod);
 
     assert!(!tokens.contains("sw_task"), "{tokens}");
     assert!(!tokens.contains("spawn_by"), "{tokens}");
@@ -624,7 +648,7 @@ fn shared_is_preserved_for_the_software_pass() {
             }
         }
     };
-    let (_, out) = run(mapped_args(), app_mod).expect("pass succeeds");
+    let (_, out) = run(one_line_args(), app_mod).expect("pass succeeds");
     let tokens = out.to_token_stream().to_string();
     assert!(tokens.contains("shared = [counter]"), "{tokens}");
 }

@@ -4,11 +4,16 @@
 //! This module owns the syntax that the multi-binary extension adds on top of
 //! the core RTIC syntax (see `multibinary-multicore-plan.md` §6.4 and §6.5):
 //!
-//! - `#[app(core_ids = [..], external_cores = [..])]`: `core_ids` is read
-//!   through the core parser (`rticx_core` owns the key since M5) and left in
-//!   the arguments for the core pass; only `external_cores` is consumed here,
-//!   so the core pass never sees it (it would warn about an unknown
-//!   argument);
+//! - `#[app(core_ids = [..], external_cores = [..], ipc_dispatchers = [..])]`:
+//!   `core_ids` is read through the core parser (`rticx_core` owns the key
+//!   since M5) and left in the arguments for the core pass; `external_cores`
+//!   and `ipc_dispatchers` are consumed here, so the core/software/async
+//!   passes never see them (the core pass would warn about unknown
+//!   arguments). `ipc_dispatchers` is the pass-owned per-core pool of
+//!   interrupt lines for the generated cross-binary line dispatchers (M6.5):
+//!   one entry per `(source, priority)` cross line of each local core, in
+//!   ascending `(source, priority)` order, unique per core and disjoint from
+//!   the software pass's `dispatchers` entries of the same core;
 //! - native `#[sw_task(..)]` structs with `impl RticSwTask { type SpawnInput
 //!   = …; }` blocks. In an application that declares `external_cores`, the
 //!   task's `spawn_by` is resolved in the **global** namespace:
@@ -43,8 +48,9 @@
 //!   mapping the core parser resolves (identity when not declared);
 //! - stripping happens in both modes and for every distribution that binds
 //!   the pass. Without the pass, the core pass only *warns* about
-//!   `external_cores` as an unknown `#[app]` argument (`core_ids` is native
-//!   to `rticx-core` since M5 and is understood with or without the pass).
+//!   `external_cores`/`ipc_dispatchers` as unknown `#[app]` arguments
+//!   (`core_ids` is native to `rticx-core` since M5 and is understood with or
+//!   without the pass).
 //!
 //! The producer application declares nothing: its `Task::cross_spawn` stubs
 //! are generated in codegen mode from the synced system view (M5.5).
@@ -64,14 +70,21 @@ use rticx_core::parse_utils::RticAttr;
 use rticx_core::parser::ast::AppArgs;
 use rticx_xbin_proto::ReceiverDecl;
 use syn::{
-    Attribute, Expr, ExprLit, ImplItem, Item, ItemImpl, ItemMod, Lit, LitInt, Meta, PathArguments,
-    Token, Type, parse::Parser, parse_quote, punctuated::Punctuated, spanned::Spanned,
+    Attribute, Expr, ExprLit, ImplItem, Item, ItemImpl, ItemMod, Lit, LitInt, Meta, Path,
+    PathArguments, Token, Type, parse::Parser, parse_quote, punctuated::Punctuated,
+    spanned::Spanned,
 };
 
 /// `#[app(core_ids = [..])]`: local core index -> global core id.
 pub(crate) const CORE_IDS_ARG: &str = "core_ids";
 /// `#[app(external_cores = [..])]`: global ids of cores in other binaries.
 pub(crate) const EXTERNAL_CORES_ARG: &str = "external_cores";
+/// `#[app(ipc_dispatchers = [..])]`: pass-owned per-core interrupt lines of the
+/// generated cross-binary line dispatchers (M6.5).
+pub(crate) const IPC_DISPATCHERS_ARG: &str = "ipc_dispatchers";
+/// The software pass's `#[app(dispatchers = [..])]` argument, read (never
+/// consumed) here for the `ipc_dispatchers` disjointness check.
+const DISPATCHERS_ARG: &str = "dispatchers";
 /// Native software-task attribute.
 pub(crate) const SW_TASK_ATTR: &str = "sw_task";
 /// `#[sw_task(spawn_by = G)]`: the (global, in apps declaring
@@ -108,6 +121,13 @@ pub(crate) struct AppExtensions {
     pub core_ids: Vec<u32>,
     /// `external_cores`, empty when not declared.
     pub external_cores: Vec<u32>,
+    /// Per-local-core `ipc_dispatchers` interrupt lines (M6.5).
+    ///
+    /// `ipc_dispatchers[local]` holds one path per cross line
+    /// `(source, priority)` of that core, assigned in ascending
+    /// `(source, priority)` order; empty when the application declares no
+    /// cross receivers on the core.
+    pub ipc_dispatchers: Vec<Vec<Path>>,
 }
 
 /// The cross-binary declarations found inside the `#[app]` module.
@@ -122,8 +142,8 @@ pub(crate) struct ModuleDecls {
 ///
 /// `cores`, `device` and `core_ids` are left untouched for the core pass;
 /// `core_ids` is parsed through [`AppArgs`] (the core parser owns and
-/// validates it since M5) so the pass reads the resolved mapping, and only
-/// `external_cores` is consumed.
+/// validates it since M5) so the pass reads the resolved mapping, and
+/// `external_cores` and `ipc_dispatchers` are consumed.
 pub(crate) fn parse_app_args(args: TokenStream) -> syn::Result<(AppExtensions, TokenStream)> {
     let args_span = args.span();
 
@@ -160,12 +180,258 @@ pub(crate) fn parse_app_args(args: TokenStream) -> syn::Result<(AppExtensions, T
         ));
     }
 
+    // M6.5: the per-core IPC interrupt pool is owned by this pass and stripped
+    // before the core/software/async passes run. `dispatchers` stays in the
+    // arguments (the software pass consumes it); it is only read here for the
+    // disjointness check.
+    let ipc_dispatchers = match attr.elements.remove(IPC_DISPATCHERS_ARG) {
+        Some(expr) => parse_ipc_dispatchers(&expr, cores)?,
+        None => vec![Vec::new(); cores as usize],
+    };
+    check_ipc_dispatchers(&ipc_dispatchers, &parse_dispatcher_cores(&attr))?;
+
     let extensions = AppExtensions {
         cores,
         core_ids,
         external_cores,
+        ipc_dispatchers,
     };
     Ok((extensions, attr.args_tokens()))
+}
+
+/// Parses the pass-owned per-core `ipc_dispatchers` pool (M6.5).
+///
+/// Same shape as `dispatchers`: a flat array of interrupt paths when
+/// `cores = 1`, one inner array per local core otherwise. The entries of a
+/// core's list are assigned to that core's cross lines in ascending
+/// `(source, priority)` order by [`validate_ipc_dispatchers`].
+fn parse_ipc_dispatchers(expr: &Expr, cores: u32) -> syn::Result<Vec<Vec<Path>>> {
+    let Expr::Array(array) = expr else {
+        return Err(syn::Error::new(
+            expr.span(),
+            format!(
+                "The `{IPC_DISPATCHERS_ARG}` argument must be an array of interrupt paths, e.g. \
+                 `{IPC_DISPATCHERS_ARG} = [IRQ0, IRQ1]` or `{IPC_DISPATCHERS_ARG} = [[IRQ0], \
+                 [IRQ1]]` for per-core lists."
+            ),
+        ));
+    };
+
+    if array
+        .elems
+        .iter()
+        .all(|element| matches!(element, Expr::Path(_)))
+    {
+        if cores != 1 {
+            return Err(syn::Error::new(
+                array.span(),
+                format!(
+                    "The `{IPC_DISPATCHERS_ARG}` argument must be a list of one interrupt array \
+                     per core when `cores > 1`, e.g. `{IPC_DISPATCHERS_ARG} = [[IRQ0], [IRQ1]]`."
+                ),
+            ));
+        }
+        let paths = array
+            .elems
+            .iter()
+            .map(ipc_dispatcher_path)
+            .collect::<syn::Result<Vec<_>>>()?;
+        return Ok(vec![paths]);
+    }
+
+    if !array
+        .elems
+        .iter()
+        .all(|element| matches!(element, Expr::Array(_)))
+    {
+        return Err(syn::Error::new(
+            array.span(),
+            format!(
+                "The elements of the `{IPC_DISPATCHERS_ARG}` argument must be interrupt paths or \
+                 arrays of interrupt paths."
+            ),
+        ));
+    }
+
+    if array.elems.len() != cores as usize {
+        return Err(syn::Error::new(
+            array.span(),
+            format!(
+                "The number of cores `{cores}` does not match the number of \
+                 `{IPC_DISPATCHERS_ARG}` lists `{}`",
+                array.elems.len()
+            ),
+        ));
+    }
+
+    array
+        .elems
+        .iter()
+        .map(|element| {
+            let Expr::Array(inner) = element else {
+                unreachable!("checked above: every element is an array")
+            };
+            inner
+                .elems
+                .iter()
+                .map(ipc_dispatcher_path)
+                .collect::<syn::Result<Vec<_>>>()
+        })
+        .collect()
+}
+
+/// Reads one element of an `ipc_dispatchers` list as an interrupt path.
+fn ipc_dispatcher_path(element: &Expr) -> syn::Result<Path> {
+    match element {
+        Expr::Path(path) if path.qself.is_none() => Ok(path.path.clone()),
+        other => Err(syn::Error::new(
+            other.span(),
+            format!(
+                "The elements of the `{IPC_DISPATCHERS_ARG}` argument must be interrupt paths."
+            ),
+        )),
+    }
+}
+
+/// Reads the software pass's `dispatchers` argument into per-core path lists.
+///
+/// Mirrors `rticx-sw-pass`'s shape (flat paths belong to local core 0, an
+/// inner array to the core at its index) so the disjointness check compares
+/// lines of the same core. Malformed values are left for the software pass to
+/// report.
+fn parse_dispatcher_cores(attr: &RticAttr) -> Vec<Vec<Path>> {
+    let Some(Expr::Array(array)) = attr.get_expr(DISPATCHERS_ARG) else {
+        return Vec::new();
+    };
+
+    let mut per_core: BTreeMap<usize, Vec<Path>> = BTreeMap::new();
+    for (index, element) in array.elems.iter().enumerate() {
+        match element {
+            Expr::Path(path) if path.qself.is_none() => {
+                per_core.entry(0).or_default().push(path.path.clone());
+            }
+            Expr::Array(inner) => {
+                let paths = inner
+                    .elems
+                    .iter()
+                    .filter_map(|element| match element {
+                        Expr::Path(path) if path.qself.is_none() => Some(path.path.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                per_core.insert(index, paths);
+            }
+            _ => {}
+        }
+    }
+
+    let mut dispatchers = vec![Vec::new(); per_core.keys().max().map_or(0, |last| last + 1)];
+    for (core, paths) in per_core {
+        dispatchers[core] = paths;
+    }
+    dispatchers
+}
+
+/// Rejects duplicate and overlapping `ipc_dispatchers` entries.
+///
+/// Entries must be unique within a core's list (each cross line needs its own
+/// interrupt) and disjoint from the `dispatchers` entries of the same core (a
+/// line serves either a software dispatcher or a cross-binary line
+/// dispatcher).
+fn check_ipc_dispatchers(
+    ipc_dispatchers: &[Vec<Path>],
+    dispatchers: &[Vec<Path>],
+) -> syn::Result<()> {
+    for (core, entries) in ipc_dispatchers.iter().enumerate() {
+        let mut seen = BTreeSet::new();
+        for entry in entries {
+            let rendered = path_key(entry);
+            if !seen.insert(rendered.clone()) {
+                return Err(syn::Error::new(
+                    entry.span(),
+                    format!(
+                        "`{IPC_DISPATCHERS_ARG}` lists `{rendered}` more than once for local core \
+                         {core}; each cross line needs its own interrupt line"
+                    ),
+                ));
+            }
+        }
+
+        let Some(core_dispatchers) = dispatchers.get(core) else {
+            continue;
+        };
+        if let Some(overlap) = entries.iter().find(|entry| {
+            core_dispatchers
+                .iter()
+                .any(|dispatcher| path_key(dispatcher) == path_key(entry))
+        }) {
+            return Err(syn::Error::new(
+                overlap.span(),
+                format!(
+                    "`{IPC_DISPATCHERS_ARG}` entry `{}` for local core {core} is already listed in \
+                     `{DISPATCHERS_ARG}`; a line serves either a software dispatcher or a \
+                     cross-binary line dispatcher",
+                    path_key(overlap)
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates that the `ipc_dispatchers` pool has exactly one entry per cross
+/// line of each local core (M6.5).
+///
+/// Cross lines are the distinct `(spawn_by, priority)` pairs of the
+/// application's cross-binary receivers on that core; the pool entry at index
+/// `i` is the interrupt line of the `i`-th line in ascending
+/// `(source, priority)` order.
+pub(crate) fn validate_ipc_dispatchers(
+    extensions: &AppExtensions,
+    decls: &ModuleDecls,
+) -> syn::Result<()> {
+    for core in 0..extensions.cores {
+        let mut lines: Vec<(u32, u16)> = decls
+            .receivers
+            .iter()
+            .filter(|receiver| receiver.core == core)
+            .map(|receiver| (receiver.spawn_by, receiver.priority))
+            .collect();
+        lines.sort_unstable();
+        lines.dedup();
+
+        let entries = &extensions.ipc_dispatchers[core as usize];
+        if entries.len() < lines.len() {
+            let (source, priority) = lines[entries.len()];
+            return Err(syn::Error::new(
+                entries.first().map_or_else(Span::call_site, Spanned::span),
+                format!(
+                    "local core {core} has the cross line `(source {source}, priority {priority})`, \
+                     but `{IPC_DISPATCHERS_ARG}` declares only {} entr{} for that core; declare \
+                     one interrupt per cross line in `(source, priority)` order",
+                    entries.len(),
+                    if entries.len() == 1 { "y" } else { "ies" }
+                ),
+            ));
+        }
+        if entries.len() > lines.len() {
+            return Err(syn::Error::new(
+                entries[lines.len()].span(),
+                format!(
+                    "`{IPC_DISPATCHERS_ARG}` declares {} entries for local core {core}, but the \
+                     application has only {} cross-binary line(s); remove the extra entries",
+                    entries.len(),
+                    lines.len()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Canonical rendering of an interrupt path for duplicate/overlap checks.
+fn path_key(path: &Path) -> String {
+    path.to_token_stream().to_string()
 }
 
 /// Parses (and rewrites) the native cross-binary receivers of the `#[app]`
@@ -629,5 +895,205 @@ fn int_span(attr: &RticAttr, key: &str) -> Option<Span> {
             lit: Lit::Int(int), ..
         })) => Some(int.span()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rticx_xbin_proto::ReceiverDecl;
+
+    fn receiver(name: &str, core: u32, spawn_by: u32, priority: u16) -> ReceiverDecl {
+        ReceiverDecl {
+            name: name.to_string(),
+            priority,
+            capacity: 1,
+            core,
+            spawn_by,
+            input_type: "Msg".to_string(),
+        }
+    }
+
+    fn app_extensions(cores: u32, ipc_dispatchers: Vec<Vec<Path>>) -> AppExtensions {
+        AppExtensions {
+            cores,
+            core_ids: (0..cores).collect(),
+            external_cores: Vec::new(),
+            ipc_dispatchers,
+        }
+    }
+
+    fn module_decls(receivers: Vec<ReceiverDecl>) -> ModuleDecls {
+        ModuleDecls { receivers }
+    }
+
+    #[test]
+    fn ipc_dispatchers_flat_and_nested_shapes() {
+        let flat: Expr = syn::parse_quote!([IRQ0, IRQ1]);
+        let parsed = parse_ipc_dispatchers(&flat, 1).expect("flat list for one core");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].len(), 2);
+
+        let nested: Expr = syn::parse_quote!([[IRQ0], [IRQ1, IRQ2]]);
+        let parsed = parse_ipc_dispatchers(&nested, 2).expect("per-core lists");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].len(), 1);
+        assert_eq!(parsed[1].len(), 2);
+    }
+
+    #[test]
+    fn ipc_dispatchers_shape_errors() {
+        let flat: Expr = syn::parse_quote!([IRQ0, IRQ1]);
+        let error = parse_ipc_dispatchers(&flat, 2)
+            .expect_err("a flat list is only valid for one core")
+            .to_string();
+        assert!(
+            error.contains("list of one interrupt array per core"),
+            "{error}"
+        );
+
+        let nested: Expr = syn::parse_quote!([[IRQ0], [IRQ1]]);
+        let error = parse_ipc_dispatchers(&nested, 3)
+            .expect_err("one list per core")
+            .to_string();
+        assert!(
+            error.contains(
+                "number of cores `3` does not match the number of `ipc_dispatchers` lists `2`"
+            ),
+            "{error}"
+        );
+
+        let mixed: Expr = syn::parse_quote!([[IRQ0], 3]);
+        let error = parse_ipc_dispatchers(&mixed, 2)
+            .expect_err("mixed shapes are rejected")
+            .to_string();
+        assert!(
+            error.contains("must be interrupt paths or arrays of interrupt paths"),
+            "{error}"
+        );
+
+        let not_array: Expr = syn::parse_quote!(IRQ0);
+        let error = parse_ipc_dispatchers(&not_array, 1)
+            .expect_err("an array is required")
+            .to_string();
+        assert!(
+            error.contains("must be an array of interrupt paths"),
+            "{error}"
+        );
+
+        let bad_element: Expr = syn::parse_quote!([[IRQ0, 3]]);
+        let error = parse_ipc_dispatchers(&bad_element, 1)
+            .expect_err("inner entries must be paths")
+            .to_string();
+        assert!(error.contains("must be interrupt paths"), "{error}");
+    }
+
+    #[test]
+    fn ipc_dispatchers_must_be_unique_per_core() {
+        let ipc = vec![vec![syn::parse_quote!(IRQ0), syn::parse_quote!(IRQ0)]];
+        let error = check_ipc_dispatchers(&ipc, &[])
+            .expect_err("duplicate entries")
+            .to_string();
+        assert!(
+            error.contains("lists `IRQ0` more than once for local core 0"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn ipc_dispatchers_must_not_overlap_dispatchers() {
+        let ipc = vec![vec![syn::parse_quote!(IRQ0)]];
+        let dispatchers = vec![vec![syn::parse_quote!(IRQ0)]];
+        let error = check_ipc_dispatchers(&ipc, &dispatchers)
+            .expect_err("overlap with the software dispatchers")
+            .to_string();
+        assert!(error.contains("already listed in `dispatchers`"), "{error}");
+
+        // Disjointness is per core: the same line on another core is not an
+        // overlap of that core's software dispatchers.
+        let ipc = vec![vec![syn::parse_quote!(IRQ0)], vec![syn::parse_quote!(IRQ1)]];
+        let dispatchers = vec![vec![syn::parse_quote!(IRQ1)], vec![syn::parse_quote!(IRQ0)]];
+        check_ipc_dispatchers(&ipc, &dispatchers).expect("per-core disjointness");
+    }
+
+    #[test]
+    fn cross_lines_are_matched_in_deterministic_order() {
+        // Declarations arrive sorted by name; lines are distinct
+        // `(source, priority)` pairs sorted ascending: (7, 3) before (9, 1).
+        let decls = module_decls(vec![
+            receiver("Alpha", 0, 9, 1),
+            receiver("Zeta", 0, 7, 3),
+            receiver("Other", 1, 7, 3),
+        ]);
+        let extensions = app_extensions(
+            2,
+            vec![
+                vec![syn::parse_quote!(IRQ_A), syn::parse_quote!(IRQ_B)],
+                vec![syn::parse_quote!(IRQ_C)],
+            ],
+        );
+        validate_ipc_dispatchers(&extensions, &decls).expect("one entry per line");
+
+        // Receivers of the same source and priority share one line and one
+        // pool entry.
+        let decls = module_decls(vec![receiver("Alpha", 0, 7, 3), receiver("Zeta", 0, 7, 3)]);
+        let extensions = app_extensions(1, vec![vec![syn::parse_quote!(IRQ_A)]]);
+        validate_ipc_dispatchers(&extensions, &decls)
+            .expect("same source and priority share a line");
+    }
+
+    #[test]
+    fn missing_and_extra_lines_are_rejected() {
+        let decls = module_decls(vec![receiver("Alpha", 0, 9, 1), receiver("Zeta", 0, 7, 3)]);
+
+        let extensions = app_extensions(1, vec![vec![syn::parse_quote!(IRQ_A)]]);
+        let error = validate_ipc_dispatchers(&extensions, &decls)
+            .expect_err("the second line needs an entry")
+            .to_string();
+        assert!(
+            error.contains("has the cross line `(source 9, priority 1)`"),
+            "{error}"
+        );
+
+        let extensions = app_extensions(1, vec![vec![]]);
+        let error = validate_ipc_dispatchers(&extensions, &decls)
+            .expect_err("the first line is missing")
+            .to_string();
+        assert!(
+            error.contains("has the cross line `(source 7, priority 3)`"),
+            "{error}"
+        );
+
+        let extensions = app_extensions(
+            1,
+            vec![vec![
+                syn::parse_quote!(IRQ_A),
+                syn::parse_quote!(IRQ_B),
+                syn::parse_quote!(IRQ_C),
+            ]],
+        );
+        let error = validate_ipc_dispatchers(&extensions, &decls)
+            .expect_err("extra entries")
+            .to_string();
+        assert!(error.contains("has only 2 cross-binary line(s)"), "{error}");
+    }
+
+    #[test]
+    fn dispatcher_cores_mirror_the_sw_pass_shape() {
+        let attr = parse_attr_tokens(
+            quote!(dispatchers = [[IRQ0], [IRQ1, IRQ2]]),
+            format_ident!("app"),
+        )
+        .expect("parses");
+        let cores = parse_dispatcher_cores(&attr);
+        assert_eq!(cores.len(), 2);
+        assert_eq!(cores[0].len(), 1);
+        assert_eq!(cores[1].len(), 2);
+
+        let attr = parse_attr_tokens(quote!(dispatchers = [IRQ0, IRQ1]), format_ident!("app"))
+            .expect("parses");
+        let cores = parse_dispatcher_cores(&attr);
+        assert_eq!(cores.len(), 1, "flat paths belong to local core 0");
+        assert_eq!(cores[0].len(), 2);
     }
 }
