@@ -362,11 +362,16 @@ path), filters to its own cores, and generates:
   `rticx-xbin-rt`, with const addresses from the generated metadata. No local input
   queue, no forwarder, no task id/union.
 - **Receiver side:**
-  - one doorbell ISR per remote `(source → target, priority)` line at the highest
-    priority; it updates the ready/epoch state and pends the matching dispatcher;
-  - one generated dispatcher per priority line:
-    `#[task(binds = <doorbell IRQ>, priority = <line>, core = N, task_trait = CrossBinTask)]`,
-    which drains each of its FIFOs directly until empty and calls `exec`.
+  - the receiver struct is rewritten into
+    `#[task(priority = <line>, core = N, task_trait = CrossBinTask, init = generated)]`,
+    so the core pass generates its static and enforces the user's
+    `impl CrossBinTask` (M3-T2);
+  - one generated dispatcher per `(source → target, priority)` doorbell line:
+    `#[task(binds = <doorbell IRQ>, priority = <line>, core = N, init = generated)]`
+    implementing `RticTask`, whose `exec` drains each of its FIFOs directly
+    until empty and calls the receiver task's `exec(input)`. (A later split may
+    run a shared ISR at the highest priority and pend per-priority dispatchers;
+    v1 binds the dispatcher to the doorbell IRQ directly.)
 - **Sender side:** `Task::cross_spawn(input)`:
   - runtime global-core guard (`if current_global_core_id() != expected { return Err(Some(input)) }`);
   - enqueue into the task FIFO inside `__rticx_interrupt_free` (v1);
@@ -543,17 +548,17 @@ Work proceeds one task at a time. Each task should be committed separately with 
 
 ### M3 — Codegen for one pair, one priority line
 
-- [ ] **M3-T1** Generate FIFO views and sender `cross_spawn` (interrupt-free,
+- [x] **M3-T1** Generate FIFO views and sender `cross_spawn` (interrupt-free,
       global-core guard, doorbell ring, error semantics).
       *Acceptance:* snapshot test of generated sender code.
-- [ ] **M3-T2** Generate the receiver doorbell ISR and dispatcher draining a single
+- [x] **M3-T2** Generate the receiver doorbell ISR and dispatcher draining a single
       FIFO directly; `#[task(..., task_trait = CrossBinTask)]` shape accepted by the
       core pass.
       *Acceptance:* snapshot test; a minimal fixture expands and compiles.
-- [ ] **M3-T3** Generate init hooks (`init_shared`, `mark_ready`, arm doorbell) via
+- [x] **M3-T3** Generate init hooks (`init_shared`, `mark_ready`, arm doorbell) via
       `CrossBinBackend`.
       *Acceptance:* snapshot test; mock app reaches ready state in tests.
-- [ ] **M3-T4** Topology hash const + `include_str!` freshness + hard error on
+- [x] **M3-T4** Topology hash const + `include_str!` freshness + hard error on
       mismatch.
       *Acceptance:* editing `system.json` triggers rebuild; stale hash fails with the
       documented message.

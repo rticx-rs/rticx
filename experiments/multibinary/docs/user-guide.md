@@ -234,8 +234,8 @@ or `ipc-types is up to date` when nothing changed; since only changed files
 are rewritten, an unchanged IDL does not retrigger builds of the apps that
 depend on the crate. M4 then adds building the applications. `build` always
 runs `sync` first; a plain `cargo build` after an explicit `sync` is
-supported, but fails with a topology-hash mismatch once sources changed until
-the next `sync`.
+supported, but fails with a staleness error (stale `system.json` or a source
+hash mismatch) once sources changed, until the next `sync`.
 
 *TODO(M5-T3):* flashing/running per target, QEMU/Renode runners, cache/MPU
 setup checklist, expected boot order.
@@ -281,6 +281,17 @@ setup checklist, expected boot order.
 | ``tasks `A` … and `B` … share priority P on core N`` | give tasks from different source cores disjoint priority lines |
 | ``task `T` needs a `S->T` region`` | add that direction to `[ipc.regions]` |
 | ``the `S->T` region has N bytes, but its task FIFOs need M`` | enlarge the region or lower task `capacity` |
+
+*Freshness/staleness errors (M3-T4):*
+
+| Message (excerpt) | Fix |
+|---|---|
+| ``the system view `…/system.json` is stale: its `topology_hash` (…) does not match its contents (…)`` | the view was edited without a full sync; run `cargo xbin sync` (or `cargo xbin build`) |
+| ``application `x` changed since the last `cargo xbin sync` (the system view records source hash …, the source hashes to …)`` | the source changed after the last `sync`; run `cargo xbin sync` before a plain `cargo build` |
+
+Every generated application embeds the `__RTICX_XBIN_TOPOLOGY_HASH` it was
+built from and `include_str!`s the system view, so rustc's dep-info rebuilds
+the application when `target/rticx-xbin/system.json` changes.
 
 *TODO(M3–M5):* runtime errors (target not ready, doorbell failure), cache/MPU
 misconfiguration and the remaining troubleshooting guide.

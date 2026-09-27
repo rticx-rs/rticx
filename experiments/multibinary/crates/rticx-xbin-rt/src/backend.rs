@@ -44,11 +44,17 @@
 //! The distribution owns the boot sequencing (the H7 release of the M4 core,
 //! for example). The generated code calls, through the backend:
 //!
-//! 1. [`CrossBinBackend::init_shared`] on the owner core, before any peer can
-//!    observe the shared memory;
-//! 2. [`CrossBinBackend::mark_ready`] at the end of each core's `post_init`,
-//!    after its FIFOs and doorbells are usable and armed;
-//! 3. [`CrossBinBackend::is_ready`] (with the epoch from
+//! 1. [`CrossBinBackend::configure_shared_memory`] on every core, at the
+//!    start of its entry: MPU/MMU attributes are per-core, so each core maps
+//!    its own view of the regions before any shared access;
+//! 2. [`CrossBinBackend::init_shared`] on the owner core (the lowest global
+//!    core id), which also zeroes the per-task FIFO indices, before any peer
+//!    can observe the shared memory;
+//! 3. on every core, [`CrossBinBackend::doorbell_setup`] for the doorbell
+//!    lines targeting that core and then [`CrossBinBackend::mark_ready`] at
+//!    the end of its `post_init`, so a ready bit always implies an armed
+//!    doorbell;
+//! 4. [`CrossBinBackend::is_ready`] (with the epoch from
 //!    [`CrossBinBackend::epoch`]) in `cross_spawn`, which reports
 //!    `Err(Some(input))` while the target core is not ready.
 

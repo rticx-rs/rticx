@@ -369,6 +369,7 @@ dependencies = [
  "quote",
  "rticx-core",
  "rticx-xbin-proto",
+ "serde_json",
  "syn 2.0.119",
  "tempfile",
 ]

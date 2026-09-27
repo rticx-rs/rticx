@@ -31,9 +31,9 @@
 //!
 //! 1. [`SharedState::init`] — clears every ready bit, bumps the epoch and
 //!    publishes the magic;
-//! 2. initialize the FIFOs (`Fifo::init`) and arm the doorbells;
+//! 2. initialize the FIFO indices (`Fifo::init`) of every task;
 //! 3. [`SharedState::mark_ready`]`(own_core)` last, at the end of
-//!    `post_init`.
+//!    `post_init`, after the core armed the doorbell lines targeting it.
 //!
 //! Peer core boot (in particular after a peer reset):
 //!

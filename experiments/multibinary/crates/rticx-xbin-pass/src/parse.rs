@@ -13,7 +13,9 @@
 //! Everything is parsed into the plain data types of `rticx-xbin-proto` that
 //! the metadata manifest is made of. The attributes themselves are *stripped*
 //! from the module: once this pass has consumed them they are meaningless to
-//! the core pass (and to other distributions).
+//! the core pass (and to other distributions). In codegen mode the receiver
+//! structs are additionally rewritten into the core `#[task(..)]` items the
+//! generated dispatchers run against (see [`inject_receiver_tasks`]).
 //!
 //! Confirmed syntax (M1-T3):
 //!
@@ -41,8 +43,8 @@ use quote::{ToTokens, format_ident};
 use rticx_core::parse_utils::RticAttr;
 use rticx_xbin_proto::{ReceiverDecl, SenderDecl};
 use syn::{
-    Attribute, Expr, ExprLit, ImplItem, Item, ItemImpl, ItemMod, Lit, Meta, PathArguments, Token,
-    Type, parse::Parser, punctuated::Punctuated, spanned::Spanned,
+    Attribute, Expr, ExprLit, ImplItem, Item, ItemImpl, ItemMod, Lit, LitInt, Meta, PathArguments,
+    Token, Type, parse::Parser, punctuated::Punctuated, spanned::Spanned,
 };
 
 /// `#[app(core_ids = [..])]`: local core index -> global core id.
@@ -209,6 +211,39 @@ pub(crate) fn parse_module(app_mod: &mut ItemMod, cores: u32) -> syn::Result<Mod
     decls.receivers.sort_by(|a, b| a.name.cmp(&b.name));
     decls.senders.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(decls)
+}
+
+/// Rewrites every receiver struct into the `#[task(..)]` item the core pass
+/// consumes (M3-T2).
+///
+/// Only codegen mode calls this: the injected attribute is what makes the
+/// core pass generate the task static and enforce the user's `impl
+/// CrossBinTask` (`task_trait = CrossBinTask`), so the generated dispatcher
+/// can call `exec(input)` on the initialized instance. The attribute carries
+/// only keys the core pass understands, so no core changes are required.
+pub(crate) fn inject_receiver_tasks(app_mod: &mut ItemMod, receivers: &[ReceiverDecl]) {
+    let Some((_, items)) = app_mod.content.as_mut() else {
+        return;
+    };
+    let task_trait = format_ident!("{CROSS_BIN_TASK_TRAIT}");
+
+    for item in items.iter_mut() {
+        let Item::Struct(item_struct) = item else {
+            continue;
+        };
+        let Some(receiver) = receivers
+            .iter()
+            .find(|receiver| item_struct.ident == receiver.name)
+        else {
+            continue;
+        };
+
+        let priority = LitInt::new(&receiver.priority.to_string(), item_struct.ident.span());
+        let core = LitInt::new(&receiver.core.to_string(), item_struct.ident.span());
+        item_struct.attrs.push(syn::parse_quote! {
+            #[task(priority = #priority, core = #core, task_trait = #task_trait, init = generated)]
+        });
+    }
 }
 
 /// `type Input = …;` declarations found in `impl CrossBinTask`/`CrossBinSpawn`
