@@ -1,0 +1,57 @@
+:name: STM32H7 Dual-Core
+:description: This script runs the dual-core STM32H7 platform (Cortex-M7 + Cortex-M4).
+
+$name?="stm32h7-dualcore"
+$m7_elf?=""
+$m4_elf?=""
+
+# Make sure relative firmware paths are found no matter where Renode was
+# started from.
+$root=$ORIGIN/../..
+set __setup_path_script """
+monitor.Parse('path add "%s"' % variables['root'])
+"""
+python $__setup_path_script
+
+mach create $name
+set __load_platform_script """
+monitor.Parse('machine LoadPlatformDescription "%s/platforms/cpus/stm32h7_dualcore.repl"' % variables['root'])
+"""
+python $__load_platform_script
+
+# `machine Reset` runs a macro named after the current machine, if one is
+# registered. The platform's own reset sections already re-arm every CPU and
+# peripheral, so an empty macro only exists to silence Renode's
+# "No action for reset" warning. Register it after `mach create` so that it is
+# bound to the actual machine name.
+macro reset
+"""
+"""
+
+# Loads the two firmware images and re-arms the platform reset state:
+#   CPU0 (Cortex-M7) starts executing from the vector table at 0x08000000
+#   CPU1 (Cortex-M4) stays halted until RCC_GCR.BOOT_C2 is written
+macro load_firmware
+"""
+    sysbus LoadELF $m7_elf cpu=cpu0
+    sysbus LoadELF $m4_elf cpu=cpu1
+    machine Reset
+"""
+
+# When both images are provided, load and run them.
+# Example (note: -e commands are executed after the script argument, so the
+# images have to be included first):
+#   renode --console --disable-gui \
+#       -e '$m7_elf=@path/to/cm7.elf' \
+#       -e '$m4_elf=@path/to/cm4.elf' \
+#       -e 'i @scripts/single-node/stm32h7_dualcore.resc' \
+#       -e 'start'
+set __load_firmware_script """
+if variables['m7_elf'] and variables['m4_elf']:
+    monitor.Parse('sysbus LoadELF @%s cpu=cpu0' % variables['m7_elf'])
+    monitor.Parse('sysbus LoadELF @%s cpu=cpu1' % variables['m4_elf'])
+    monitor.Parse('machine Reset')
+"""
+python $__load_firmware_script
+
+python "print 'STM32H7 dual-core platform ready. CPU1 is halted until RCC_GCR.BOOT_C2 is written.'"

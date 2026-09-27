@@ -63,6 +63,17 @@ path: a simulated receiver reset makes `cross_spawn` return `Err(Some(input))`
 without enqueueing, and the spawn after the receiver re-marks itself ready
 refreshes the stale epoch and executes.
 
+## Renode acceptance harness (M7)
+
+[`renode/`](renode/README.md) carries the dual-core STM32H7 (Cortex-M7 +
+Cortex-M4) Renode platform used as the M7 acceptance target, plus a
+`run.sh <cm7.elf> <cm4.elf> [seconds]` launcher that boots both images
+headless and routes the two UARTs to the log. It is the harness the future
+out-of-tree `rticx-stm32h7` distribution's cross-binary spawn demo runs on.
+The `.repl` is self-contained (RCC/PWR/HSEM/EXTI models embedded); see its
+README for provenance, the shared-memory map and the HSEM/EXTI doorbell
+paths.
+
 ## Build & test
 
 ```bash

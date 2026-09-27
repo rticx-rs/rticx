@@ -1,0 +1,1162 @@
+/*
+ * Dual-core STM32H7 platform (Cortex-M7 + Cortex-M4).
+ *
+ * Derived from the single-core `stm32h743.repl` shipped with Renode and
+ * extended with:
+ *   - a second Cortex-M4 core (CPU1) held in reset until released through
+ *     RCC_GCR.BOOT_C2,
+ *   - two independent NVICs (one per core, both mapped at 0xE000E000 in the
+ *     private bus view of their core),
+ *   - a Python model of the RCC with dual core register banks,
+ *   - a Python model of the dual-domain EXTI with per-core pending/mask banks,
+ *   - a Python model of the dual-core HSEM with C1/C2 interrupt banks,
+ *   - a Python model of the PWR block.
+ *
+ * The Python peripherals are embedded directly in this file (see the
+ * `// >>> pydev:` markers) so that the platform is self-contained. The
+ * canonical, unit tested implementations live in `scripts/pydev/`; use
+ * `tools/sync_pydev_into_repl.py` to regenerate the embedded copies.
+ *
+ * A ready-to-use startup script is provided at
+ * `scripts/single-node/stm32h7_dualcore.resc`; the platform can also be loaded
+ * directly with `machine LoadPlatformDescription`.
+ */
+
+cpu0: CPU.CortexM @ sysbus
+    cpuType: "cortex-m7"
+    numberOfMPURegions: 16
+    nvic: nvic0
+    init:
+        VectorTableOffset 0x08000000
+    reset:
+        VectorTableOffset 0x08000000
+
+cpu1: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    numberOfMPURegions: 8
+    nvic: nvic1
+    init:
+        IsHalted true
+        VectorTableOffset 0x08100000
+    reset:
+        IsHalted true
+        VectorTableOffset 0x08100000
+
+nvic0: IRQControllers.NVIC @ sysbus new Bus.BusPointRegistration { address: 0xE000E000; cpu: cpu0 }
+    systickFrequency: 400000000
+    priorityMask: 0xF0
+    -> cpu0@0
+
+nvic1: IRQControllers.NVIC @ sysbus new Bus.BusPointRegistration { address: 0xE000E000; cpu: cpu1 }
+    systickFrequency: 400000000
+    priorityMask: 0xF0
+    -> cpu1@0
+
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 400000000
+
+/*
+ * Dual-core aware peripherals.
+ *
+ * The scripts below are embedded copies of the unit tested implementations in
+ * `scripts/pydev/`. Use `tools/sync_pydev_into_repl.py` to regenerate them
+ * after changing the Python sources; `tools/sync_pydev_into_repl.py --check`
+ * (run as part of the test suite) verifies that both stay in sync.
+ */
+
+// RCC with the BOOT_C2 core release and the Cortex-M4 register bank
+rcc: Python.PythonPeripheral @ sysbus 0x58024400
+    size: 0x400
+    initable: true
+    // >>> pydev: scripts/pydev/stm32h7_rcc.py
+    script: '''
+#
+# Copyright (c) 2026
+#
+# This file is licensed under the MIT License.
+#
+# Dual-core STM32H7 Reset and Clock Control (RCC) model.
+#
+# The model covers the registers used by the ST HAL clock / reset
+# initialization code, including the domain configuration registers and the
+# two core-specific register views:
+#
+#   RCC_CR, RCC_CFGR, RCC_D1CFGR, RCC_D2CFGR, RCC_D3CFGR
+#   PLL configuration registers, kernel clock muxes
+#   reset and clock enable registers (AHBxENR / APBxENR and sleep variants)
+#   RCC_GCR (BOOT_C2 core release), RCC_D3AMR, RCC_RSR
+#   RCC_C1_* (0x130..0x17C, Cortex-M7 view)
+#   RCC_C2_* (0x190..0x1DC, Cortex-M4 view)
+#
+# Ready flags are derived from the corresponding enable bits so that polling
+# loops in HAL_RCC_OscConfig / HAL_RCC_ClockConfig terminate immediately.
+#
+# Writing BOOT_C2 (RCC_GCR bit 3) releases the Cortex-M4 from the hold-boot
+# state, implementing the dual-core boot handshake.
+
+if request.IsInit:
+    regs = [0] * (0x400 // 4)
+    # RCC_CR reset value: HSION + HSIDIV(/2) + CSION
+    regs[0x00 // 4] = 0x83
+    # Sleep clock enable registers default to "enabled"
+    for i in range(0xFC // 4, 0x11C // 4 + 1):
+        regs[i] = 0xFFFFFFFF
+    # Cortex-M4 specific register bank
+    c2 = [0] * 20
+    # Aliases of the main registers exposed through the Cortex-M7 view
+    c1_alias = {
+        0x130: 0xD0, 0x134: 0xD4, 0x138: 0xD8, 0x13C: 0xDC,
+        0x140: 0xE0, 0x144: 0xE4, 0x148: 0xE8, 0x14C: 0xEC,
+        0x150: 0xF0, 0x154: 0xF4, 0x15C: 0xFC, 0x160: 0x100,
+        0x164: 0x104, 0x168: 0x108, 0x16C: 0x10C, 0x170: 0x110,
+        0x174: 0x114, 0x178: 0x118, 0x17C: 0x11C,
+    }
+    boot_c2 = False
+
+elif request.IsRead:
+    off = request.Offset - (request.Offset % 4)
+    if off == 0x00:
+        cr = regs[0]
+        value = cr
+        if (cr & (1 << 0)) != 0:
+            value |= (1 << 2)     # HSION  -> HSIRDY
+        if (cr & (1 << 7)) != 0:
+            value |= (1 << 8)     # CSION  -> CSIRDY
+        if (cr & (1 << 12)) != 0:
+            value |= (1 << 13)    # HSI48ON -> HSI48RDY
+        if (cr & (1 << 16)) != 0:
+            value |= (1 << 17)    # HSEON  -> HSERDY
+        if (cr & (1 << 24)) != 0:
+            value |= (1 << 25)    # PLL1ON -> PLL1RDY
+        if (cr & (1 << 26)) != 0:
+            value |= (1 << 27)    # PLL2ON -> PLL2RDY
+        if (cr & (1 << 28)) != 0:
+            value |= (1 << 29)    # PLL3ON -> PLL3RDY
+        value |= (1 << 14) | (1 << 15)  # D1CKRDY, D2CKRDY
+        request.Value = value
+    elif off == 0x10:
+        # SWS follows SW so that clock switch polling completes immediately
+        sw = regs[0x10 // 4] & 0x7
+        request.Value = (regs[0x10 // 4] & 0xFFFFFFC7) | (sw << 3)
+    elif off == 0x70:
+        bdcr = regs[0x70 // 4]
+        if (bdcr & (1 << 0)) != 0:
+            bdcr |= (1 << 1)      # LSEON -> LSERDY
+        request.Value = bdcr
+    elif off == 0x74:
+        csr = regs[0x74 // 4]
+        if (csr & (1 << 0)) != 0:
+            csr |= (1 << 1)       # LSION -> LSIRDY
+        request.Value = csr
+    elif off in c1_alias:
+        request.Value = regs[c1_alias[off] // 4]
+    elif 0x190 <= off <= 0x1DC:
+        request.Value = c2[(off - 0x190) // 4]
+    else:
+        request.Value = regs[off // 4] if off < 0x400 else 0
+
+elif request.IsWrite:
+    off = request.Offset - (request.Offset % 4)
+    value = request.Value & 0xFFFFFFFF
+    if off == 0xA0:
+        # RCC_GCR: bit 3 (BOOT_C2) releases the Cortex-M4 from hold boot
+        regs[0xA0 // 4] = value
+        if (value & 0x8) != 0 and not boot_c2:
+            boot_c2 = True
+            cpus = self.GetMachine().SystemBus.GetCPUs()
+            if len(cpus) > 1:
+                cpu1 = cpus[1]
+                if cpu1.IsHalted:
+                    cpu1.VectorTableOffset = 0x08100000
+                    cpu1.IsHalted = False
+                    self.InfoLog("RCC_GCR.BOOT_C2 set - releasing CPU1")
+    elif off in c1_alias:
+        regs[c1_alias[off] // 4] = value
+    elif 0x190 <= off <= 0x1DC:
+        c2[(off - 0x190) // 4] = value
+    elif off < 0x400:
+        regs[off // 4] = value
+'''
+    // <<< pydev
+
+// Power controller with the voltage scaling ready flags
+pwr: Python.PythonPeripheral @ sysbus 0x58024800
+    size: 0x400
+    initable: true
+    // >>> pydev: scripts/pydev/stm32h7_pwr.py
+    script: '''
+#
+# Copyright (c) 2026
+#
+# This file is licensed under the MIT License.
+#
+# STM32H7 Power Controller (PWR) model.
+#
+# Returns ready flags required by HAL_PWREx_ConfigSupply and related ST HAL
+# power initialization routines:
+#   - PWR_CSR1.ACTVOSRDY (b13) - active voltage scaling ready
+#   - PWR_D3CR.VOSRDY     (b13) - D3 domain voltage ready
+#   - PWR_CR3.USB33RDY    (b26) - USB 3.3 V supply ready
+#   - PWR_CR1.DBP         (b8)  - disable backup domain write protection
+#
+# All other offsets behave as plain read/write storage.
+
+if request.IsInit:
+    regs = [0] * (0x400 // 4)
+
+elif request.IsRead:
+    off = request.Offset - (request.Offset % 4)
+    if off == 0x00:
+        request.Value = regs[0] | 0xF000C100
+    elif off == 0x04:
+        request.Value = regs[1] | 0x6000
+    elif off == 0x0C:
+        request.Value = regs[3] | 0x04000000
+    elif off == 0x18:
+        request.Value = regs[6] | 0x2000
+    else:
+        request.Value = regs[off // 4] if off < 0x400 else 0
+
+elif request.IsWrite:
+    off = request.Offset - (request.Offset % 4)
+    if off < 0x400:
+        regs[off // 4] = request.Value & 0xFFFFFFFF
+'''
+    // <<< pydev
+
+// Dual-core hardware semaphore controller
+hsem: Python.PythonPeripheral @ sysbus 0x58026400
+    size: 0x400
+    initable: true
+    // >>> pydev: scripts/pydev/stm32h7_hsem.py
+    script: '''
+#
+# Copyright (c) 2026
+#
+# This file is licensed under the MIT License.
+#
+# Dual-core STM32H7 Hardware Semaphore (HSEM) model.
+#
+# The model exposes the full HSEM register block (32 semaphores, 1-step and
+# 2-step locking, per-core interrupt banks) so that both the Cortex-M7 and the
+# Cortex-M4 views of the peripheral can be exercised by unmodified vendor
+# firmware (ST HAL, OpenAMP).
+#
+# Register map (RM0399):
+#   0x000 + 4*i   HSEM_Ri     2-step write lock / read back
+#   0x080 + 4*i   HSEM_RLRi   1-step read lock
+#   0x100         HSEM_C1IER  core 1 (Cortex-M7) interrupt enable
+#   0x104         HSEM_C1ICR  core 1 interrupt clear
+#   0x108         HSEM_C1ISR  core 1 interrupt status
+#   0x10C         HSEM_C1MISR core 1 masked interrupt status
+#   0x110         HSEM_C2IER  core 2 (Cortex-M4) interrupt enable
+#   0x114         HSEM_C2ICR  core 2 interrupt clear
+#   0x118         HSEM_C2ISR  core 2 interrupt status
+#   0x11C         HSEM_C2MISR core 2 masked interrupt status
+#   0x140         HSEM_CR     semaphore clear (with key)
+#   0x144         HSEM_KEYR   semaphore clear key
+#
+# Interrupts (RM0399, stm32h745xx.h):
+#   HSEM_C1MISR != 0 -> IRQ 125 (HSEM1_IRQn) on nvic0 (Cortex-M7)
+#   HSEM_C2MISR != 0 -> IRQ 126 (HSEM2_IRQn) on nvic1 (Cortex-M4)
+#
+# This script is executed by Renode's IronPython engine, once per bus access.
+# All state is kept in plain Python values so that machine snapshots work.
+
+if request.IsInit:
+    sem_locked = [False] * 32
+    sem_procid = [0] * 32
+    sem_coreid = [0] * 32
+    c1_ier = 0
+    c1_isr = 0
+    c2_ier = 0
+    c2_isr = 0
+    c1_irq = False
+    c2_irq = False
+    clear_key = 0
+
+elif request.IsRead:
+    off = request.Offset - (request.Offset % 4)
+    if off < 0x80:
+        i = off // 4
+        request.Value = sem_procid[i] | (sem_coreid[i] << 8) | (0x80000000 if sem_locked[i] else 0)
+    elif off < 0x100:
+        # 1-step read lock: the hardware locks the semaphore with the COREID
+        # of the core performing the read (0x3 for Cortex-M7, 0x1 for Cortex-M4)
+        i = (off - 0x80) // 4
+        cpu = self.GetMachine().SystemBus.GetCurrentCPU()
+        if cpu.Model == "cortex-m4" or cpu.Model == "cortex-m4f":
+            coreid = 0x1
+        else:
+            coreid = 0x3
+        if not sem_locked[i]:
+            sem_locked[i] = True
+            sem_procid[i] = 0
+            sem_coreid[i] = coreid
+        request.Value = sem_procid[i] | (sem_coreid[i] << 8) | (0x80000000 if sem_locked[i] else 0)
+    elif off == 0x100:
+        request.Value = c1_ier
+    elif off == 0x104:
+        request.Value = 0
+    elif off == 0x108:
+        request.Value = c1_isr
+    elif off == 0x10C:
+        request.Value = c1_isr & c1_ier
+    elif off == 0x110:
+        request.Value = c2_ier
+    elif off == 0x114:
+        request.Value = 0
+    elif off == 0x118:
+        request.Value = c2_isr
+    elif off == 0x11C:
+        request.Value = c2_isr & c2_ier
+    elif off == 0x144:
+        request.Value = clear_key << 16
+    else:
+        request.Value = 0
+
+elif request.IsWrite:
+    off = request.Offset - (request.Offset % 4)
+    value = request.Value & 0xFFFFFFFF
+    irq_dirty = False
+
+    if off < 0x80:
+        # 2-step write lock.
+        #   LOCK (b31) == 1: try to take the semaphore
+        #   LOCK (b31) == 0: release it (only if PROCID/COREID match)
+        i = off // 4
+        procid = value & 0xFF
+        coreid = (value >> 8) & 0xFF
+        if (value & 0x80000000) != 0:
+            if not sem_locked[i]:
+                sem_locked[i] = True
+                sem_procid[i] = procid
+                sem_coreid[i] = coreid
+        else:
+            if sem_locked[i] and sem_procid[i] == procid and sem_coreid[i] == coreid:
+                sem_locked[i] = False
+                sem_procid[i] = 0
+                sem_coreid[i] = 0
+                bit = 1 << i
+                # A semaphore release raises the interrupt status of both cores
+                c1_isr |= bit
+                c2_isr |= bit
+                irq_dirty = True
+    elif off == 0x100:
+        c1_ier = value
+        irq_dirty = True
+    elif off == 0x104:
+        c1_isr &= ~value
+        irq_dirty = True
+    elif off == 0x110:
+        c2_ier = value
+        irq_dirty = True
+    elif off == 0x114:
+        c2_isr &= ~value
+        irq_dirty = True
+    elif off == 0x144:
+        clear_key = (value >> 16) & 0xFFFF
+    elif off == 0x140:
+        # Clear all semaphores owned by COREID, provided the KEY matches
+        key = (value >> 16) & 0xFFFF
+        coreid = (value >> 8) & 0xFF
+        if key == clear_key:
+            for i in range(32):
+                if sem_locked[i] and sem_coreid[i] == coreid:
+                    sem_locked[i] = False
+                    sem_procid[i] = 0
+                    sem_coreid[i] = 0
+                    bit = 1 << i
+                    c1_isr |= bit
+                    c2_isr |= bit
+                    irq_dirty = True
+
+    if irq_dirty:
+        machine = self.GetMachine()
+        # Core 1 (Cortex-M7) interrupt bank -> HSEM1_IRQn (125) on nvic0.
+        want = (c1_isr & c1_ier) != 0
+        if want != c1_irq:
+            c1_irq = want
+            machine['sysbus.nvic0'].OnGPIO(125, want)
+        # Core 2 (Cortex-M4) interrupt bank -> HSEM2_IRQn (126) on nvic1.
+        want = (c2_isr & c2_ier) != 0
+        if want != c2_irq:
+            c2_irq = want
+            machine['sysbus.nvic1'].OnGPIO(126, want)
+'''
+    // <<< pydev
+
+// Dual-domain extended interrupt controller.
+// It drives nvic0/nvic1 programmatically, so peripherals that used to be
+// connected to the C# EXTI are wired directly to the NVIC input that the EXTI
+// line mapped to.
+exti: Python.PythonPeripheral @ sysbus 0x58000000
+    size: 0x400
+    initable: true
+    // >>> pydev: scripts/pydev/stm32h7_exti.py
+    script: '''
+#
+# Copyright (c) 2026
+#
+# This file is licensed under the MIT License.
+#
+# Dual-domain STM32H7 Extended Interrupt Controller (EXTI) model.
+#
+# The model implements the full EXTI register block with independent Core 1
+# (Cortex-M7) and Core 2 (Cortex-M4) mask / event / pending banks, so that
+# both cores can configure, trigger and acknowledge EXTI lines.
+#
+# Register map (RM0399):
+#   0x000 RTSR1   0x004 FTSR1   0x008 SWIER1   (shared software trigger)
+#   0x00C D3PMR1  0x010 D3PCR1L 0x014 D3PCR1H
+#   0x020 RTSR2   0x024 FTSR2   0x028 SWIER2
+#   0x02C D3PMR2  0x030 D3PCR2L 0x034 D3PCR2H
+#   0x040 RTSR3   0x044 FTSR3   0x048 SWIER3
+#   0x04C D3PMR3  0x050 D3PCR3L 0x054 D3PCR3H
+#   0x080 C1IMR1  0x084 C1EMR1  0x088 C1PR1    (0x08C reserved)
+#   0x090 C1IMR2  0x094 C1EMR2  0x098 C1PR2    (0x09C reserved)
+#   0x0A0 C1IMR3  0x0A4 C1EMR3  0x0A8 C1PR3    (0x0AC reserved)
+#   0x0C0 C2IMR1  0x0C4 C2EMR1  0x0C8 C2PR1    (0x0CC reserved)
+#   0x0D0 C2IMR2  0x0D4 C2EMR2  0x0D8 C2PR2    (0x0DC reserved)
+#   0x0E0 C2IMR3  0x0E4 C2EMR3  0x0E8 C2PR3    (0x0EC reserved)
+#
+# A software trigger is a broadcast, exactly like on silicon: writing a 1 to
+# a bit of the shared SWIERx register sets the corresponding pending bit in
+# both C1PRx and C2PRx. A core only sees the interrupt if the matching bit of
+# its own CxIMR is unmasked, and each core clears its own pending bit by
+# writing the matching bit of CxPRx. There is no per-core SWIER register
+# (those offsets are reserved); firmware that must interrupt exactly one core
+# masks the line on the other core or uses the HSEM model.
+#
+# The line to NVIC interrupt mapping follows the single-core stm32h7 platform
+# so that firmware written for the STM32H7 family keeps working.
+#
+# Note: this is a software-triggered EXTI model. External GPIO/peripheral
+# lines are not routed through it (Renode Python peripherals cannot expose
+# GPIO inputs).
+
+if request.IsInit:
+    rtsr = [0, 0, 0]
+    ftsr = [0, 0, 0]
+    d3pmr = [0, 0, 0]
+    d3pcr = [0, 0, 0, 0, 0, 0]
+    # Reset values per RM0399 Rev 4, Table 154. Both core banks reset alike;
+    # bits marked reserved in the register map read 0 (bank 2 line 45, bank 3
+    # lines 81/83), and lines not configurable through SYSCFG stay enabled.
+    c1_imr = [0xFFC00000, 0xFFF5DFFF, 0x0181FFFF]
+    c1_emr = [0, 0, 0]
+    c1_pr = [0, 0, 0]
+    c2_imr = [0xFFC00000, 0xFFF5DFFF, 0x0181FFFF]
+    c2_emr = [0, 0, 0]
+    c2_pr = [0, 0, 0]
+    c1_irq = [False] * 160
+    c2_irq = [False] * 160
+    line_to_irq = [
+        6, 7, 8, 9, 10, 23, 23, 23,
+        23, 23, 40, 40, 40, 40, 40, 40,
+        1, 41, 2, 3, 137, 137, 31, 33,
+        72, -1, 37, 38, 39, 71, 52, 53,
+        82, 83, 142, 142, 35, 36, 51, 84,
+        85, 86, 119, 76, 100, -1, -1, 93,
+        138, -1, 139, -1, 140, 141, 115, 149,
+        149, 149, 149, 149, 149, 5, 95, 96,
+        142, 86, 129, 130, 131, 132, 133, 134,
+        135, 136, 128, 127, 146, -1, -1, -1,
+        -1, -1, -1, -1, -1, 94, 61, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1,
+    ]
+    irq_lines = {}
+    for line in range(len(line_to_irq)):
+        irq = line_to_irq[line]
+        if irq < 0:
+            continue
+        if irq not in irq_lines:
+            irq_lines[irq] = []
+        irq_lines[irq].append(line)
+    irq_list = list(irq_lines.keys())
+
+elif request.IsRead:
+    off = request.Offset - (request.Offset % 4)
+    if off == 0x00:
+        request.Value = rtsr[0]
+    elif off == 0x04:
+        request.Value = ftsr[0]
+    elif off == 0x08:
+        request.Value = 0
+    elif off == 0x0C:
+        request.Value = d3pmr[0]
+    elif off == 0x10:
+        request.Value = d3pcr[0]
+    elif off == 0x14:
+        request.Value = d3pcr[1]
+    elif off == 0x20:
+        request.Value = rtsr[1]
+    elif off == 0x24:
+        request.Value = ftsr[1]
+    elif off == 0x28:
+        request.Value = 0
+    elif off == 0x2C:
+        request.Value = d3pmr[1]
+    elif off == 0x30:
+        request.Value = d3pcr[2]
+    elif off == 0x34:
+        request.Value = d3pcr[3]
+    elif off == 0x40:
+        request.Value = rtsr[2]
+    elif off == 0x44:
+        request.Value = ftsr[2]
+    elif off == 0x48:
+        request.Value = 0
+    elif off == 0x4C:
+        request.Value = d3pmr[2]
+    elif off == 0x50:
+        request.Value = d3pcr[4]
+    elif off == 0x54:
+        request.Value = d3pcr[5]
+    elif off == 0x80:
+        request.Value = c1_imr[0]
+    elif off == 0x84:
+        request.Value = c1_emr[0]
+    elif off == 0x88:
+        request.Value = c1_pr[0]
+    elif off == 0x8C:
+        request.Value = 0
+    elif off == 0x90:
+        request.Value = c1_imr[1]
+    elif off == 0x94:
+        request.Value = c1_emr[1]
+    elif off == 0x98:
+        request.Value = c1_pr[1]
+    elif off == 0x9C:
+        request.Value = 0
+    elif off == 0xA0:
+        request.Value = c1_imr[2]
+    elif off == 0xA4:
+        request.Value = c1_emr[2]
+    elif off == 0xA8:
+        request.Value = c1_pr[2]
+    elif off == 0xAC:
+        request.Value = 0
+    elif off == 0xC0:
+        request.Value = c2_imr[0]
+    elif off == 0xC4:
+        request.Value = c2_emr[0]
+    elif off == 0xC8:
+        request.Value = c2_pr[0]
+    elif off == 0xCC:
+        request.Value = 0
+    elif off == 0xD0:
+        request.Value = c2_imr[1]
+    elif off == 0xD4:
+        request.Value = c2_emr[1]
+    elif off == 0xD8:
+        request.Value = c2_pr[1]
+    elif off == 0xDC:
+        request.Value = 0
+    elif off == 0xE0:
+        request.Value = c2_imr[2]
+    elif off == 0xE4:
+        request.Value = c2_emr[2]
+    elif off == 0xE8:
+        request.Value = c2_pr[2]
+    elif off == 0xEC:
+        request.Value = 0
+    else:
+        request.Value = 0
+
+elif request.IsWrite:
+    off = request.Offset - (request.Offset % 4)
+    value = request.Value & 0xFFFFFFFF
+    irq_dirty = False
+
+    if off == 0x00:
+        rtsr[0] = value
+    elif off == 0x04:
+        ftsr[0] = value
+    elif off == 0x08:
+        c1_pr[0] |= value
+        c2_pr[0] |= value
+        irq_dirty = True
+    elif off == 0x0C:
+        d3pmr[0] = value
+    elif off == 0x10:
+        d3pcr[0] = value
+    elif off == 0x14:
+        d3pcr[1] = value
+    elif off == 0x20:
+        rtsr[1] = value
+    elif off == 0x24:
+        ftsr[1] = value
+    elif off == 0x28:
+        c1_pr[1] |= value
+        c2_pr[1] |= value
+        irq_dirty = True
+    elif off == 0x2C:
+        d3pmr[1] = value
+    elif off == 0x30:
+        d3pcr[2] = value
+    elif off == 0x34:
+        d3pcr[3] = value
+    elif off == 0x40:
+        rtsr[2] = value
+    elif off == 0x44:
+        ftsr[2] = value
+    elif off == 0x48:
+        c1_pr[2] |= value
+        c2_pr[2] |= value
+        irq_dirty = True
+    elif off == 0x4C:
+        d3pmr[2] = value
+    elif off == 0x50:
+        d3pcr[4] = value
+    elif off == 0x54:
+        d3pcr[5] = value
+    elif off == 0x80:
+        c1_imr[0] = value
+        irq_dirty = True
+    elif off == 0x84:
+        c1_emr[0] = value
+    elif off == 0x88:
+        c1_pr[0] &= ~value
+        irq_dirty = True
+    elif off == 0x90:
+        c1_imr[1] = value
+        irq_dirty = True
+    elif off == 0x94:
+        c1_emr[1] = value
+    elif off == 0x98:
+        c1_pr[1] &= ~value
+        irq_dirty = True
+    elif off == 0xA0:
+        c1_imr[2] = value
+        irq_dirty = True
+    elif off == 0xA4:
+        c1_emr[2] = value
+    elif off == 0xA8:
+        c1_pr[2] &= ~value
+        irq_dirty = True
+    elif off == 0xC0:
+        c2_imr[0] = value
+        irq_dirty = True
+    elif off == 0xC4:
+        c2_emr[0] = value
+    elif off == 0xC8:
+        c2_pr[0] &= ~value
+        irq_dirty = True
+    elif off == 0xD0:
+        c2_imr[1] = value
+        irq_dirty = True
+    elif off == 0xD4:
+        c2_emr[1] = value
+    elif off == 0xD8:
+        c2_pr[1] &= ~value
+        irq_dirty = True
+    elif off == 0xE0:
+        c2_imr[2] = value
+        irq_dirty = True
+    elif off == 0xE4:
+        c2_emr[2] = value
+    elif off == 0xE8:
+        c2_pr[2] &= ~value
+        irq_dirty = True
+
+    if irq_dirty:
+        machine = self.GetMachine()
+        for core in range(2):
+            if core == 0:
+                pending = c1_pr
+                masks = c1_imr
+                states = c1_irq
+                nvic = machine['sysbus.nvic0']
+            else:
+                pending = c2_pr
+                masks = c2_imr
+                states = c2_irq
+                nvic = machine['sysbus.nvic1']
+            for irq in irq_list:
+                on = False
+                for line in irq_lines[irq]:
+                    bank = line // 32
+                    bit = 1 << (line % 32)
+                    if (pending[bank] & masks[bank] & bit) != 0:
+                        on = True
+                        break
+                if on != states[irq]:
+                    states[irq] = on
+                    nvic.OnGPIO(irq, on)
+'''
+    // <<< pydev
+nvicInput23: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 5
+    -> nvic0@23
+
+nvicInput40: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 6
+    -> nvic0@40
+
+nvicInput86: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 2
+    -> nvic0@86
+
+nvicInput137: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 2
+    -> nvic0@137
+
+nvicInput142: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 2
+    -> nvic0@142
+
+nvicInput149: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 6
+    -> nvic0@149
+
+// May be reserved
+sdramBank2: Memory.MappedMemory @ sysbus 0xD0000000
+    size: 0x10000000
+
+sdramBank1: Memory.MappedMemory @ sysbus 0xC0000000
+    size: 0x10000000
+
+flashController: MTD.STM32H7_FlashController @ sysbus 0x52002000
+    flash1: flashBank1
+    flash2: flashBank2
+    -> nvic0@4
+
+externalFlash: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x10000000
+
+flashBank1: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x100000
+
+// May be reserved
+sramBank2: Memory.MappedMemory @ sysbus 0x70000000
+    size: 0x10000000
+
+sramBank1: Memory.MappedMemory @ sysbus 0x60000000
+    size: 0x10000000
+
+adc3: Analog.STM32F0_ADC @ sysbus 0x58026000
+    referenceVoltage: 3.3
+    externalEventFrequency: 1000
+    -> nvic0@127
+
+bdma: DMA.STM32LDMA @ sysbus 0x58025400
+    [0-7] -> nvic0@[129-136]
+
+gpioPortK: GPIOPort.STM32_GPIOPort @ sysbus <0x58022800, +0x400>
+    numberOfAFs: 16
+    invertedAFPins: [[0, 1], [1, 3]]
+    [0-7] -> syscfg#10@[0-7]
+
+gpioPortJ: GPIOPort.STM32_GPIOPort @ sysbus <0x58022400, +0x400>
+    numberOfAFs: 16
+    invertedAFPins: [[7, 3], [8, 1], [9, 3], [10, 1], [11, 3]]
+    [0-15] -> syscfg#9@[0-15]
+
+gpioPortI: GPIOPort.STM32_GPIOPort @ sysbus <0x58022000, +0x400>
+    numberOfAFs: 16
+    [0-15] -> syscfg#8@[0-15]
+
+gpioPortH: GPIOPort.STM32_GPIOPort @ sysbus <0x58021C00, +0x400>
+    numberOfAFs: 16
+    invertedAFPins: [[13, 3], [14, 3], [15, 3]]
+    [0-15] -> syscfg#7@[0-15]
+
+gpioPortG: GPIOPort.STM32_GPIOPort @ sysbus <0x58021800, +0x400>
+    numberOfAFs: 16
+    [0-15] -> syscfg#6@[0-15]
+
+gpioPortF: GPIOPort.STM32_GPIOPort @ sysbus <0x58021400, +0x400>
+    numberOfAFs: 16
+    invertedAFPins: [[8, 1], [9, 1]]
+
+    [0-15] -> syscfg#5@[0-15]
+
+gpioPortE: GPIOPort.STM32_GPIOPort @ sysbus <0x58021000, +0x400>
+    numberOfAFs: 16
+    invertedAFPins: [[4, 4], [8, 1], [10, 1], [12, 1]]
+    [0-15] -> syscfg#4@[0-15]
+
+gpioPortD: GPIOPort.STM32_GPIOPort @ sysbus <0x58020C00, +0x400>
+    numberOfAFs: 16
+    [0-15] -> syscfg#3@[0-15]
+
+gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x58020800, +0x400>
+    numberOfAFs: 16
+    [0-15] -> syscfg#2@[0-15]
+
+gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x58020400, +0x400>
+    numberOfAFs: 16
+    invertedAFPins: [[0, 1, 3], [1, 1, 3], [6, 1], [7, 1], [13, 1], [14, 1, 3], [15, 1, 3]]
+
+    [0-15] -> syscfg#1@[0-15]
+
+gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x58020000, +0x400>
+    numberOfAFs: 16
+    invertedAFPins: [[5, 3], [7, 1, 3]]
+    [0-15] -> syscfg#0@[0-15]
+
+rtc: Timers.STM32F4_RTC @ sysbus 0x58004000
+    AlarmIRQ -> nvic0@41
+    WakeupIRQ -> nvic0@3
+
+spi4: SPI.STM32H7_SPI @ sysbus 0x40013400
+    DMARecieve -> dmamux1@83
+
+i2c4: I2C.STM32F7_I2C @ sysbus 0x58001C00
+    EventInterrupt -> nvic0@95
+    ErrorInterrupt -> nvic0@96
+
+lpuart1: UART.STM32F7_USART @ sysbus 0x58000C00
+    frequency: 125000000
+    IRQ -> nvic0@142
+
+syscfg: Miscellaneous.STM32_SYSCFG @ sysbus 0x58000400
+
+dma2d: DMA.STM32DMA2D @ sysbus 0x52001000
+    -> nvic0@90
+
+ltdc: Video.STM32LTDC @ sysbus 0x50001000
+    -> nvic0@88
+
+adcM1S2: Analog.STM32F0_ADC @ sysbus 0x40022000
+    referenceVoltage: 3.3
+    externalEventFrequency: 1000
+    -> nvic0@18
+
+rng: Miscellaneous.STM32F4_RNG @ sysbus 0x48021800
+    -> nvic0@80
+
+dma2: DMA.STM32DMA @ sysbus 0x40020400
+    [0-7] -> nvic0@[56-60, 68-70]
+
+dma1: DMA.STM32DMA @ sysbus 0x40020000
+    [0-7] -> nvic0@[11-17, 47]
+
+dmamux1: Miscellaneous.STM32_DMAMUX @ sysbus 0x40020800
+    numberOfOutputRequestChannels: 16
+    numberOfRequestGeneratorChannels: 8
+    [0-7] -> dma1@[0-7]
+    [8-15] -> dma2@[0-7]
+
+timer17: Timers.STM32_Timer @ sysbus 0x40014800
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@118
+
+timer16: Timers.STM32_Timer @ sysbus 0x40014400
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@117
+
+timer15: Timers.STM32_Timer @ sysbus 0x40014000
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@116
+
+usart6: UART.STM32F7_USART @ sysbus 0x40011400
+    frequency: 200000000
+    IRQ -> nvic0@71
+
+usart1: UART.STM32F7_USART @ sysbus 0x40011000
+    frequency: 200000000
+    IRQ -> nvic0@37
+
+timer8: Timers.STM32_Timer @ sysbus 0x40010400
+    initialLimit: 0xffff
+    frequency: 250000000
+    BreakInterrupt -> nvic0@43
+    UpdateInterrupt -> nvic0@44
+    [TriggerInterrupt, CommutationInterrupt] -> nvic0@[45, 45]
+    CaptureCompareInterrupt -> nvic0@46
+
+timer1: Timers.STM32_Timer @ sysbus 0x40010000
+    initialLimit: 0xffff
+    frequency: 250000000
+    BreakInterrupt -> nvic0@24
+    UpdateInterrupt -> nvic0@25
+    [TriggerInterrupt, CommutationInterrupt] -> nvic0@[26, 26]
+    CaptureCompareInterrupt -> nvic0@27
+
+uart8: UART.STM32F7_USART @ sysbus 0x40007C00
+    frequency: 125000000
+    IRQ -> nvic0@83
+
+uart7: UART.STM32F7_USART @ sysbus 0x40007800
+    frequency: 125000000
+    IRQ -> nvic0@82
+
+i2c3: I2C.STM32F7_I2C @ sysbus 0x40005C00
+    EventInterrupt -> nvic0@72
+    ErrorInterrupt -> nvic0@73
+
+i2c2: I2C.STM32F7_I2C @ sysbus 0x40005800
+    EventInterrupt -> nvic0@33
+    ErrorInterrupt -> nvic0@34
+
+i2c1: I2C.STM32F7_I2C @ sysbus 0x40005400
+    EventInterrupt -> nvic0@31
+    ErrorInterrupt -> nvic0@32
+
+uart5: UART.STM32F7_USART @ sysbus 0x40005000
+    frequency: 125000000
+    IRQ -> nvic0@53
+
+uart4: UART.STM32F7_USART @ sysbus 0x40004C00
+    frequency: 125000000
+    IRQ -> nvic0@52
+
+usart3: UART.STM32F7_USART @ sysbus 0x40004800
+    frequency: 125000000
+    IRQ -> nvic0@39
+
+usart2: UART.STM32F7_USART @ sysbus 0x40004400
+    frequency: 125000000
+    IRQ -> nvic0@38
+
+timer14: Timers.STM32_Timer @ sysbus 0x40002000
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@45
+
+timer13: Timers.STM32_Timer @ sysbus 0x40001C00
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@44
+
+timer12: Timers.STM32_Timer @ sysbus 0x40001800
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@43
+
+timer7: Timers.STM32_Timer @ sysbus 0x40001400
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@55
+
+timer6: Timers.STM32_Timer @ sysbus 0x40001000
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@54
+
+timer5: Timers.STM32_Timer @ sysbus 0x40000C00
+    initialLimit: 0xffffffff
+    frequency: 250000000
+    -> nvic0@50
+
+timer4: Timers.STM32_Timer @ sysbus 0x40000800
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@30
+
+timer3: Timers.STM32_Timer @ sysbus 0x40000400
+    initialLimit: 0xffff
+    frequency: 250000000
+    -> nvic0@29
+
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    initialLimit: 0xffffffff
+    frequency: 250000000
+    -> nvic0@28
+
+fdcan1: CAN.MCAN @ sysbus 0x4000A000
+    Line0 -> nvic0@19
+    Line1 -> nvic0@21
+    Calibration -> nvic0@63
+    messageRAM: canMessageRAM
+
+fdcan2: CAN.MCAN @ sysbus 0x4000A400
+    Line0 -> nvic0@20
+    Line1 -> nvic0@22
+    Calibration -> nvic0@63
+    messageRAM: canMessageRAM
+
+canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x2800>
+    size: 0x2800
+
+backupSram: Memory.MappedMemory @ sysbus 0x38800000
+    size: 0x1000
+
+sram4: Memory.MappedMemory @ sysbus 0x38000000
+    size: 0x10000
+
+// D2 domain SRAM, aliased at 0x1000_0000 for the Cortex-M4 view
+sram3: Memory.MappedMemory @ {
+        sysbus 0x30040000;
+        sysbus 0x10040000
+    }
+    size: 0x8000
+
+sram2: Memory.MappedMemory @ {
+        sysbus 0x30020000;
+        sysbus 0x10020000
+    }
+    size: 0x20000
+
+sram1: Memory.MappedMemory @ {
+        sysbus 0x30000000;
+        sysbus 0x10000000
+    }
+    size: 0x20000
+
+axiSram: Memory.MappedMemory @ sysbus 0x24000000
+    size: 0x80000
+
+// DTCM is private to the Cortex-M7 (CPU0)
+dtcm: Memory.MappedMemory @ sysbus new Bus.BusPointRegistration { address: 0x20000000; cpu: cpu0 }
+    size: 0x20000
+
+system_flash_ro: Memory.MappedMemory @ sysbus 0x1FF00000
+    size: 0x20000
+    init:
+        // This is readonly FLASH_SIZE field which is located inside system flash
+        WriteWord 0x1E880 0x800
+
+flashBank2: Memory.MappedMemory @ sysbus 0x08100000
+    size: 0x100000
+
+// ITCM is private to the Cortex-M7 (CPU0)
+itcm: Memory.MappedMemory @ sysbus new Bus.BusPointRegistration { address: 0x00000000; cpu: cpu0 }
+    size: 0x10000
+
+crc: CRC.STM32_CRC @ sysbus 0x58024C00
+    series: STM32Series.F0
+    configurablePoly: true
+
+lptimer1: Timers.STM32L0_LpTimer @ sysbus 0x40002400
+    frequency: 32000000
+    -> nvic0@93
+
+lptimer2: Timers.STM32L0_LpTimer @ sysbus 0x58002400
+    frequency: 32000000
+    -> nvic0@138
+
+lptimer3: Timers.STM32L0_LpTimer @ sysbus 0x58002800
+    frequency: 32000000
+    -> nvic0@139
+
+lptimer4: Timers.STM32L0_LpTimer @ sysbus 0x58002C00
+    frequency: 32000000
+    -> nvic0@140
+
+lptimer5: Timers.STM32L0_LpTimer @ sysbus 0x58003000
+    frequency: 32000000
+    -> nvic0@141
+
+watchdog: Timers.STM32_IndependentWatchdog @ sysbus 0x58004800
+    frequency: 56000
+
+ethernet: Network.SynopsysDWCEthernetQualityOfService @ {
+    sysbus 0x40028000;
+    sysbus new Bus.BusMultiRegistration { address: 0x40028C00; size: 0x200; region: "mtl" };
+    sysbus new Bus.BusMultiRegistration { address: 0x40029000; size: 0x200; region: "dma" }
+    }
+    systemClockFrequency: 50000000
+    dmaBusWidth: BusWidth.Bits32
+    -> nvic0@61
+
+qspi: SPI.STM32H7_QuadSPI @ sysbus 0x52005000
+    -> nvic0@92
+
+// Alternate function mapping connections. For more details see `stm32l071.repl`.
+timer1:
+    0 -> gpioPortA#07@01 | gpioPortA#08@01 | gpioPortB#13@01 | gpioPortE#08@01 | gpioPortE#09@01 | gpioPortK#00@01 | gpioPortK#01@01
+    1 -> gpioPortA#09@01 | gpioPortB#00@01 | gpioPortB#14@01 | gpioPortE#10@01 | gpioPortE#11@01 | gpioPortJ#10@01 | gpioPortJ#11@01
+    2 -> gpioPortA#10@01 | gpioPortB#01@01 | gpioPortB#15@01 | gpioPortE#12@01 | gpioPortE#13@01 | gpioPortJ#08@01 | gpioPortJ#09@01
+    3 -> gpioPortA#11@01 | gpioPortE#14@01
+
+timer2:
+    0 -> gpioPortA#00@01 | gpioPortA#05@01 | gpioPortA#15@01
+    1 -> gpioPortA#01@01 | gpioPortB#03@01
+    2 -> gpioPortA#02@01 | gpioPortB#10@01
+    3 -> gpioPortA#03@01 | gpioPortB#11@01
+
+timer3:
+    0 -> gpioPortA#06@02 | gpioPortB#04@02 | gpioPortC#06@02
+    1 -> gpioPortA#07@02 | gpioPortB#05@02 | gpioPortC#07@02
+    2 -> gpioPortB#00@02 | gpioPortC#08@02
+    3 -> gpioPortB#01@02 | gpioPortC#09@02
+
+timer4:
+    0 -> gpioPortB#06@02 | gpioPortD#12@02
+    1 -> gpioPortB#07@02 | gpioPortD#13@02
+    2 -> gpioPortB#08@02 | gpioPortD#14@02
+    3 -> gpioPortB#09@02 | gpioPortD#15@02
+
+timer5:
+    0 -> gpioPortA#00@02 | gpioPortH#10@02
+    1 -> gpioPortA#01@02 | gpioPortH#11@02
+    2 -> gpioPortA#02@02 | gpioPortH#12@02
+    3 -> gpioPortA#03@02 | gpioPortI#00@02
+
+timer8:
+    0 -> gpioPortA#05@03 | gpioPortA#07@03 | gpioPortC#06@03 | gpioPortI#05@03 | gpioPortJ#08@03 | gpioPortJ#09@03
+    1 -> gpioPortB#00@03 | gpioPortB#14@03 | gpioPortC#07@03 | gpioPortI#06@03 | gpioPortJ#06@03 | gpioPortJ#07@03 | gpioPortJ#10@03 | gpioPortJ#11@03
+    2 -> gpioPortB#01@03 | gpioPortB#15@03 | gpioPortC#08@03 | gpioPortI#07@03 | gpioPortK#00@03 | gpioPortK#01@03
+    3 -> gpioPortC#09@03 | gpioPortI#02@03
+
+timer12:
+    0 -> gpioPortB#14@02 | gpioPortH#06@02
+    1 -> gpioPortB#15@02 | gpioPortH#09@02
+
+timer13:
+    0 -> gpioPortA#06@09 | gpioPortF#08@09
+
+timer14:
+    0 -> gpioPortA#07@09 | gpioPortF#09@09
+
+timer15:
+    0 -> gpioPortA#01@04 | gpioPortA#02@04 | gpioPortE#04@04 | gpioPortE#05@04
+    1 -> gpioPortA#03@04 | gpioPortE#06@04
+
+timer16:
+    0 -> gpioPortB#06@01 | gpioPortB#08@01 | gpioPortF#06@01 | gpioPortF#08@01
+
+timer17:
+    0 -> gpioPortB#07@01 | gpioPortB#09@01 | gpioPortF#07@01 | gpioPortF#09@01
+
+sdmmc: SD.STM32HSDMMC @ sysbus 0x52007000
+    IRQ -> nvic0@49
+
+sysbus:
+    init add:
+        // Deterministic, synchronized execution of both cores
+        Machine SetSerialExecution True
+        Tag <0x58027000, 0x580273FF> "RAMECC3"
+        Tag <0x58025800, 0x58025BFF> "DMAMUX2"
+        Tag <0x58005400, 0x580057FF> "SAI4"
+        Tag <0x58003C00, 0x58003FFF> "VREF"
+        Tag <0x58003800, 0x58003BFF> "COMP1_-_COMP2"
+        Tag <0x58001400, 0x580017FF> "SPI6"
+        Tag <0x52009000, 0x520093FF> "RAMECC1"
+        Tag <0x52008000, 0x52008FFF> "Delay_Block_SDMMC1"
+        Tag <0x52006000, 0x52006FFF> "Delay_Block_QUADSPI"
+        Tag <0x52004000, 0x52004FFF> "FMC_control_registers"
+        Tag <0x52003000, 0x52003FFF> "JPEG"
+        Tag <0x52000000, 0x52000FFF> "MDMA"
+        Tag <0x51000000, 0x510FFFFF> "GPV_matrix_(AXIM)"
+        Tag <0x50003000, 0x50003FFF> "WWDG1"
+        Tag <0x48023000, 0x480233FF> "RAMECC2"
+        Tag <0x48022800, 0x48022BFF> "Delay_Block_SDMMC2"
+        Tag <0x48022400, 0x480227FF> "SDMMC2"
+        Tag <0x48021400, 0x480217FF> "HASH"
+        Tag <0x48020000, 0x480203FF> "DCMI"
+        Tag <0x40080000, 0x400BFFFF> "USB2_OTG_FS"
+        Tag <0x40040000, 0x4007FFFF> "USB1_OTG_HS"
+        Tag <0x40017400, 0x400177FF> "HRTIM"
+        Tag <0x40017000, 0x400173FF> "DFSDM1"
+        Tag <0x40016000, 0x400163FF> "SAI3"
+        Tag <0x40015C00, 0x40015FFF> "SAI2"
+        Tag <0x40015800, 0x40015BFF> "SAI1"
+        Tag <0x40015000, 0x400153FF> "SPI5"
+        Tag <0x40013000, 0x400133FF> "SPI1_/_I2S1"
+        Tag <0x4000A800, 0x4000ABFF> "CAN_CCU"
+        Tag <0x40009400, 0x400097FF> "MDIOS"
+        Tag <0x40009000, 0x400093FF> "OPAMP"
+        Tag <0x40008800, 0x40008BFF> "SWPMI"
+        Tag <0x40008400, 0x400087FF> "CRS"
+        Tag <0x40007400, 0x400077FF> "DAC1"
+        Tag <0x40006C00, 0x40006FFF> "HDMI-CEC"
+        Tag <0x40004000, 0x400043FF> "SPDIFRX1"
+        Tag <0x40003C00, 0x40003FFF> "SPI3_/_I2S3"
+        Tag <0x40003800, 0x40003BFF> "SPI2_/_I2S2"
