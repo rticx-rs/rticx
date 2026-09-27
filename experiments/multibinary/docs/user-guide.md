@@ -2,7 +2,7 @@
 
 Status: **outline**. Sections marked *implemented* describe behaviour that
 exists in M0; the rest is the target workflow, completed by
-[M5-T3](../../../multibinary-multicore-plan.md#m5--multi-sourcetarget-readyepoch-complete-docs)
+[M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs)
 once M1–M4 land.
 
 1. [Installing `cargo-xbin`](#1-installing-cargo-xbin)
@@ -197,17 +197,17 @@ sender without `core`; a receiver `core` outside `0..cores`; `external_cores`
 overlapping the application's own `core_ids` or repeating an id; and either
 attribute on a non-struct item or both on one item.
 
-*TODO(M5-T3):* worked example, capacity/backpressure semantics, visibility
+*TODO(M6-T3):* worked example, capacity/backpressure semantics, visibility
 rules, what happens on a rejected spawn (`Err(Some(input))`).
 
 ## 6. Building and running
 
-*Implemented through M1-T6:*
+*Implemented through M4-T1:*
 
 ```bash
 cargo xbin --help     # CLI overview
 cargo xbin sync       # validate rticx.toml, collect <app>.xbin.json per application
-cargo xbin build      # sync, then build every application (builds land in M4)
+cargo xbin build      # sync, then build every application
 ```
 
 `sync` parses `rticx.toml` and `ipc-types.toml`, creates
@@ -232,12 +232,22 @@ region in the error. The sealed system view is written to
 generated/updated (M1-T7). `sync` prints one line per created or updated file,
 or `ipc-types is up to date` when nothing changed; since only changed files
 are rewritten, an unchanged IDL does not retrigger builds of the apps that
-depend on the crate. M4 then adds building the applications. `build` always
-runs `sync` first; a plain `cargo build` after an explicit `sync` is
-supported, but fails with a staleness error (stale `system.json` or a source
-hash mismatch) once sources changed, until the next `sync`.
+depend on the crate.
 
-*TODO(M5-T3):* flashing/running per target, QEMU/Renode runners, cache/MPU
+After `sync`, `build` compiles every `[[application]]` with
+`cargo build --package <package> --bin <target>` (plus `--target <triple>`
+when the application declares one) and `RTICX_XBIN_SYSTEM` pointing at the
+`system.json` it just wrote, so the pass generates the cross-binary code and
+the freshness checks reject a stale view or a source changed after `sync`
+(M4-T1). `build` always runs `sync` first; a plain `cargo build` after an
+explicit `sync` is supported, but fails with a staleness error (stale
+`system.json` or a source hash mismatch) once sources changed, until the next
+`sync`. Without a synced view (for example after `cargo clean`), an
+application with cross-binary declarations fails with
+``failed to read the system view …; run `cargo xbin sync` `` instead of
+silently generating no code.
+
+*TODO(M6-T3):* flashing/running per target, QEMU/Renode runners, cache/MPU
 setup checklist, expected boot order.
 
 ## 7. Common errors
@@ -280,12 +290,13 @@ setup checklist, expected boot order.
 | ``task `T` … uses type `Y`, which is not declared in `ipc-types.toml` `` | declare `[message.Y]`/`[enum.Y]` or fix the path |
 | ``tasks `A` … and `B` … share priority P on core N`` | give tasks from different source cores disjoint priority lines |
 | ``task `T` needs a `S->T` region`` | add that direction to `[ipc.regions]` |
-| ``the `S->T` region has N bytes, but its task FIFOs need M`` | enlarge the region or lower task `capacity` |
+| ``task `T` does not fit the `S->T` region: N bytes needed, M available`` | enlarge the region or lower task `capacity` |
 
-*Freshness/staleness errors (M3-T4):*
+*Freshness/staleness errors (M3-T4, M4-T3):*
 
 | Message (excerpt) | Fix |
 |---|---|
+| ``failed to read the system view `…/system.json`: …`` | no view was synced (for example after `cargo clean`); run `cargo xbin sync` (or `cargo xbin build`) |
 | ``the system view `…/system.json` is stale: its `topology_hash` (…) does not match its contents (…)`` | the view was edited without a full sync; run `cargo xbin sync` (or `cargo xbin build`) |
 | ``application `x` changed since the last `cargo xbin sync` (the system view records source hash …, the source hashes to …)`` | the source changed after the last `sync`; run `cargo xbin sync` before a plain `cargo build` |
 
@@ -293,5 +304,5 @@ Every generated application embeds the `__RTICX_XBIN_TOPOLOGY_HASH` it was
 built from and `include_str!`s the system view, so rustc's dep-info rebuilds
 the application when `target/rticx-xbin/system.json` changes.
 
-*TODO(M3–M5):* runtime errors (target not ready, doorbell failure), cache/MPU
+*TODO(M3–M6):* runtime errors (target not ready, doorbell failure), cache/MPU
 misconfiguration and the remaining troubleshooting guide.

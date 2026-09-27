@@ -24,6 +24,39 @@ use rticx_xbin_proto::SystemView;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+/// Saves and restores environment variables around a test that sets them.
+struct EnvGuard {
+    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl EnvGuard {
+    fn set_all(vars: &[(&'static str, &std::ffi::OsStr)]) -> Self {
+        let saved = vars
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect();
+        for (name, value) in vars {
+            // SAFETY: the process environment is guarded by ENV_LOCK.
+            unsafe { std::env::set_var(name, value) };
+        }
+        Self { saved }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.saved {
+            // SAFETY: the process environment is guarded by ENV_LOCK.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
+
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
@@ -1346,36 +1379,6 @@ fn codegen_mode_is_detected_from_the_environment() {
     )
     .expect("system.json");
 
-    struct EnvGuard {
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    }
-    impl EnvGuard {
-        fn set_all(vars: &[(&'static str, &std::ffi::OsStr)]) -> Self {
-            let saved = vars
-                .iter()
-                .map(|(name, _)| (*name, std::env::var_os(name)))
-                .collect();
-            for (name, value) in vars {
-                // SAFETY: the process environment is guarded by ENV_LOCK.
-                unsafe { std::env::set_var(name, value) };
-            }
-            Self { saved }
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                // SAFETY: the process environment is guarded by ENV_LOCK.
-                unsafe {
-                    match value {
-                        Some(value) => std::env::set_var(name, value),
-                        None => std::env::remove_var(name),
-                    }
-                }
-            }
-        }
-    }
-
     // Without the variables, the pass is syntax-only in this workspace (no
     // `rticx.toml` above the crate).
     assert!(!XbinPass::from_env().is_codegen_mode());
@@ -1393,4 +1396,30 @@ fn codegen_mode_is_detected_from_the_environment() {
         .run_pass(sender_args(), sender_app())
         .expect("codegen succeeds");
     assert!(module.to_token_stream().to_string().contains("cross_spawn"));
+}
+
+#[test]
+fn discovered_project_root_without_a_synced_view_is_a_hard_error() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("rticx.toml"), "schema = 1\n").expect("rticx.toml");
+
+    // A discovered project root selects codegen mode even before the first
+    // `cargo xbin sync` wrote the view, so an application with cross-binary
+    // declarations fails instead of silently generating no code.
+    let _env = EnvGuard::set_all(&[
+        ("CARGO_MANIFEST_DIR", dir.path().as_os_str()),
+        ("CARGO_PKG_NAME", std::ffi::OsStr::new("app-m7")),
+        ("CARGO_BIN_NAME", std::ffi::OsStr::new("m7")),
+    ]);
+    let pass = XbinPass::from_env();
+    assert!(pass.is_codegen_mode());
+
+    let error = pass
+        .with_backend(TestBackend)
+        .run_pass(sender_args(), sender_app())
+        .expect_err("a cross-binary application without a synced view must fail")
+        .to_string();
+    assert!(error.contains("failed to read the system view"), "{error}");
+    assert!(error.contains("run `cargo xbin sync`"), "{error}");
 }

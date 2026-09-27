@@ -189,7 +189,7 @@ pub trait CrossBinBackend {
     ///
     /// The default implementation delegates to [`SharedState::is_ready`];
     /// spawn paths should use [`SharedState::is_ready_at`] with the cached
-    /// epoch instead (M5).
+    /// epoch instead (M6).
     fn is_ready(&self, core: u32) -> bool {
         self.shared_state().is_ready(core)
     }

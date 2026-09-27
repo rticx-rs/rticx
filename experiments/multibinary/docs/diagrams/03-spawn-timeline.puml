@@ -1,7 +1,7 @@
 @startuml 03-spawn-timeline
 ' Diagram 3 — Spawn flow A->B: producer, FIFO, doorbell, ISR, dispatcher, exec.
 ' Source of truth: docs/architecture.md §4 §7, plan §8.
-' TODO(M5-T4): author this diagram.
+' TODO(M6-T4): author this diagram.
 
 title spawn flow A -> B (stub)
 
@@ -9,6 +9,6 @@ skinparam shadowing false
 skinparam monochrome true
 skinparam defaultFontName monospace
 
-note "TODO(M5-T4): author this diagram" as todo
+note "TODO(M6-T4): author this diagram" as todo
 
 @enduml

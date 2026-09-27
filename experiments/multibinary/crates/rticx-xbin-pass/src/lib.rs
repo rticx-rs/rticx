@@ -145,8 +145,11 @@ impl XbinPass {
     /// Creates the pass, detecting its mode from the environment:
     ///
     /// - [`META_OUT_ENV`] set: **metadata mode** (phase 1);
-    /// - otherwise [`SYSTEM_ENV`] set, or a `system.json` next to a discovered
-    ///   `rticx.toml`: **codegen mode** (phase 2);
+    /// - otherwise [`SYSTEM_ENV`] set, or a `rticx.toml` discovered above
+    ///   `CARGO_MANIFEST_DIR`: **codegen mode** (phase 2). The view itself is
+    ///   loaded only when the application declares cross-binary tasks: a
+    ///   missing file is then the documented "run `cargo xbin sync`" hard
+    ///   error, never a silent skip of code generation;
     /// - neither: the pass only parses and strips its syntax.
     ///
     /// This is the constructor distributions bind: cargo propagates the
@@ -276,7 +279,7 @@ impl RticPass for XbinPass {
             write_manifest(meta, &manifest)?;
         }
 
-        // TODO(M5): an application listed in the view but declaring no cross
+        // TODO(M6): an application listed in the view but declaring no cross
         // task never loads it, so it gets no configure/ready hooks either. A
         // topology whose owner or peer has no cross task needs them.
         if let Some(system) = &self.system
@@ -357,8 +360,12 @@ fn append_items(app_mod: &mut ItemMod, items: Vec<syn::Item>) {
 
 /// Resolves the codegen-mode configuration from the environment.
 ///
-/// Returns `None` when no `system.json` is configured or found; applications
-/// without cross-binary declarations then simply generate nothing.
+/// Both an explicit [`SYSTEM_ENV`] path and a `rticx.toml` discovered above
+/// `CARGO_MANIFEST_DIR` select codegen mode, whether or not the view exists:
+/// an application with cross-binary declarations and no synced view must fail
+/// with the "run `cargo xbin sync`" error instead of silently generating
+/// nothing. Applications without cross-binary declarations never load the
+/// view, so they are unaffected.
 fn system_from_env() -> Option<SystemMode> {
     let package = non_empty_env("CARGO_PKG_NAME");
     let target = non_empty_env("CARGO_BIN_NAME");
@@ -372,9 +379,8 @@ fn system_from_env() -> Option<SystemMode> {
     }
 
     let root = project_root_from_env()?;
-    let path = root.join("target").join("rticx-xbin").join(SYSTEM_FILE);
-    path.is_file().then_some(SystemMode {
-        path,
+    Some(SystemMode {
+        path: root.join("target").join("rticx-xbin").join(SYSTEM_FILE),
         package,
         target,
     })

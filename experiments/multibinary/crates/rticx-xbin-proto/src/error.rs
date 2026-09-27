@@ -448,7 +448,7 @@ pub enum MergeError {
     /// A task is spawned by more than one core.
     #[error(
         "task `{task}` is spawned by global cores {spawners:?}; v1 supports exactly one \
-         producer core per task, multi-source tasks land in M5-T1"
+         producer core per task, multi-source tasks land in M6-T1"
     )]
     MultipleSpawners {
         /// The task name.

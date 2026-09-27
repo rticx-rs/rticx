@@ -1,7 +1,7 @@
 @startuml 02-sync-build-pipeline
 ' Diagram 2 — Phase 1 sync -> merge/validate/allocate -> Phase 2 build pipeline.
 ' Source of truth: docs/architecture.md §3–§4, plan §7–§8.
-' TODO(M5-T4): author this diagram.
+' TODO(M6-T4): author this diagram.
 
 title sync -> merge/validate/allocate -> build (stub)
 
@@ -9,6 +9,6 @@ skinparam shadowing false
 skinparam monochrome true
 skinparam defaultFontName monospace
 
-note "TODO(M5-T4): author this diagram" as todo
+note "TODO(M6-T4): author this diagram" as todo
 
 @enduml

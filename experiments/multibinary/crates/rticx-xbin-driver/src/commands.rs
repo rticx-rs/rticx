@@ -1,10 +1,10 @@
 //! `sync` and `build` implementations.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use rticx_xbin_pass::META_OUT_ENV;
+use rticx_xbin_pass::{META_OUT_ENV, SYSTEM_ENV};
 use rticx_xbin_proto::{
     AppManifest, Application, CodegenOptions, CrateStatus, GENERATED_CRATE_NAME, IpcTypes,
     MergedProject, ProjectConfig, RTICX_GENERATION, RtDependency, SystemView, generate_crate,
@@ -170,7 +170,7 @@ pub fn sync(project_root: &Path) -> Result<SyncOutcome, DriverError> {
 ///
 /// The generated crate lives at `<project root>/ipc-types`, so the dependency
 /// is expressed as a path relative to that directory. The in-tree runtime
-/// crate is located next to the driver's own package; after extraction (M6)
+/// crate is located next to the driver's own package; after extraction (M7)
 /// this becomes a registry version.
 fn rt_dependency(project_root: &Path) -> RtDependency {
     let rt = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rticx-xbin-rt");
@@ -256,7 +256,12 @@ fn collect_manifest(
     // `RTICX_XBIN_META_OUT` is invisible to Cargo's fingerprints, so cached
     // artifacts from an earlier run (with a different output directory) must
     // not be reused.
-    run_cargo(project_root, &argv(&["clean", "--package", package]), None)?;
+    run_cargo(
+        project_root,
+        &argv(&["clean", "--package", package]),
+        &[],
+        &[],
+    )?;
 
     // Never read a manifest left over from a previous run: the pass must
     // write it for *this* check.
@@ -272,7 +277,12 @@ fn collect_manifest(
     if let Some(triple) = application.target().triple() {
         check.extend(argv(&["--target", triple]));
     }
-    run_cargo(project_root, &check, Some(output_dir))?;
+    run_cargo(
+        project_root,
+        &check,
+        &[(META_OUT_ENV, output_dir.as_os_str())],
+        &[SYSTEM_ENV],
+    )?;
 
     let source =
         std::fs::read_to_string(&manifest_path).map_err(|source| DriverError::MissingManifest {
@@ -283,22 +293,32 @@ fn collect_manifest(
     Ok(AppManifest::from_json(&source)?)
 }
 
-/// Runs `cargo <args>` in `project_root`, optionally with
-/// `RTICX_XBIN_META_OUT=<output_dir>` set for the compiler (and therefore for
-/// the `#[app]` proc macro).
+/// Runs `cargo <args>` in `project_root` with the given environment variables
+/// set (`envs`) and removed (`unset`) for the compiler, and therefore for the
+/// `#[app]` proc macro.
+///
+/// The driver uses this to select the pass mode: `RTICX_XBIN_META_OUT` for the
+/// metadata `cargo check`s of [`sync`], `RTICX_XBIN_SYSTEM` for the
+/// application builds of [`build`]. The other mode's variable is removed so an
+/// inherited value (for example `RTICX_XBIN_META_OUT` exported in the user's
+/// shell) can never select the wrong mode.
 ///
 /// Output is captured so library users and tests stay quiet; on failure the
 /// captured standard error is part of [`DriverError::CargoFailed`].
 fn run_cargo(
     project_root: &Path,
     args: &[String],
-    meta_out: Option<&Path>,
+    envs: &[(&str, &OsStr)],
+    unset: &[&str],
 ) -> Result<(), DriverError> {
     let command_line = format!("cargo {}", args.join(" "));
     let mut command = Command::new(cargo_binary());
     command.args(args).current_dir(project_root);
-    if let Some(out_dir) = meta_out {
-        command.env(META_OUT_ENV, out_dir);
+    for name in unset {
+        command.env_remove(name);
+    }
+    for (name, value) in envs {
+        command.env(name, value);
     }
 
     let output = command.output().map_err(|source| DriverError::CargoSpawn {
@@ -330,21 +350,63 @@ fn cargo_binary() -> OsString {
     std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
 }
 
+/// One application built by [`build`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppBuild {
+    /// Cargo package that was built.
+    pub package: String,
+    /// Cargo binary target that was built.
+    pub target: String,
+}
+
 /// Result of a `cargo xbin build` run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildOutcome {
     /// The `sync` phase that ran first.
     pub sync: SyncOutcome,
+    /// The applications built after `sync`, in `rticx.toml` order (empty
+    /// without a project manifest).
+    pub builds: Vec<AppBuild>,
 }
 
-/// Phase 2 entry point: `sync`, then build every application.
+/// Phase 2 entry point: `sync`, then build every application of the project
+/// against the `system.json` it emitted (M4-T1).
 ///
-/// Until M4 this only runs the `sync` phase; building the applications
-/// against the emitted `system.json` lands in M4.
+/// Each application is built with `cargo build --package <package> --bin
+/// <target>` (plus `--target <triple>` when declared), with
+/// `RTICX_XBIN_SYSTEM` pointing at the just-written system view. The pass then
+/// runs in codegen mode and the freshness checks (stale `topology_hash`,
+/// source hash) guarantee the build matches the synced view. Without a project
+/// manifest there is nothing to build, so `build` only lays out
+/// `target/rticx-xbin/`.
 pub fn build(project_root: &Path) -> Result<BuildOutcome, DriverError> {
-    // TODO(M4): after sync, build every application with the generated
-    // `system.json`.
-    Ok(BuildOutcome {
-        sync: sync(project_root)?,
-    })
+    let sync = sync(project_root)?;
+
+    // The pass can discover the view from the project root, but the driver
+    // knows the exact path it just wrote; passing it explicitly keeps the
+    // build independent of the application's directory layout.
+    let system = std::path::absolute(sync.output_dir.join(SYSTEM_FILE))
+        .unwrap_or_else(|_| sync.output_dir.join(SYSTEM_FILE));
+
+    let mut builds = Vec::with_capacity(sync.applications().len());
+    for application in sync.applications() {
+        let package = application.package();
+        let target = application.target().name();
+        let mut args = argv(&["build", "--package", package, "--bin", target]);
+        if let Some(triple) = application.target().triple() {
+            args.extend(argv(&["--target", triple]));
+        }
+        run_cargo(
+            project_root,
+            &args,
+            &[(SYSTEM_ENV, system.as_os_str())],
+            &[META_OUT_ENV],
+        )?;
+        builds.push(AppBuild {
+            package: package.to_string(),
+            target: target.to_string(),
+        });
+    }
+
+    Ok(BuildOutcome { sync, builds })
 }

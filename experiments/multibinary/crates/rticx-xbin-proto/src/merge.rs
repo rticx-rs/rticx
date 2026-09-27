@@ -32,7 +32,7 @@
 //!
 //! v1 supports exactly one producer core per task; senders shared by several
 //! cores (or declared by several applications) are rejected with
-//! [`MergeError::MultipleSpawners`] until M5-T1.
+//! [`MergeError::MultipleSpawners`] until M6-T1.
 //!
 //! [`merge_project`] is a pure function of its inputs and emits tasks sorted
 //! by name with deterministic ids, so identical inputs always produce an

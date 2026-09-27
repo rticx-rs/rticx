@@ -1,0 +1,23 @@
+# Project topology of the end-to-end fixture (M4-T1).
+#
+# `app-m7` owns global core 0 and `app-m4` global core 1; `EncryptTask` is
+# spawned by core 0 and runs on core 1, so only the `0->1` direction needs a
+# region.
+#
+# The fixture's mock runtime places the region in process memory and ignores
+# the addresses; they are still declared because the driver validates and
+# sizes every used direction from `rticx.toml`.
+schema = 1
+
+[[application]]
+package = "app-m7"
+target = { kind = "bin", name = "m7" }
+core_ids = [0]
+
+[[application]]
+package = "app-m4"
+target = { kind = "bin", name = "m4" }
+core_ids = [1]
+
+[ipc.regions]
+"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }

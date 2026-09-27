@@ -16,14 +16,21 @@ Status legend:
 
 - **outline** — section structure plus the parts that already exist (M0);
   remaining content is filled in by
-  [M5-T3](../../../multibinary-multicore-plan.md#m5--multi-sourcetarget-readyepoch-complete-docs).
-- **stub** — placeholder with a `TODO(M5-T4)` marker.
+  [M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
+- **stub** — placeholder with a `TODO(M6-T4)` marker.
 
-## Status snapshot (M1, through M1-T7)
+## Status snapshot (M4, through M4-T3)
 
 - `cargo xbin sync` validates `rticx.toml`, collects `<app>.xbin.json`
   per application, merges/validates the project, allocates the per-task FIFOs,
   emits the sealed `target/rticx-xbin/system.json` and generates/updates the
   `ipc-types/` crate, rewriting only changed files.
-- Phase-2 codegen (M3) and building the applications (M4) are still pending,
-  so parts of the guide are marked *planned*.
+- Phase-2 codegen (M3) and `cargo xbin build` (M4-T1) generate and link the
+  sender `cross_spawn`, the receiver doorbell dispatchers and the init hooks
+  for the in-tree `fixtures/e2e` mock distribution.
+- M4-T2 runs the generated sender and receiver in one host process over the
+  mock runtime (spawn → dispatcher → input verification, FIFO backpressure),
+  and M4-T3 asserts the documented errors for a missing sync, a stale view or
+  source, priority conflicts, unknown types and region overflow.
+- M5 (native `core_ids` in `rticx-core`) and M6 (multi-source/target,
+  ready/epoch, complete docs) are still pending.

@@ -7,7 +7,8 @@
 //!   and validate the system view (M1-T5), allocate the per-task FIFO
 //!   addresses and emit `target/rticx-xbin/system.json` (M1-T6), and
 //!   generate/update the `ipc-types` crate (M1-T7);
-//! - `cargo xbin build`: `sync`, then build every application.
+//! - `cargo xbin build`: `sync`, then build every application against the
+//!   emitted system view (M4-T1).
 
 mod cli;
 mod commands;
@@ -20,7 +21,7 @@ use clap::Parser;
 use rticx_xbin_proto::FileChange;
 
 pub use cli::{Cli, Command};
-pub use commands::{BuildOutcome, IpcTypesOutcome, SyncOutcome, build, sync};
+pub use commands::{AppBuild, BuildOutcome, IpcTypesOutcome, SyncOutcome, build, sync};
 pub use error::DriverError;
 pub use project::{
     IDL_MANIFEST, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE, find_project_root, output_dir,

@@ -1,0 +1,6 @@
+# Type-only IDL of the end-to-end fixture (M4-T1): one message, used as the
+# spawn input of the single cross-binary task.
+schema = 1
+
+[message.EncryptReq]
+fields = { addr = "u32", len = "u32", key = "u32" }

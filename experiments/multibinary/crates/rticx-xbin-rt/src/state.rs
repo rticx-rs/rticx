@@ -49,7 +49,7 @@
 //! [`SharedState::is_ready_at`] after any reset returns `false` until the
 //! spawner refreshes its observation (`epoch()` plus `is_ready(target)`).
 //! This is the stale-epoch detection the plan requires; the generated spawn
-//! integration lands in M5-T2.
+//! integration lands in M6-T2.
 //!
 //! # Target requirements
 //!

@@ -2,8 +2,8 @@
 
 Status: **outline**. The design is specified in
 [`multibinary-multicore-plan.md`](../../../multibinary-multicore-plan.md);
-this document condenses it and records which parts exist in M0. Completed by
-[M5-T3](../../../multibinary-multicore-plan.md#m5--multi-sourcetarget-readyepoch-complete-docs).
+this document condenses it and records which parts exist through M4. Completed
+by [M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
 
 1. [Goals and non-goals](#1-goals-and-non-goals)
 2. [Layers and crates](#2-layers-and-crates)
@@ -32,8 +32,8 @@ Out of scope (v1): async tasks, cross-binary `#[shared]` resources/locks,
 zero-copy bulk transfer, dynamic memory, more than one binary per core group,
 root-workspace/release integration.
 
-*TODO(M5-T3): link the acceptance demo description (STM32H7 M7+M4 under
-Renode, M6).*
+*TODO(M6-T3): link the acceptance demo description (STM32H7 M7+M4 under
+Renode, M7).*
 
 ## 2. Layers and crates
 
@@ -48,11 +48,11 @@ core
      rticx-xbin-driver: cargo-xbin sync/build (M0 skeleton, M1 pipeline)
 ```
 
-| Crate | State (M3, in progress) |
+| Crate | State (M4, in progress) |
 |---|---|
 | `rticx-xbin-proto` | IDL parse/validate, layout engine, crate generator with change-detecting write (`GeneratedCrate::write_if_changed`), `rticx.toml` parse/validate, `Hash64`, `system.json` / manifest schemas, merge + validation + FIFO allocation, `system_view` emission and the canonical FIFO image (`fifo`) |
-| `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `ipc-types` generation with change detection; `build` = `sync` for now (app builds in M4) |
-| `rticx-xbin-pass` | metadata mode: `#[app]` additions and `#[cross_bin_task]`/`#[cross_bin_spawn]` syntax confirmed and stripped (M1-T3), `<target>.xbin.json` emit (M1-T2); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path), filters it and emits the sender FIFO views and `Task::cross_spawn` (M3-T1), the receiver FIFO views and doorbell dispatchers (M3-T2), the init hooks (`__rticx_xbin_init_shared` on the owner, `__rticx_xbin_mark_ready_core<N>` per core) wired into the entry functions via `RticPass::main_injection` (M3-T3), and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view) plus the stale-view and stale-source hard errors (M3-T4) |
+| `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `ipc-types` generation with change detection; `build`: `sync`, then `cargo build --package … --bin …` per application with `RTICX_XBIN_SYSTEM` pointing at the just-written view (M4-T1) |
+| `rticx-xbin-pass` | metadata mode: `#[app]` additions and `#[cross_bin_task]`/`#[cross_bin_spawn]` syntax confirmed and stripped (M1-T3), `<target>.xbin.json` emit (M1-T2); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path), filters it and emits the sender FIFO views and `Task::cross_spawn` (M3-T1), the receiver FIFO views and doorbell dispatchers (M3-T2), the init hooks (`__rticx_xbin_init_shared` on the owner, `__rticx_xbin_mark_ready_core<N>` per core) wired into the entry functions via `RticPass::main_injection` (M3-T3), and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view) plus the stale-view and stale-source hard errors (M3-T4); a discovered `rticx.toml` without a synced view is also a hard error, so plain `cargo build` never silently skips code generation (M4-T3) |
 | `rticx-xbin-rt` | marker trait `CrossCoreMessage`; `Fifo<T, DEPTH>` atomic SPSC ring mirroring the canonical image (Vyukov, `Release`/`Acquire`, cache-line-padded indices, `view_at`/`init`/`split`), with a drift guard against `rticx-xbin-proto` and a threaded hand-off test; `SharedState` magic/ready-bitmap/epoch helpers (M2-T2) with stale-epoch reset tests; `backend::CrossBinBackend` + `IpcRegion`/`DoorbellError` contract (M2-T3) with no-op `configure_shared_memory`/`clean_range`/`invalidate_range` hooks and the Normal/Non-cacheable/Shareable + Device-forbidden rules documented in rustdoc (M2-T4) |
 | `rticx-xbin-mock` | `MockSystem`: aligned, zeroed in-process IPC regions, condvar mock doorbells (`ring` through the trait, `wait`/`take` for the simulated dispatcher ISR), per-handle `current_global_core_id`, ready/epoch defaults over one `SharedState`; two-thread spawn→drain over a raw `Fifo` (M2-T3) |
 
@@ -115,7 +115,14 @@ section is the human-readable reference for both.
 
 *Sender side landed in M3-T1, the receiver doorbell dispatchers in M3-T2 and
 the init hooks in M3-T3; the freshness anchors and hard errors landed in
-M3-T4. Building the applications lands in M4.*
+M3-T4. `cargo xbin build` runs phase 2 for every application in M4-T1: after
+`sync`, the driver builds each `[[application]]` with
+`cargo build --package <package> --bin <target>` and
+`RTICX_XBIN_SYSTEM=<project root>/target/rticx-xbin/system.json`, so the pass
+runs in codegen mode and the freshness checks reject a stale view or a source
+changed since `sync`. The checked-in `fixtures/e2e` project (its own mock
+distribution over `MockCoreBackend` and `MockBackend`) is the in-tree
+acceptance: both binaries compile and link on the host.*
 
 The pass reads `system.json` (`RTICX_XBIN_SYSTEM` or the default path), loads
 the distribution backend configured with `XbinPass::with_backend` (code
@@ -178,7 +185,7 @@ changes.
   (`ldrex`/`strex` invalid there). `clean_range`/`invalidate_range` are no-op
   fallback hooks for a cacheable mapping (M2-T4).
 
-*TODO(M5-T3): byte-layout worked example (message → size/align/offsets) and
+*TODO(M6-T3): byte-layout worked example (message → size/align/offsets) and
 cache-maintenance decision tree.*
 
 ## 7. Priorities and locking
@@ -250,8 +257,17 @@ against the mock until the owner core is ready (M3-T3) —, JSON round-trip);
 host mock (two threads over `rticx-xbin-rt`, backpressure, ready/epoch,
 simulated reset);
 cross-compile layout checks (`thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
-optionally `riscv32imc`); in-tree two-app fixture built via `cargo xbin
-build`.
+optionally `riscv32imc`); the in-tree two-app fixture `fixtures/e2e` built via
+`cargo xbin build` (M4-T1), with its own mock distribution so the generated
+phase-2 code compiles and links on the host.
+M4-T2 expands both fixture applications into one host binary and drives the
+generated code end to end: `cross_spawn` on the sender, the generated doorbell
+ISR/dispatcher on the receiver, input verification and FIFO backpressure
+(`Err(Some(input))`). M4-T3 adds the negative acceptance suite: a plain build
+without a synced view, a source changed after `sync`, a hand-edited
+`system.json`, a priority line shared by two source cores, an input type absent
+from the IDL and a region too small for its FIFOs, each asserted against its
+documented message.
 
 ## 12. Open questions
 

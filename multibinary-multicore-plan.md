@@ -68,7 +68,7 @@ the design:
 | Driver UX | `cargo xbin sync` and `cargo xbin build` (= sync + build); granular per-app cargo/clippy workflows remain possible after an explicit `sync` |
 | Pass internals | The external pass reimplements needed internals for now, marked `TODO(extract): ...`; may later be promoted/shared with `rticx-sw-pass` |
 | Development home | In-tree experimental workspace under `experiments/multibinary/`; extract to its own repo later |
-| Core changes | None required; the generated code only uses the frozen public surface (external `task_trait` paths, etc.) |
+| Core changes | None required for M0–M4; M5 adds the native `core_ids` mapping to `rticx-core`. The generated multi-binary code keeps using only the frozen public surface (external `task_trait` paths, etc.) |
 | Boot sequencing | Distribution-owned; pass emits `init_shared` / `mark_ready` / ready-check calls through the backend trait |
 | Future API | Remove `cross_spawn` in favor of a `Producer` type passed as a shared resource in `init`, allowing proper RTIC SRP locking for both single-binary and cross-binary spawns |
 
@@ -244,13 +244,16 @@ const _: () = {
 
 ### 6.4 `#[app(...)]` additions
 
-- `core_ids = [g0, g1, ...]` — maps local core indices to global ids; length must
-  equal `cores` (or `len == 1` when `cores` defaults to 1).
+- `core_ids = [g0, g1, ...]` — maps local core index `i` to the global core id
+  `core_ids[i]`; length must equal `cores` (or `len == 1` when `cores` defaults to
+  1). Defaults to the identity mapping `0..cores`, so `cores = N` alone keeps the
+  historical behavior. Parsed and validated natively by `rticx-core` since M5.
 - `external_cores = [g...]` — global ids of cores in other binaries visible to this
-  application.
+  application. Consumed (stripped) by the multi-binary pass; `rticx-core` does not
+  know this key, so other distributions only see an unknown-key warning for it.
 
-Both keys are consumed (stripped) by the new pass before the core pass parses the
-module, so other distributions only see unknown-key warnings.
+Task `core`/`spawn_by` syntax stays local (`0..cores`); the generated runtime core
+checks and the multi-binary metadata translate through `core_ids` (M5).
 
 ### 6.5 Task syntax (confirmed in M1-T3)
 
@@ -463,12 +466,15 @@ mock backend.
 
 ## 13. Success criteria
 
-- Two fixture apps compile via `cargo xbin build` with **no root-workspace changes**.
+- Two fixture apps compile via `cargo xbin build`; the extension itself adds no
+  root-workspace changes beyond the M5 native `core_ids` mapping.
 - `system.json` is deterministic for identical inputs.
 - Layout assertions pass on all supported targets.
 - Host mock end-to-end test passes, including backpressure and staleness errors.
+- A binary with a non-identity `core_ids` mapping enforces its runtime core checks
+  against the global ids (M5).
 - A new user can reproduce the fixture from the docs and diagrams alone.
-- STM32H7/Renode acceptance demo (M6, out-of-tree) runs cross-binary spawns.
+- STM32H7/Renode acceptance demo (M7, out-of-tree) runs cross-binary spawns.
 
 ---
 
@@ -565,39 +571,91 @@ Work proceeds one task at a time. Each task should be committed separately with 
 
 ### M4 — In-tree end-to-end fixture
 
-- [ ] **M4-T1** Two-app fixture project under `fixtures/` (sender + receiver) using
+- [x] **M4-T1** Two-app fixture project under `fixtures/` (sender + receiver) using
       an IDL type and one cross-binary task.
       *Acceptance:* `cargo xbin build` succeeds.
-- [ ] **M4-T2** Mock-runtime end-to-end test: spawn from app A, execute on app B's
+- [x] **M4-T2** Mock-runtime end-to-end test: spawn from app A, execute on app B's
       dispatcher, verify input value; full FIFO returns `Err(Some(input))`.
       *Acceptance:* test passes deterministically.
-- [ ] **M4-T3** Negative tests: missing sync, hash mismatch, priority conflict,
+- [x] **M4-T3** Negative tests: missing sync, hash mismatch, priority conflict,
       unknown type, region overflow.
       *Acceptance:* each fails with its documented error message.
 
-### M5 — Multi-source/target, ready/epoch, complete docs
+### M5 — Native global core ids in `rticx-core` (`core_ids`)
 
-- [ ] **M5-T1** Support multiple source cores per target with disjoint priority
+Today `rticx-core` and the software/async passes assume a binary occupies the
+contiguous core ids `0..cores`: `SwPassBackend::current_core_id()` is compared
+against the raw task `core`/`spawn_by` literals, and `pacs`/entry points are
+indexed by the local core index. That is only correct while a binary's runtime
+(hardware) core ids are exactly its local indices.
+
+This milestone makes the local → global mapping native to the core pass:
+
+- `#[app(device = …, cores = N)]` keeps today's behavior: local index `i` maps to
+  global id `i` (the identity `0..N`).
+- `#[app(device = …, cores = N, core_ids = [g0, g1, …])]` maps local index `i` to
+  global id `core_ids[i]`; the length must equal `cores` and the ids must be
+  unique.
+
+Task `core`/`spawn_by` syntax stays local (matching RTIC); "global id" is what
+the runtime core checks (`current_core_id()`), `external_cores` and the
+multi-binary system view use. This is the only planned root-workspace change of
+the extension, so follow `COMPATIBILITY.md`: the key is additive and optional,
+and any field/signature addition that `cargo-semver-checks` classifies as
+breaking triggers the coordinated generation bump.
+
+- [ ] **M5-T1** Parse and validate `core_ids` in `rticx-core`: add
+      `RticAttr::take_u32_array` (promote the xbin-pass helper marked
+      `TODO(extract)`), add `AppArgs.core_ids` defaulting to `(0..cores)` plus a
+      `global_core(local)` accessor, validate length/`cores` equality and
+      uniqueness, and add `core_ids` to the supported app args so it no longer
+      warns.
+      *Acceptance:* parser tests for the identity default, an explicit mapping, a
+      length mismatch and duplicate ids; `cd rticx-core && cargo test`.
+- [ ] **M5-T2** Translate local → global in the generated runtime core checks:
+      read `core_ids` in `AppParameters::parse` (shared by the sw/async passes)
+      and emit `core_ids[core]` / `core_ids[spawn_by]` in the `spawn` /
+      `cross_spawn` guards instead of the local literals; expose the mapping on
+      `SubApp`/`App` for backends that need it.
+      *Acceptance:* a pass test with a mock backend whose `current_core_id()`
+      returns non-identity ids (e.g. `core_ids = [1, 2]`) compiles and passes;
+      existing multicore codegen tests are unchanged.
+- [ ] **M5-T3** Integrate the multi-binary pass: stop consuming/stripping
+      `core_ids` (the core pass owns it now), keep `external_cores` pass-owned,
+      and read the mapping from the parsed `App` in codegen mode.
+      *Acceptance:* `cargo xbin sync`/`build` stays green on the fixtures and a
+      `cores = 2, core_ids = [1, 2]` app compiles without an unknown-arg warning,
+      with the runtime core checks using the global ids.
+- [ ] **M5-T4** Update the frozen-surface documentation and consumers: wiki
+      `#[app]` syntax page, `COMPATIBILITY.md` checklist decision (additive vs
+      generation bump), and adoption notes for the out-of-tree distributions
+      (rp2040 ids are the identity `0/1`; riscv is single-core).
+      *Acceptance:* `make fmt all` green; the default and explicit mappings are
+      documented side by side; the semver outcome is recorded.
+
+### M6 — Multi-source/target, ready/epoch, complete docs
+
+- [ ] **M6-T1** Support multiple source cores per target with disjoint priority
       lines; multiple doorbell lines.
       *Acceptance:* three-app fixture; priority planner tests.
-- [ ] **M5-T2** Ready/epoch integration in generated spawn (target-not-ready error);
+- [ ] **M6-T2** Ready/epoch integration in generated spawn (target-not-ready error);
       peer reset recovery path documented and tested in the mock.
       *Acceptance:* tests for not-ready and post-reset spawns.
-- [ ] **M5-T3** Complete user guide and architecture doc.
+- [ ] **M6-T3** Complete user guide and architecture doc.
       *Acceptance:* a fresh reader can build the fixture following only the docs.
-- [ ] **M5-T4** Complete PlantUML set (diagrams 1–5) as `.puml` sources.
+- [ ] **M6-T4** Complete PlantUML set (diagrams 1–5) as `.puml` sources.
       *Acceptance:* diagrams reviewed for small size/clarity (rendering is manual).
-- [ ] **M5-T5** Separate advisory CI workflow for the experimental workspace.
+- [ ] **M6-T5** Separate advisory CI workflow for the experimental workspace.
       *Acceptance:* fmt, clippy, tests, mock e2e green.
 
-### M6 — STM32H7 acceptance and extraction (separate effort)
+### M7 — STM32H7 acceptance and extraction (separate effort)
 
-- [ ] **M6-T1** Out-of-tree STM32H7 (M7+M4) distribution implementing
+- [ ] **M7-T1** Out-of-tree STM32H7 (M7+M4) distribution implementing
       `CrossBinBackend` (non-cacheable shared region, doorbell, boot release).
-- [ ] **M6-T2** Renode acceptance demo: cross-binary spawn M7→M4 and M4→M7.
-- [ ] **M6-T3** Extract `experiments/multibinary` into its own repository; resolve
+- [ ] **M7-T2** Renode acceptance demo: cross-binary spawn M7→M4 and M4→M7.
+- [ ] **M7-T3** Extract `experiments/multibinary` into its own repository; resolve
       and remove `TODO(extract)` markers; add CI there.
-- [ ] **M6-T4** Optional: re-evaluate promoting reimplemented internals into a shared
+- [ ] **M7-T4** Optional: re-evaluate promoting reimplemented internals into a shared
       RTICX crate, and the `Producer`-as-shared-resource API with SRP locking.
 
 ---
@@ -614,6 +672,7 @@ Work proceeds one task at a time. Each task should be committed separately with 
 | Priority-line exhaustion on a target | Bounded by available priorities; validation errors are explicit; document limits |
 | Future `Producer`/SRP API | Transport and lock are separated in codegen so migration is localized |
 | Sender stub syntax (mirrored vs auto-generated) | Mirrored stub recommended for explicit phase-1 validation; can be relaxed later |
+| Local vs global core ids in out-of-tree distros | The identity default keeps rp2040/riscv correct; they adopt `core_ids` in follow-up PRs per `COMPATIBILITY.md` after the M5 release |
 
 ---
 
@@ -627,4 +686,9 @@ Work proceeds one task at a time. Each task should be committed separately with 
 - **Doorbell** — hardware signal (mailbox/IPI/HSEM) that pends the target's dispatcher.
 - **Priority line** — a target-core priority reserved for tasks arriving from one
   specific remote source core.
+- **Local core index** — a core's position in an application's `0..cores`, as used
+  by task `core`/`spawn_by` syntax and `pacs`.
+- **Global core id** — the project-wide id used by runtime core checks,
+  `external_cores` and the system view: local index `i` maps to `core_ids[i]`
+  (identity by default, M5).
 - **Epoch** — shared counter used to detect peer reset and re-synchronize FIFOs.

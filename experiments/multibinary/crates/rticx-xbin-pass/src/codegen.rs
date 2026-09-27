@@ -414,7 +414,7 @@ pub(crate) fn generate_init_hooks(
 /// [`rticx_xbin_rt::backend::IpcRegion::base_for`]. v1 (one pair of binaries)
 /// has a region per direction and the owner is an endpoint of every one of
 /// them; a wider topology needs a per-region initializer and is left to
-/// M5-T1.
+/// M6-T1.
 fn generate_fifo_inits(
     view: &SystemView,
     owner: u32,
@@ -428,7 +428,7 @@ fn generate_fifo_inits(
         let source = task.fifo.source;
         let target = task.fifo.target;
         if source != owner && target != owner {
-            // TODO(M5-T1): multi-pair topologies need the region's initializer
+            // TODO(M6-T1): multi-pair topologies need the region's initializer
             // to come from one of its endpoints.
             continue;
         }
@@ -496,7 +496,7 @@ fn generate_fifo_inits(
 ///
 /// The owner runs `init_shared` before the other cores rely on the shared
 /// memory. The distribution owns the boot sequencing that guarantees it.
-// TODO(M5): let a distribution or `rticx.toml` designate a different owner.
+// TODO(M6): let a distribution or `rticx.toml` designate a different owner.
 fn owner_core(view: &SystemView) -> Option<u32> {
     view.cores.iter().map(|core| core.global_id).min()
 }
@@ -1027,7 +1027,7 @@ fn generate_sender(
                     if __rticx_xbin_backend.current_global_core_id() != __RTICX_XBIN_SOURCE_CORE {
                         return Err(Some(input));
                     }
-                    // TODO(M5-T2): return `Err(Some(input))` while the target
+                    // TODO(M6-T2): return `Err(Some(input))` while the target
                     // core is not ready (`CrossBinBackend::is_ready` + epoch).
 
                     __rticx_interrupt_free(|| -> Result<(), Option<#input_ty>> {

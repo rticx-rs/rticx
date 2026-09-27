@@ -1,7 +1,7 @@
 @startuml 04-memory-priority-map
 ' Diagram 4 — Memory/priority map: per-task FIFOs, priority lines, doorbells.
 ' Source of truth: docs/architecture.md §6–§7, plan §7.2 §9.
-' TODO(M5-T4): author this diagram.
+' TODO(M6-T4): author this diagram.
 
 title memory / priority map (stub)
 
@@ -9,6 +9,6 @@ skinparam shadowing false
 skinparam monochrome true
 skinparam defaultFontName monospace
 
-note "TODO(M5-T4): author this diagram" as todo
+note "TODO(M6-T4): author this diagram" as todo
 
 @enduml
