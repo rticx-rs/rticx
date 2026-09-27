@@ -1,25 +1,22 @@
 # RTICX multi-binary extension — documentation
 
-Documentation skeleton for the experimental multi-binary / heterogeneous
-multi-core extension of RTICX. The authoritative design and task checklist is
+Documentation for the experimental multi-binary / heterogeneous multi-core
+extension of RTICX. The authoritative design and task checklist is
 [`multibinary-multicore-plan.md`](../../../multibinary-multicore-plan.md)
-(§12 lists the documentation deliverables); this directory only holds the
+(§12 lists the documentation deliverables); this directory holds the
 user-facing and architecture documents.
 
 | Document | Status | Content |
 |---|---|---|
-| [User guide](user-guide.md) | outline | installation, `rticx.toml`, `ipc-types.toml`, task syntax, build/run, troubleshooting |
-| [Architecture](architecture.md) | outline | phases, manifests, memory/priority rules, locking, boot/reset, failure modes |
-| [Diagrams](diagrams/README.md) | 3 authored, 2 stubs | PlantUML sources for the five plan diagrams |
+| [User guide](user-guide.md) | complete (M6-T3) | installation, `rticx.toml`, `ipc-types.toml`, task syntax, worked example, build/run, troubleshooting |
+| [Architecture](architecture.md) | complete (M6-T3) | phases, manifests, memory/priority rules, locking, boot/reset, failure modes, layout and cache-maintenance worked examples |
+| [Diagrams](diagrams/README.md) | complete (M6-T4) | five reviewed PlantUML sources for the plan diagrams |
 
 Status legend:
 
-- **outline** — section structure plus the parts that already exist (M0);
-  remaining content is filled in by
-  [M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
-- **stub** — placeholder with a `TODO(M6-T4)` marker.
+- **complete** — reviewed content describing the implemented behaviour.
 
-## Status snapshot (M6.5)
+## Status snapshot (M6-T4)
 
 - `cargo xbin sync` validates `rticx.toml`, collects `<app>.xbin.json`
   per application, merges/validates the project, allocates the per-task FIFOs,
@@ -34,7 +31,7 @@ Status legend:
   input verification, FIFO backpressure), and M4-T3 asserts the documented
   errors for a missing sync, a stale view or source, priority conflicts,
   unknown types and region overflow.
-- M5 makes the local -> global `core_ids` mapping native to `rticx-core`: the
+- M5 makes the local → global `core_ids` mapping native to `rticx-core`: the
   core/software passes emit runtime core checks against the global ids and the
   extension pass only *reads* the mapping (leaving the key to the core pass)
   while `external_cores` stays pass-owned.
@@ -49,4 +46,9 @@ Status legend:
   `ipc_dispatchers` pool entry → `exec`. The `CrossBinBackend` runtime trait
   carries no doorbell methods; the router IRQ is configured by the core pass's
   used-IRQ machinery.
-- M6 (multi-source/target, ready/epoch, complete docs) is still pending.
+- M6-T1 adds multi-source support (disjoint priority lines per producer core,
+  producer-owned FIFO initialization, `fixtures/three-app` and the build-phase
+  priority-line validation), M6-T2 the ready/epoch gate (`ReadyCache`) with
+  not-ready and peer-reset tests, M6-T3 the complete documentation set and
+  M6-T4 the five PlantUML diagram sources. M8-T1 adds the advisory CI
+  workflow.

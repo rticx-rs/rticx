@@ -1,14 +1,41 @@
 @startuml 05-type-pipeline
 ' Diagram 5 — Type pipeline: IDL -> generated crate -> layout asserts.
-' Source of truth: docs/user-guide.md §4, plan §6.2–6.3.
-' TODO(M6-T4): author this diagram.
+' Source of truth: docs/user-guide.md §4, docs/architecture.md §6,
+' plan §6.2–§6.3.
 
-title IDL -> generated crate -> layout asserts (stub)
+title IDL -> generated crate -> layout asserts
 
 skinparam shadowing false
 skinparam monochrome true
 skinparam defaultFontName monospace
+skinparam nodesep 15
+skinparam ranksep 25
 
-note "TODO(M6-T4): author this diagram" as todo
+rectangle "ipc-types.toml\n[message.X] fields\n[enum.X] variants" as idl
+
+rectangle "rticx-xbin-proto (sync)\nparse + 32-bit-safe subset:\nreject u64/bool/pointers/...\ncanonical layout: repr(C), LE, align cap 4\n-> size, align, field offsets, LAYOUT_HASH" as proto
+
+package "ipc-types/ (generated)" as crate {
+  rectangle "~#[repr(C)] types\n+ unsafe impl CrossCoreMessage" as types
+  rectangle "SIZE_* / ALIGN_* / OFF_*\n+ LAYOUT_HASH" as consts
+  rectangle "const _: () = {\n  assert!(size_of == SIZE)\n  assert!(offset_of!(..) == OFF)\n  assert!(target_endian == little)\n}" as asserts
+}
+
+rectangle "system.json\nlayout_hash = LAYOUT_HASH\nfifo elem_size / depth" as view
+
+rectangle "generated phase-2 code\nper FIFO: assert!(size_of == elem_size)\n         assert!(align_of == elem_align)\nreceiver: assert!(SpawnInput: CrossCoreMessage)" as codegen
+
+idl --> proto
+proto --> crate
+proto --> view
+crate --> codegen
+view --> codegen
+
+note bottom
+  layout drift is caught in generated code: per-FIFO size/align
+  assertions compare against system.json and instruct the user to
+  run `cargo xbin sync`; the const assertions in ipc-types check
+  that the target compiler agrees with the canonical layout.
+end note
 
 @enduml

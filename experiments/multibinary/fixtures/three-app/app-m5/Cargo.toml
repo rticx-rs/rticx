@@ -1,0 +1,16 @@
+[package]
+name = "app-m5"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Second producer application of the rticx-xbin three-app fixture"
+
+[[bin]]
+name = "m5"
+path = "src/main.rs"
+
+[dependencies]
+ipc-types = { path = "../ipc-types" }
+mock-pac = { path = "../mock-pac" }
+xbin-mock-distro = { path = "../xbin-mock-distro" }
+xbin-mock-runtime = { path = "../xbin-mock-runtime" }

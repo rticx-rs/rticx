@@ -13,7 +13,9 @@
 //!   IPC regions, with its [`Producer`]/[`Consumer`] endpoints. See
 //!   [`fifo`] for the in-region image and the memory/ordering rules;
 //! - [`SharedState`] — the shared ready bitmap and epoch word used for boot
-//!   coordination and peer-reset detection. See [`state`] for the protocol;
+//!   coordination and peer-reset detection, plus [`ReadyCache`], the
+//!   spawner-side cached-epoch check the generated `cross_spawn` gates on
+//!   (M6-T2). See [`state`] for the protocol;
 //! - [`Queue`] — the core-local SPSC queue behind the generated line ready
 //!   queues: the target's router produces task notifications, its line
 //!   dispatcher consumes them (M6.5-T3). It is the same queue type the
@@ -34,7 +36,7 @@ pub mod state;
 pub use backend::{CrossBinBackend, IpcRegion};
 pub use fifo::{Consumer, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer};
 pub use rticx_spsc::Queue;
-pub use state::{MAX_CORES, SharedState};
+pub use state::{MAX_CORES, ReadyCache, SharedState};
 
 /// Marker trait for data types that may travel through cross-core shared
 /// memory.

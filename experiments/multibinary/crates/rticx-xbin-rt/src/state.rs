@@ -49,8 +49,10 @@
 //! A spawner caches the epoch it observed as valid; passing that epoch to
 //! [`SharedState::is_ready_at`] after any reset returns `false` until the
 //! spawner refreshes its observation (`epoch()` plus `is_ready(target)`).
-//! This is the stale-epoch detection the plan requires; the generated spawn
-//! integration lands in M6-T2.
+//! [`ReadyCache`] implements exactly that refresh-on-stale check, and the
+//! generated `cross_spawn` keeps one instance per task (M6-T2): a spawn aimed
+//! at a not-ready or just-reset target returns `Err(Some(input))` without
+//! enqueueing.
 //!
 //! # Target requirements
 //!
@@ -220,6 +222,64 @@ impl SharedState {
     /// Panics when `core >= MAX_CORES`.
     pub fn clear_ready(&self, core: u32) {
         self.ready.fetch_and(!core_bit(core), Ordering::Release);
+    }
+}
+
+/// Spawner-local epoch cache for the target-ready check (M6-T2).
+///
+/// Generated spawners declare one `ReadyCache` per cross-binary task and call
+/// [`Self::is_ready`] before enqueueing. The cache holds the epoch the
+/// spawner last observed as valid: while it still matches the shared state,
+/// readiness is a single ready-bit load; after any reinitialization or peer
+/// reset the epoch changed, so the cache refreshes it on the next spawn
+/// attempt and reports the target as not ready until the peer marks itself
+/// ready in the new epoch.
+///
+/// The cache is core-local state (a `static` inside the generated
+/// `cross_spawn`) touched only by the task's single producer core, so
+/// `Relaxed` loads/stores suffice; the `Release`/`Acquire` ordering that
+/// publishes a peer's FIFO state lives in [`SharedState::mark_ready`] and
+/// [`SharedState::is_ready_at`].
+#[derive(Debug)]
+pub struct ReadyCache {
+    epoch: AtomicU32,
+}
+
+impl ReadyCache {
+    /// Creates a cache with an unknown epoch (zero).
+    ///
+    /// The first [`Self::is_ready`] call after boot refreshes it.
+    #[allow(clippy::new_without_default)]
+    pub const fn new() -> Self {
+        Self {
+            epoch: AtomicU32::new(0),
+        }
+    }
+
+    /// Returns whether global core `core` is ready at the cached epoch,
+    /// refreshing the cache once when the epoch changed.
+    ///
+    /// A `false` result means the target is not ready (it has not marked
+    /// itself ready yet, or it reset and its epoch moved on without
+    /// re-marking); the caller reports `Err(Some(input))` without enqueueing.
+    /// The result is conservative while a reset races the check: it may
+    /// report `false`, never a stale `true`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `core >= MAX_CORES` (through [`SharedState::is_ready_at`]).
+    pub fn is_ready(&self, state: &SharedState, core: u32) -> bool {
+        let cached = self.epoch.load(Ordering::Relaxed);
+        if state.is_ready_at(core, cached) {
+            return true;
+        }
+        let current = state.epoch();
+        if state.is_ready_at(core, current) {
+            self.epoch.store(current, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 }
 

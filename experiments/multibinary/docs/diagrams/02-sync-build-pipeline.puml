@@ -1,14 +1,42 @@
 @startuml 02-sync-build-pipeline
-' Diagram 2 — Phase 1 sync -> merge/validate/allocate -> Phase 2 build pipeline.
+' Diagram 2 — cargo xbin sync (phase 1) -> merge/validate/allocate -> build.
 ' Source of truth: docs/architecture.md §3–§4, plan §7–§8.
-' TODO(M6-T4): author this diagram.
 
-title sync -> merge/validate/allocate -> build (stub)
+title sync -> merge/validate/allocate -> build
 
 skinparam shadowing false
 skinparam monochrome true
 skinparam defaultFontName monospace
+skinparam nodesep 15
+skinparam ranksep 25
 
-note "TODO(M6-T4): author this diagram" as todo
+package "cargo xbin sync — phase 1" as phase1 {
+  rectangle "rticx.toml\nipc-types.toml" as config
+  rectangle "per application\ncargo clean -p <pkg>\ncargo check (RTICX_XBIN_META_OUT)\n~#[app]: metadata mode\n-> <app>.xbin.json" as meta
+  rectangle "IDL\n32-bit-safe subset + canonical layout" as idl
+  rectangle "merge_project\nspawn_by visibility (both ways),\nproducer priority lines, types, region fit\n-> deterministic FIFO allocation\n(8-byte aligned, depth = capacity + 1)" as merge
+  rectangle "system_view\n-> target/rticx-xbin/system.json\n(sealed topology_hash, layout_hash)" as view
+  rectangle "generate_crate\n-> ipc-types/\n(write_if_changed)" as crate
+  config --> meta
+  config --> idl
+  meta --> merge
+  idl --> merge
+  merge --> view
+  idl --> crate
+}
+
+package "cargo xbin build — phase 2" as phase2 {
+  rectangle "per application\ncargo build -p <pkg> --bin <target>\nRTICX_XBIN_SYSTEM = <view>" as build
+  rectangle "~#[app]: codegen mode\nload + verify view, filter by own cores\n-> sender stubs, receiver tasks,\nline dispatchers + routers, init hooks\n-> core pass -> binary" as codegen
+  build --> codegen
+}
+
+view --> build
+
+note bottom of phase2
+  build runs sync first; a plain cargo build after an explicit
+  sync is supported and rejected with a staleness error once
+  the sources or the view changed (topology/source hash).
+end note
 
 @enduml

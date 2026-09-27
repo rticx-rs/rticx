@@ -51,9 +51,11 @@
 //! 3. on every core, [`CrossBinBackend::mark_ready`] at the end of its
 //!    `post_init`; the router IRQs are enabled and prioritized by the core
 //!    pass's used-IRQ machinery, so no per-line arming step remains;
-//! 4. [`CrossBinBackend::is_ready`] (with the epoch from
-//!    [`CrossBinBackend::epoch`]) in `cross_spawn`, which reports
-//!    `Err(Some(input))` while the target core is not ready.
+//! 4. the target-ready gate in `cross_spawn`, which reports
+//!    `Err(Some(input))` while the target core is not ready: the generated
+//!    code checks [`crate::ReadyCache::is_ready`], a spawner-local cache of
+//!    the epoch that refreshes whenever a reset or reinitialization
+//!    invalidates it (M6-T2).
 //!
 //! # Doorbell transport
 //!
@@ -166,8 +168,8 @@ pub trait CrossBinBackend {
     /// Returns whether global core `core` is ready.
     ///
     /// The default implementation delegates to [`SharedState::is_ready`];
-    /// spawn paths should use [`SharedState::is_ready_at`] with the cached
-    /// epoch instead (M6).
+    /// spawn paths go through [`crate::ReadyCache`], which adds the cached
+    /// epoch and the refresh-on-reset check (M6-T2).
     fn is_ready(&self, core: u32) -> bool {
         self.shared_state().is_ready(core)
     }

@@ -4,8 +4,9 @@
 //! The sender fixture expands in codegen mode (no core pass: its expansion is
 //! a plain module), is written into a throwaway cargo binary together with a
 //! stub `ipc-types` crate and the in-tree mock, and is **run** on the host:
-//! the generated `__rticx_xbin_init_shared` must zero the FIFO indices and
-//! publish the shared state, and the generated
+//! the generated `__rticx_xbin_init_shared` must publish the shared state,
+//! the generated `__rticx_xbin_init_fifos_core0` must zero exactly the FIFOs
+//! produced by core 0 (M6-T1), and the generated
 //! `__rticx_xbin_mark_ready_core0` must publish the owner core's ready bit
 //! without any doorbell arming step (M6.5: the router IRQs are enabled and
 //! prioritized by the core pass's used-IRQ machinery, not by generated code).
@@ -24,9 +25,9 @@ use rticx_xbin_proto::SystemView;
 /// A two-application system view: `app-m7` (global core 0, the owner) spawns
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, and `app-m4`
 /// spawns `DecryptTask` back on `app-m7` at priority 4. The reverse direction
-/// adds a second FIFO whose region the owner does not produce, so the executed
-/// test covers `init_shared` zeroing every view FIFO and `mark_ready`
-/// publishing the ready bit.
+/// adds a second FIFO produced by the other core, so the executed test proves
+/// that a core initializes exactly the FIFOs it produces (M6-T1) and that
+/// `mark_ready` publishes the ready bit.
 const SYSTEM_JSON: &str = r#"{
   "schema_version": 1,
   "rticx_generation": "0.2",
@@ -189,6 +190,10 @@ fn owner_app() -> syn::ItemMod {
                 __rticx_xbin_init_shared(&__rticx_xbin_backend());
             }
 
+            pub fn test_init_fifos() {
+                __rticx_xbin_init_fifos_core0(&__rticx_xbin_backend());
+            }
+
             pub fn test_mark_ready() {
                 __rticx_xbin_mark_ready_core0(&__rticx_xbin_backend());
             }
@@ -275,12 +280,12 @@ fn write_project(root: &Path, expanded: &str) {
              ipc_types::EncryptReq { addr, len: 2, key: 3 }\n\
          }\n\n\
          fn main() {\n\
-             let system = app::test_system();\n\
-             assert_eq!(system.state().epoch(), 0, \"fresh mock state\");\n\
-             app::test_configure_shared_memory();\n\n\
-             // Dirty both task FIFOs before initialization: `init_shared` must\n\
-             // zero the ring indices of every task, through either endpoint\n\
-             // view of their region.\n\
+              let system = app::test_system();\n\
+              assert_eq!(system.state().epoch(), 0, \"fresh mock state\");\n\
+              app::test_configure_shared_memory();\n\n\
+              // Dirty both task FIFOs: each is produced by a different core,\n\
+              // so the owner's `init_shared` must leave both untouched and\n\
+              // `init_fifos_core0` must zero exactly the `0 -> 1` FIFO.\n\
              let out_region = system.backend(0).ipc_region(0, 1).expect(\"region 0->1\");\n\
              let out_fifo = unsafe {\n\
                  Fifo::<ipc_types::EncryptReq, 3usize>::view_at(out_region.base_from_source())\n\
@@ -294,15 +299,28 @@ fn write_project(root: &Path, expanded: &str) {
              assert_eq!(unsafe { (*out_fifo).len() }, 1, \"one dirty element\");\n\
              assert_eq!(unsafe { (*in_fifo).len() }, 1, \"one dirty element\");\n\n\
              app::test_init_shared();\n\
-             assert_eq!(system.state().epoch(), 1, \"init_shared bumps the epoch\");\n\
-             assert!(\n\
-                 system.state().is_initialized(),\n\
-                 \"init_shared publishes the magic\"\n\
-             );\n\
-             assert_eq!(unsafe { (*out_fifo).len() }, 0, \"the 0->1 FIFO is zeroed\");\n\
-             assert_eq!(unsafe { (*in_fifo).len() }, 0, \"the 1->0 FIFO is zeroed\");\n\
-             assert!(!system.state().is_ready(0), \"init clears the ready bits\");\n\n\
-             app::test_mark_ready();\n\
+              assert_eq!(system.state().epoch(), 1, \"init_shared bumps the epoch\");\n\
+              assert!(\n\
+                  system.state().is_initialized(),\n\
+                  \"init_shared publishes the magic\"\n\
+              );\n\
+              assert_eq!(\n\
+                  unsafe { (*out_fifo).len() },\n\
+                  1,\n\
+                  \"init_shared does not touch region contents (M6-T1)\"\n\
+              );\n\
+              assert_eq!(unsafe { (*in_fifo).len() }, 1, \"init_shared leaves the 1->0 FIFO\");\n\
+              assert!(!system.state().is_ready(0), \"init clears the ready bits\");\n\n\
+              // Each FIFO is zeroed by its producer core: core 0 produces the\n\
+              // 0->1 FIFO and leaves the 1->0 FIFO to core 1 (M6-T1).\n\
+              app::test_init_fifos();\n\
+              assert_eq!(unsafe { (*out_fifo).len() }, 0, \"the 0->1 FIFO is zeroed\");\n\
+              assert_eq!(\n\
+                  unsafe { (*in_fifo).len() },\n\
+                  1,\n\
+                  \"a core initializes only the FIFOs it produces\"\n\
+              );\n\n\
+              app::test_mark_ready();\n\
              assert!(system.state().is_ready(0), \"the owner core is ready\");\n\
              assert!(\n\
                  system.state().is_ready_at(0, system.state().epoch()),\n\
@@ -361,6 +379,10 @@ fn mock_app_reaches_ready_state() {
     assert!(
         expanded.contains("__rticx_xbin_init_shared"),
         "the owner init hook is missing: {expanded}"
+    );
+    assert!(
+        expanded.contains("__rticx_xbin_init_fifos_core0"),
+        "the producer FIFO initializer is missing: {expanded}"
     );
     assert!(
         expanded.contains("__rticx_xbin_mark_ready_core0"),

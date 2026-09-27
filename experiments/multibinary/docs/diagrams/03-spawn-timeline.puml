@@ -1,9 +1,9 @@
 @startuml 03-spawn-timeline
-' Diagram 3 — Spawn flow A->B: producer, FIFO, ring function, doorbell router,
-' ready queue, line dispatcher, exec (M6.5).
-' Source of truth: docs/architecture.md §4 §7, plan §8.
+' Diagram 3 — Spawn flow A->B: producer, ready gate, FIFO, ring function,
+' doorbell router, ready queue, line dispatcher, exec (M6.5 + M6-T2).
+' Source of truth: docs/architecture.md §4 §8, plan §8.
 
-title spawn flow A -> B (M6.5)
+title spawn flow A -> B (M6.5 + M6-T2)
 
 skinparam shadowing false
 skinparam monochrome true
@@ -18,9 +18,12 @@ participant "ready queue\n(line)" as Q
 participant "line dispatcher\n(core B, line priority)" as DS
 participant "receiver exec" as X
 
-P -> P : global-core guard,\ninterrupt-free
-P -> F : enqueue(input)
-P -> R : task_id
+P -> P : global-core guard
+P -> P : ReadyCache gate\n(not ready / reset -> Err(Some))
+group interrupt-free section (v1)
+  P -> F : enqueue(input)
+  P -> R : task_id
+end
 R -> D : publish id,\ntrigger router IRQ
 D --> RT : router IRQ
 RT -> D : read id (loop until empty)
@@ -30,6 +33,13 @@ DS -> Q : pop ready entry
 DS -> F : dequeue until empty
 F -> X : input
 DS -> X : exec(input)
+
+note over P
+  readiness is checked against the cached
+  epoch; a stale epoch refreshes once and
+  the spawn stays rejected until the target
+  re-marks itself ready
+end note
 
 note over D, DS
   unknown ids are ignored;

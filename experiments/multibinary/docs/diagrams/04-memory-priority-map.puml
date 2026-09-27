@@ -1,35 +1,49 @@
 @startuml 04-memory-priority-map
-' Diagram 4 — Memory/priority map: per-task FIFOs in the A->B region, the
-' ipc_dispatchers pool and the per-pair routers (M6.5).
+' Diagram 4 — Memory/priority map: per-task FIFOs in the (source -> target)
+' regions, the ipc_dispatchers pool and the per-pair routers, with two
+' producers onto one target (M6.5 + M6-T1).
 ' Source of truth: docs/architecture.md §6–§7, plan §7.2 §9.
 
-title memory / priority map (M6.5)
+title memory / priority map (two sources -> one target)
 
 skinparam shadowing false
 skinparam monochrome true
 skinparam defaultFontName monospace
+skinparam nodesep 15
+skinparam ranksep 20
 
-package "shared region A->B (Normal, Non-cacheable, Shareable)" {
+package "region A->B (Normal, Non-cacheable, Shareable)" as REGA {
   rectangle "Fifo<EncryptTask>\noffset 0, depth capacity+1" as F1
   rectangle "Fifo<OtherTask>\noffset N, depth capacity+1" as F2
 }
 
-package "core B priority levels" {
-  rectangle "router A->B\nbinds = pair doorbell IRQ" as R
-  rectangle "line dispatcher (A, prio 3)\nbinds = ipc_dispatchers[0]" as D1
-  rectangle "line dispatcher (A, prio 2)\nbinds = ipc_dispatchers[1]" as D2
+package "region C->B (Normal, Non-cacheable, Shareable)" as REGC {
+  rectangle "Fifo<SensorTask>\noffset 0, depth capacity+1" as F3
 }
 
-F1 --> D1
-F2 --> D2
-R --> D1
-R --> D2
+package "core B (dispatcher lines from ipc_dispatchers)" as CORE {
+  rectangle "router A->B\nbinds = pair IRQ\npriority = max(2, 3) = 3" as RA
+  rectangle "router C->B\nbinds = pair IRQ\npriority = 4" as RC
+  rectangle "line dispatcher (A, 3)\nbinds = ipc_dispatchers[1]" as DA3
+  rectangle "line dispatcher (A, 2)\nbinds = ipc_dispatchers[0]" as DA2
+  rectangle "line dispatcher (C, 4)\nbinds = ipc_dispatchers[2]" as DC4
+}
 
-note right of R
-  one router per (source -> target) pair,
-  at the pair's highest line priority;
-  one line per (source, priority) from the
-  application's ipc_dispatchers pool
+REGA -[hidden]down-> CORE
+REGC -[hidden]down-> CORE
+
+F1 --> DA3
+F2 --> DA2
+F3 --> DC4
+RA --> DA2
+RA --> DA3
+RC --> DC4
+
+note bottom of CORE
+  one router per (source -> target) pair, at the pair's highest line priority;
+  one line per (source, priority) from the application's ipc_dispatchers pool,
+  in ascending (source, priority) order; one priority level belongs to exactly
+  one origin core.
 end note
 
 @enduml

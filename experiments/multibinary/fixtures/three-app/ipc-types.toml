@@ -1,0 +1,6 @@
+# Type-only IDL of the three-application fixture (M6-T1): one message, used as
+# the spawn input of both cross-binary tasks.
+schema = 1
+
+[message.EncryptReq]
+fields = { addr = "u32", len = "u32", key = "u32" }

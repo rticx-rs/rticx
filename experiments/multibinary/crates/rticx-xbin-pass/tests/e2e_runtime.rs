@@ -1,13 +1,13 @@
-//! M4-T2 acceptance: spawn from the sender application, execute on the
-//! receiver application's generated doorbell dispatcher, verify the input
-//! value, and observe the FIFO backpressure semantics.
+//! M4-T2/M6-T1 acceptance: spawn from the producer applications, execute on
+//! the receiver application's generated line dispatchers, verify the input
+//! values, and observe the FIFO backpressure semantics.
 //!
-//! Both fixture applications are expanded with the **real** phase-2 pipeline —
-//! the sender through [`XbinPass`] (its expansion is a plain module: no core
+//! Both fixture projects are expanded with the **real** phase-2 pipeline — the
+//! producers through [`XbinPass`] (their expansion is a plain module: no core
 //! pass runs and the fixture provides `__rticx_interrupt_free`), the receiver
 //! through the full [`RticMacroBuilder`] on `MockCoreBackend` with
-//! [`SoftwarePass`] bound after the cross-binary pass (so the receiver struct
-//! becomes a core task, the dispatcher becomes a hardware task and the
+//! [`SoftwarePass`] bound after the cross-binary pass (so the receiver structs
+//! become core tasks, the line dispatchers become hardware tasks and the
 //! generated `RticSwTask` trait and pend function come from the software pass)
 //! — and written into one throwaway binary together with the in-tree
 //! `rticx-xbin-mock` runtime.
@@ -17,19 +17,35 @@
 //! boot sequence (`init`, `post_init` init hooks, idle). The idle task then
 //! drives the cross-binary scenario:
 //!
-//! 1. it finishes the mock boot (the sender owns global core 0, so it calls
-//!    the sender's `configure`/`init_shared`/`mark_ready` hooks);
-//! 2. `EncryptTask::cross_spawn(input)` enqueues and rings the doorbell; the
-//!    input is not executed until the dispatcher runs;
-//! 3. calling the generated doorbell ISR (`__xbin_doorbell_1_0`) drains the
-//!    FIFO and calls the receiver task's `exec`, which records the input;
-//! 4. a full FIFO (capacity 2, depth 3) makes `cross_spawn` return
-//!    `Err(Some(input))` with the rejected input; draining frees it again;
-//! 5. repeated spawn/drain cycles wrap the ring and keep the order.
+//! 1. it finishes the mock boot (each producer's `configure`/`init_shared`/
+//!    `init_fifos`/`mark_ready` hooks);
+//! 2. `Task::cross_spawn(input)` enqueues and rings the pair's doorbell; the
+//!    input is not executed until the pair's router runs;
+//! 3. calling the generated router ISR (`__xbin_router_{source}_1`) drains the
+//!    pair's task ids into the line ready queues, pends the line dispatcher
+//!    through the software pass's generated pend function, which runs the
+//!    dispatcher ISR synchronously, draining FIFOs and calling `exec`;
+//! 4. a full FIFO returns `Err(Some(input))`; draining frees it again;
+//! 5. repeated spawn/drain cycles wrap the ring and keep the order;
+//! 6. the M6-T2 ready/epoch scenario: a simulated receiver reset (ready bit
+//!    cleared, epoch bumped) makes `cross_spawn` return `Err(Some(input))`
+//!    without enqueueing, and the next spawn after the receiver re-marks
+//!    itself ready refreshes the spawner's cached epoch and executes.
 //!
-//! Both applications share one process-global [`MockSystem`] through
-//! `crate::backend_for`, so the sender and receiver see the same region,
-//! doorbell and ready/epoch state, exactly like two cores in one project.
+//! The **two-app fixture** (`mock_runtime_spawn_reaches_the_receiver_dispatcher`)
+//! has one producer on global core 0 and one receiver on global core 1.
+//!
+//! The **three-app fixture** (`three_applications_spawn_through_their_own_routers`,
+//! M6-T1) adds a second producer on global core 2: both producers declare
+//! nothing and receive their generated stubs, the receiver runs two line
+//! dispatchers from its `ipc_dispatchers` pool (one per `(source, priority)`
+//! line) behind two per-pair routers, each producer updates only its own
+//! FIFO, the non-owner producer initializes its own `(2 -> 1)` region before
+//! its `post_init`, and the two sources backpressure independently.
+//!
+//! All applications share one process-global [`MockSystem`] through
+//! `crate::backend_for`, so they see the same regions, doorbells and
+//! ready/epoch state, exactly like three cores in one project.
 //!
 //! [`MockSystem`]: rticx_xbin_mock::MockSystem
 
@@ -42,7 +58,10 @@ use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 use rticx_xbin_pass::{XbinPass, XbinPassBackend};
-use rticx_xbin_proto::SystemView;
+use rticx_xbin_proto::{
+    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, RegionEntry, SystemView,
+    TargetRef, TaskEntry, TypeEntry, TypeKind,
+};
 
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, capacity 2.
@@ -153,11 +172,21 @@ impl XbinPassBackend for TestBackend {
 
 /// Software-task backend of the receiver harness.
 ///
-/// Binding [`SoftwarePass`] gives the receiver the generated `RticSwTask`
-/// trait and the generated `__rticx_local_irq_pend` the router calls (M6.5-T5).
+/// Binding [`SoftwarePass`] gives the receivers the generated `RticSwTask`
+/// trait and the generated `__rticx_local_irq_pend` the routers call (M6.5-T5).
 /// The mock has no interrupt controller, so the generated pend body runs the
-/// bound dispatcher ISR synchronously (tail-chaining).
-struct TestSwBackend;
+/// bound dispatcher ISR synchronously (tail-chaining). `irqs` names the
+/// dispatcher interrupt entries of the fixture (one per line), so the pend
+/// body references exactly the handlers the core pass generates.
+struct TestSwBackend {
+    irqs: &'static [&'static str],
+}
+
+impl TestSwBackend {
+    fn new(irqs: &'static [&'static str]) -> Self {
+        Self { irqs }
+    }
+}
 
 impl SwPassBackend for TestSwBackend {
     fn queue_path(&self) -> syn::Path {
@@ -165,11 +194,15 @@ impl SwPassBackend for TestSwBackend {
     }
 
     fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: syn::ItemFn) -> syn::ItemFn {
+        // The dispatchers' `binds = IRQ…` entries make the core pass generate
+        // the handlers under those interrupt names.
+        let arms = self.irqs.iter().map(|irq| {
+            let irq = format_ident!("{irq}");
+            quote!(__XbinInterrupt::#irq => #irq(),)
+        });
         empty_body_fn.block = Box::new(syn::parse_quote!({
             match irq_nbr {
-                // The dispatcher's `binds = IRQ0` makes the core pass
-                // generate the handler under that interrupt name.
-                __XbinInterrupt::IRQ0 => IRQ0(),
+                #(#arms)*
             }
         }));
         empty_body_fn
@@ -188,19 +221,30 @@ impl SwPassBackend for TestSwBackend {
     }
 }
 
-/// The producer fixture application: it declares nothing (the pass generates
-/// the `EncryptTask` stub from the view) plus the pieces its codegen-only
-/// expansion needs and `pub` wrappers over the generated private init hooks.
+/// A producer fixture application: it declares nothing (the pass generates its
+/// task stubs from the view) plus the pieces its codegen-only expansion needs
+/// and `pub` wrappers over the generated private init hooks.
 ///
-/// The sender is expanded through [`XbinPass`] alone, so no core pass provides
+/// A producer is expanded through [`XbinPass`] alone, so no core pass provides
 /// `__rticx_interrupt_free` (the pass generated `cross_spawn` calls it): the
 /// fixture supplies the host no-op itself, like a distribution would provide
 /// the target's critical section.
-fn sender_module() -> syn::ItemMod {
+fn producer_module(core: u32, owner: bool) -> syn::ItemMod {
+    let module = format_ident!("producer_{core}");
+    // Only the owner application generates `__rticx_xbin_init_shared`
+    // (M6-T1 keeps the FIFO initializers per producer, the shared state on the
+    // owner).
+    let init_shared = owner.then(|| {
+        quote! {
+            pub fn test_init_shared() {
+                __rticx_xbin_init_shared(&__rticx_xbin_backend());
+            }
+        }
+    });
     syn::parse_quote! {
-        pub mod sender_app {
+        pub mod #module {
             fn __rticx_xbin_backend() -> rticx_xbin_mock::MockBackend {
-                crate::backend_for(0)
+                crate::backend_for(#core)
             }
 
             fn __rticx_interrupt_free<R>(f: impl FnOnce() -> R) -> R {
@@ -211,8 +255,10 @@ fn sender_module() -> syn::ItemMod {
                 __rticx_xbin_configure_shared_memory(&__rticx_xbin_backend());
             }
 
-            pub fn test_init_shared() {
-                __rticx_xbin_init_shared(&__rticx_xbin_backend());
+            #init_shared
+
+            pub fn test_init_fifos() {
+                __rticx_xbin_init_fifos_core0(&__rticx_xbin_backend());
             }
 
             pub fn test_mark_ready() {
@@ -222,17 +268,19 @@ fn sender_module() -> syn::ItemMod {
     }
 }
 
-fn sender_args() -> TokenStream {
+/// `#[app]` arguments of the producer on `core`; a single local core, so the
+/// global id is `core` itself.
+fn producer_args(core: u32, external: u32) -> TokenStream {
     quote!(
         device = pac,
         cores = 1,
-        core_ids = [0],
-        external_cores = [1]
+        core_ids = [#core],
+        external_cores = [#external]
     )
 }
 
-/// The receiver fixture application: the task, a log of executed inputs and
-/// the scenario driver in `#[idle]`.
+/// The two-app receiver fixture application: the task, a log of executed
+/// inputs and the scenario driver in `#[idle]`.
 ///
 /// The receiver runs through the full pipeline — the cross-binary pass, the
 /// bound [`SoftwarePass`] (which generates the `RticSwTask` trait and the
@@ -240,10 +288,8 @@ fn sender_args() -> TokenStream {
 /// entry boots the application (init, init hooks, idle). The driver runs after
 /// the boot sequence, from the idle task, and calls the generated **router
 /// ISR** directly; the router pends the line dispatcher through the generated
-/// pend function, which runs the dispatcher ISR synchronously — the mock
-/// backend has no interrupt controller, so the idle task stands in for the
-/// hardware that would invoke it (M6.5-T3).
-fn receiver_module() -> syn::ItemMod {
+/// pend function, which runs the dispatcher ISR synchronously (M6.5-T3).
+fn two_app_receiver_module() -> syn::ItemMod {
     syn::parse_quote! {
         pub mod receiver_app {
             use std::sync::Mutex;
@@ -301,11 +347,13 @@ fn receiver_module() -> syn::ItemMod {
             impl RticIdleTask for Idle {
                 fn exec(&mut self) -> ! {
                     // Complete the mock boot: global core 0 owns the shared
-                    // state, so its hooks run here (the receiver's own
-                    // `configure` and `mark_ready` ran in the generated entry).
-                    crate::sender_app::test_configure();
-                    crate::sender_app::test_init_shared();
-                    crate::sender_app::test_mark_ready();
+                    // state and produces the task FIFO, so its hooks run here
+                    // (the receiver's own `configure` and `mark_ready` ran in
+                    // the generated entry).
+                    crate::producer_0::test_configure();
+                    crate::producer_0::test_init_shared();
+                    crate::producer_0::test_init_fifos();
+                    crate::producer_0::test_mark_ready();
                     test_mark_ready();
 
                     let backend = __rticx_xbin_backend();
@@ -314,7 +362,7 @@ fn receiver_module() -> syn::ItemMod {
 
                     // -- spawn enqueues and rings; the router wakes the line
                     // dispatcher, which executes the task
-                    crate::sender_app::EncryptTask::cross_spawn(request(1))
+                    crate::producer_0::EncryptTask::cross_spawn(request(1))
                         .expect("the first spawn enqueues");
                     assert!(
                         backend.router_wait(0, 1, std::time::Duration::from_millis(10)),
@@ -335,12 +383,12 @@ fn receiver_module() -> syn::ItemMod {
                     // -- a full FIFO (capacity 2) rejects the third input; the
                     // two successful rings coalesce on the pair doorbell and
                     // one router run drains both FIFO elements
-                    crate::sender_app::EncryptTask::cross_spawn(request(2))
+                    crate::producer_0::EncryptTask::cross_spawn(request(2))
                         .expect("the second spawn enqueues");
-                    crate::sender_app::EncryptTask::cross_spawn(request(3))
+                    crate::producer_0::EncryptTask::cross_spawn(request(3))
                         .expect("the third spawn enqueues");
                     assert_eq!(
-                        crate::sender_app::EncryptTask::cross_spawn(request(4)),
+                        crate::producer_0::EncryptTask::cross_spawn(request(4)),
                         Err(Some(request(4))),
                         "a full FIFO returns the input to the spawner"
                     );
@@ -377,7 +425,7 @@ fn receiver_module() -> syn::ItemMod {
 
                     // -- the ring wraps: depth (capacity + 1) slots are reused
                     for addr in 10..16 {
-                        crate::sender_app::EncryptTask::cross_spawn(request(addr))
+                        crate::producer_0::EncryptTask::cross_spawn(request(addr))
                             .expect("a wrapping spawn enqueues");
                         __xbin_router_0_1();
                     }
@@ -385,6 +433,43 @@ fn receiver_module() -> syn::ItemMod {
                         RECEIVED.lock().expect("the receiver log").len(),
                         9,
                         "every spawn past the ring depth was executed"
+                    );
+
+                    // -- M6-T2: a target that is not ready rejects the spawn
+                    // without enqueueing. Simulate a receiver reset: it clears
+                    // its own ready bit and bumps the epoch, as its boot
+                    // protocol requires.
+                    let state = backend.shared_state();
+                    state.clear_ready(1);
+                    state.bump_epoch();
+                    assert_eq!(
+                        crate::producer_0::EncryptTask::cross_spawn(request(20)),
+                        Err(Some(request(20))),
+                        "a spawn while the target is not ready returns the input"
+                    );
+
+                    // -- M6-T2: post-reset recovery. The receiver re-marks
+                    // itself ready; the next spawn refreshes the spawner's
+                    // stale epoch and executes through the dispatcher.
+                    state.mark_ready(1);
+                    crate::producer_0::EncryptTask::cross_spawn(request(21))
+                        .expect("the post-reset spawn enqueues");
+                    __xbin_router_0_1();
+                    assert_eq!(
+                        RECEIVED.lock().expect("the receiver log").as_slice(),
+                        &[
+                            request(1),
+                            request(2),
+                            request(3),
+                            request(10),
+                            request(11),
+                            request(12),
+                            request(13),
+                            request(14),
+                            request(15),
+                            request(21),
+                        ],
+                        "the rejected spawn enqueued nothing and the post-reset spawn executed"
                     );
 
                     println!("xbin: e2e ok");
@@ -400,7 +485,7 @@ fn receiver_module() -> syn::ItemMod {
     }
 }
 
-fn receiver_args() -> TokenStream {
+fn two_app_receiver_args() -> TokenStream {
     quote!(
         device = pac,
         cores = 1,
@@ -410,13 +495,247 @@ fn receiver_args() -> TokenStream {
     )
 }
 
+/// The three-app receiver fixture application (M6-T1): two cross receivers fed
+/// by two producer cores through two pairs, two line dispatchers and the
+/// multi-source scenario driver in `#[idle]`.
+///
+/// `ipc_dispatchers` lists one interrupt per cross line in ascending
+/// `(source, priority)` order, so `IRQ0` wakes the `(0, 3)` dispatcher and
+/// `IRQ1` the `(2, 4)` one.
+fn three_app_receiver_module() -> syn::ItemMod {
+    syn::parse_quote! {
+        pub mod receiver_app {
+            use std::sync::Mutex;
+
+            use rticx_xbin_rt::backend::CrossBinBackend;
+
+            fn __rticx_xbin_backend() -> rticx_xbin_mock::MockBackend {
+                crate::backend_for(1)
+            }
+
+            #[allow(non_camel_case_types)]
+            pub enum __XbinInterrupt {
+                IRQ0,
+                IRQ1,
+            }
+
+            fn request(addr: u32) -> ipc_types::EncryptReq {
+                ipc_types::EncryptReq {
+                    addr,
+                    len: addr + 10,
+                    key: addr + 20,
+                }
+            }
+
+            /// Inputs executed by `EncryptTask` (spawned by global core 0).
+            pub static ENCRYPTED: Mutex<Vec<ipc_types::EncryptReq>> = Mutex::new(Vec::new());
+            /// Inputs executed by `SensorTask` (spawned by global core 2).
+            pub static SENSED: Mutex<Vec<ipc_types::EncryptReq>> = Mutex::new(Vec::new());
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            pub struct EncryptTask;
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+
+                fn exec(&mut self, input: Self::SpawnInput) {
+                    ENCRYPTED
+                        .lock()
+                        .expect("the receiver log is never poisoned")
+                        .push(input);
+                }
+            }
+
+            #[sw_task(priority = 4, capacity = 1, spawn_by = 2)]
+            pub struct SensorTask;
+
+            impl RticSwTask for SensorTask {
+                type SpawnInput = ipc_types::EncryptReq;
+
+                fn exec(&mut self, input: Self::SpawnInput) {
+                    SENSED
+                        .lock()
+                        .expect("the receiver log is never poisoned")
+                        .push(input);
+                }
+            }
+
+            pub fn test_mark_ready() {
+                __rticx_xbin_mark_ready_core0(&__rticx_xbin_backend());
+            }
+
+            #[idle]
+            struct Idle;
+
+            impl RticIdleTask for Idle {
+                fn exec(&mut self) -> ! {
+                    let backend = __rticx_xbin_backend();
+
+                    // -- complete the mock boot. The owner core 0 publishes
+                    // the shared state; the non-owner producer core 2
+                    // initializes its own `(2 -> 1)` region before its
+                    // `post_init` would spawn (M6-T1).
+                    crate::producer_0::test_configure();
+                    crate::producer_0::test_init_shared();
+                    crate::producer_0::test_init_fifos();
+                    crate::producer_0::test_mark_ready();
+                    test_mark_ready();
+
+                    // Dirty the `(2 -> 1)` FIFO through the receiver's view,
+                    // then let its producer core initialize it: the topology
+                    // owner (core 0) is not an endpoint of that region.
+                    let region = backend
+                        .ipc_region(2, 1)
+                        .expect("the fixture declares the `2->1` region");
+                    let sensor_fifo = unsafe {
+                        rticx_xbin_rt::Fifo::<ipc_types::EncryptReq, 2usize>::view_at(
+                            region.base_from_target(),
+                        )
+                    };
+                    assert!(unsafe { (*sensor_fifo).enqueue(request(99)) }.is_ok());
+                    assert_eq!(unsafe { (*sensor_fifo).len() }, 1, "the FIFO is dirty");
+
+                    crate::producer_2::test_configure();
+                    crate::producer_2::test_init_fifos();
+                    assert_eq!(
+                        unsafe { (*sensor_fifo).len() },
+                        0,
+                        "the non-owner producer initializes its own region (M6-T1)"
+                    );
+                    crate::producer_2::test_mark_ready();
+
+                    assert!(backend.shared_state().is_ready(0), "producer core 0 is ready");
+                    assert!(backend.shared_state().is_ready(1), "the receiver core is ready");
+                    assert!(backend.shared_state().is_ready(2), "producer core 2 is ready");
+
+                    // -- first source: spawn -> ring -> its router -> its line
+                    // dispatcher -> exec
+                    crate::producer_0::EncryptTask::cross_spawn(request(1))
+                        .expect("the first spawn enqueues");
+                    assert!(
+                        backend.router_wait(0, 1, std::time::Duration::from_millis(10)),
+                        "the ring publishes the id on the `0->1` doorbell"
+                    );
+                    assert!(
+                        ENCRYPTED.lock().expect("the receiver log").is_empty()
+                            && SENSED.lock().expect("the receiver log").is_empty(),
+                        "nothing executes before the routers run"
+                    );
+
+                    __xbin_router_0_1();
+                    assert_eq!(
+                        ENCRYPTED.lock().expect("the receiver log").as_slice(),
+                        &[request(1)],
+                        "the `0->1` router pends the `(0, 3)` dispatcher"
+                    );
+                    assert!(
+                        SENSED.lock().expect("the receiver log").is_empty(),
+                        "the other pair's dispatcher did not run"
+                    );
+
+                    // -- second source: its own router and dispatcher line
+                    crate::producer_2::SensorTask::cross_spawn(request(2))
+                        .expect("the second source spawns");
+                    assert!(
+                        backend.router_wait(2, 1, std::time::Duration::from_millis(10)),
+                        "the ring publishes the id on the `2->1` doorbell"
+                    );
+                    __xbin_router_2_1();
+                    assert_eq!(
+                        SENSED.lock().expect("the receiver log").as_slice(),
+                        &[request(2)],
+                        "the `2->1` router pends the `(2, 4)` dispatcher"
+                    );
+                    assert_eq!(
+                        ENCRYPTED.lock().expect("the receiver log").as_slice(),
+                        &[request(1)],
+                        "the first source's FIFO is untouched"
+                    );
+
+                    // -- per-source backpressure: `SensorTask` has capacity 1
+                    crate::producer_2::SensorTask::cross_spawn(request(3))
+                        .expect("the second `SensorTask` spawn enqueues");
+                    assert_eq!(
+                        crate::producer_2::SensorTask::cross_spawn(request(4)),
+                        Err(Some(request(4))),
+                        "a full `2->1` FIFO returns the input to its spawner"
+                    );
+                    assert!(
+                        crate::producer_0::EncryptTask::cross_spawn(request(5)).is_ok(),
+                        "the other source's FIFO is unaffected"
+                    );
+
+                    __xbin_router_2_1();
+                    assert_eq!(
+                        SENSED.lock().expect("the receiver log").as_slice(),
+                        &[request(2), request(3)],
+                        "draining the `2->1` pair loses no spawns"
+                    );
+                    __xbin_router_0_1();
+                    assert_eq!(
+                        ENCRYPTED.lock().expect("the receiver log").as_slice(),
+                        &[request(1), request(5)],
+                        "the `0->1` pair drains independently"
+                    );
+
+                    // -- coalesced notifications of one pair lose no spawn:
+                    // fill `EncryptTask` (capacity 2), ring twice, drain once
+                    crate::producer_0::EncryptTask::cross_spawn(request(6))
+                        .expect("the wrap spawn enqueues");
+                    crate::producer_0::EncryptTask::cross_spawn(request(7))
+                        .expect("the wrap spawn enqueues");
+                    __xbin_router_0_1();
+                    assert_eq!(
+                        ENCRYPTED.lock().expect("the receiver log").as_slice(),
+                        &[request(1), request(5), request(6), request(7)],
+                        "coalesced notifications lose no spawns"
+                    );
+
+                    // -- a duplicate notification is idempotent
+                    backend
+                        .doorbell_send(2, 1, 2)
+                        .expect("the mock doorbell accepts the id");
+                    __xbin_router_2_1();
+                    assert_eq!(
+                        SENSED.lock().expect("the receiver log").len(),
+                        2,
+                        "a duplicate id loses no input and adds none"
+                    );
+
+                    println!("xbin: e2e three-app ok");
+                    std::process::exit(0);
+                }
+            }
+
+            #[init]
+            fn init() -> TaskInits {
+                TaskInits { idle: Idle }
+            }
+        }
+    }
+}
+
+fn three_app_receiver_args() -> TokenStream {
+    quote!(
+        device = pac,
+        cores = 1,
+        core_ids = [1],
+        external_cores = [0, 2],
+        ipc_dispatchers = [IRQ0, IRQ1]
+    )
+}
+
 /// The fixture view with both applications' source hashes recorded, as
 /// `cargo xbin sync` would (M3-T4).
-fn system() -> String {
+fn two_app_system() -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     for (package, args, app_mod) in [
-        ("app-m7", &sender_args(), &sender_module()),
-        ("app-m4", &receiver_args(), &receiver_module()),
+        ("app-m7", &producer_args(0, 1), &producer_module(0, true)),
+        (
+            "app-m4",
+            &two_app_receiver_args(),
+            &two_app_receiver_module(),
+        ),
     ] {
         let application = view
             .apps
@@ -429,25 +748,191 @@ fn system() -> String {
     view.to_json()
 }
 
-/// Expands the sender fixture through the cross-binary pass (no core pass).
-fn expand_sender(system: &Path) -> String {
-    let pass = XbinPass::with_system(system, "app-m7", "m7").with_backend(TestBackend);
+/// Builds the three-application fixture view (M6-T1): `app-m7` (global core 0)
+/// and `app-m5` (global core 2) each spawn onto `app-m4` (global core 1)
+/// through their own `(source -> target)` region, priority line and doorbell.
+fn three_app_system() -> String {
+    let mut view = SystemView::empty("0.2");
+    view.apps = vec![
+        AppEntry {
+            package: "app-m7".to_string(),
+            target: TargetRef::bin("m7"),
+            source_hash: Hash64::ZERO,
+            core_ids: vec![0],
+            external_cores: vec![1],
+        },
+        AppEntry {
+            package: "app-m5".to_string(),
+            target: TargetRef::bin("m5"),
+            source_hash: Hash64::ZERO,
+            core_ids: vec![2],
+            external_cores: vec![1],
+        },
+        AppEntry {
+            package: "app-m4".to_string(),
+            target: TargetRef::bin("m4"),
+            source_hash: Hash64::ZERO,
+            core_ids: vec![1],
+            external_cores: vec![0, 2],
+        },
+    ];
+    view.cores = vec![
+        CoreEntry {
+            global_id: 0,
+            app: "app-m7".to_string(),
+            local_index: 0,
+        },
+        CoreEntry {
+            global_id: 2,
+            app: "app-m5".to_string(),
+            local_index: 0,
+        },
+        CoreEntry {
+            global_id: 1,
+            app: "app-m4".to_string(),
+            local_index: 0,
+        },
+    ];
+    view.types = vec![TypeEntry {
+        name: "EncryptReq".to_string(),
+        kind: TypeKind::Message,
+        size: 12,
+        align: 4,
+        fields: vec![
+            FieldEntry {
+                name: "addr".to_string(),
+                ty: "u32".to_string(),
+                offset: 0,
+            },
+            FieldEntry {
+                name: "len".to_string(),
+                ty: "u32".to_string(),
+                offset: 4,
+            },
+            FieldEntry {
+                name: "key".to_string(),
+                ty: "u32".to_string(),
+                offset: 8,
+            },
+        ],
+        variants: Vec::new(),
+    }];
+    view.tasks = vec![
+        TaskEntry {
+            id: 1,
+            name: "EncryptTask".to_string(),
+            receiver_core: 1,
+            spawner_core: 0,
+            priority: 3,
+            capacity: 2,
+            input_type: "EncryptReq".to_string(),
+            fifo: FifoEntry {
+                source: 0,
+                target: 1,
+                offset: 0,
+                elem_size: 12,
+                depth: 3,
+            },
+        },
+        TaskEntry {
+            id: 2,
+            name: "SensorTask".to_string(),
+            receiver_core: 1,
+            spawner_core: 2,
+            priority: 4,
+            capacity: 1,
+            input_type: "EncryptReq".to_string(),
+            fifo: FifoEntry {
+                source: 2,
+                target: 1,
+                offset: 0,
+                elem_size: 12,
+                depth: 2,
+            },
+        },
+    ];
+    view.regions = vec![
+        RegionEntry {
+            source: 0,
+            target: 1,
+            base_from_source: 0x3004_0000,
+            base_from_target: 0x3004_0000,
+            size: 4096,
+        },
+        RegionEntry {
+            source: 2,
+            target: 1,
+            base_from_source: 0x3004_1000,
+            base_from_target: 0x3004_1000,
+            size: 4096,
+        },
+    ];
+    view.doorbells = vec![
+        DoorbellEntry {
+            source: 0,
+            target: 1,
+            priority: 3,
+            line: 0,
+        },
+        DoorbellEntry {
+            source: 2,
+            target: 1,
+            priority: 4,
+            line: 1,
+        },
+    ];
+
+    for (package, args, app_mod) in [
+        ("app-m7", producer_args(0, 1), producer_module(0, true)),
+        ("app-m5", producer_args(2, 1), producer_module(2, false)),
+        (
+            "app-m4",
+            three_app_receiver_args(),
+            three_app_receiver_module(),
+        ),
+    ] {
+        let application = view
+            .apps
+            .iter_mut()
+            .find(|application| application.package == package)
+            .expect("fixture application");
+        application.source_hash = rticx_xbin_pass::app_source_hash(&args, &app_mod);
+    }
+    view.seal();
+    view.to_json()
+}
+
+/// Expands a producer fixture through the cross-binary pass (no core pass).
+fn expand_producer(
+    system: &Path,
+    package: &str,
+    target: &str,
+    core: u32,
+    external: u32,
+    owner: bool,
+) -> String {
+    let pass = XbinPass::with_system(system, package, target).with_backend(TestBackend);
     let (_, module) = pass
-        .run_pass(sender_args(), sender_module())
-        .expect("sender code generation succeeds");
+        .run_pass(producer_args(core, external), producer_module(core, owner))
+        .expect("producer code generation succeeds");
     module.to_token_stream().to_string()
 }
 
-/// Expands the receiver fixture through the cross-binary pass, the software
+/// Expands a receiver fixture through the cross-binary pass, the software
 /// pass and the full core pass (the real phase-2 pipeline).
-fn expand_receiver(system: &Path) -> String {
-    let pass = XbinPass::with_system(system, "app-m4", "m4").with_backend(TestBackend);
+fn expand_receiver(
+    system: &Path,
+    package: &str,
+    target: &str,
+    args: TokenStream,
+    app_mod: syn::ItemMod,
+    irqs: &'static [&'static str],
+) -> String {
+    let pass = XbinPass::with_system(system, package, target).with_backend(TestBackend);
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(pass);
-    builder.bind_pre_core_pass(SoftwarePass::new(TestSwBackend));
-    builder
-        .build_rtic_macro2(receiver_args(), receiver_module(), None)
-        .to_string()
+    builder.bind_pre_core_pass(SoftwarePass::new(TestSwBackend::new(irqs)));
+    builder.build_rtic_macro2(args, app_mod, None).to_string()
 }
 
 fn cargo() -> PathBuf {
@@ -456,8 +941,9 @@ fn cargo() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("cargo"))
 }
 
-/// Writes the throwaway `#![no_main]` binary executing both expansions.
-fn write_project(root: &Path, sender: &str, receiver: &str) {
+/// Writes the throwaway `#![no_main]` binary executing the expansions of
+/// `modules` (file name -> expansion) over the mock system holding `regions`.
+fn write_project(root: &Path, modules: &[(&str, &str)], regions: &[(u32, u32)]) {
     let rt = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../rticx-xbin-rt")
         .canonicalize()
@@ -484,36 +970,47 @@ fn write_project(root: &Path, sender: &str, receiver: &str) {
         ),
     )
     .expect("project manifest");
-    std::fs::write(root.join("src/sender.rs"), format!("{sender}\n")).expect("sender expansion");
-    std::fs::write(root.join("src/receiver.rs"), format!("{receiver}\n"))
-        .expect("receiver expansion");
-    std::fs::write(
-        root.join("src/main.rs"),
-        "// @generated by the M4-T2 end-to-end runtime test\n\
+
+    let mut main = String::from(
+        "// @generated by the M4-T2/M6-T1 end-to-end runtime test\n\
          #![no_main]\n\
          #![allow(dead_code, unused_imports, unused_variables, non_snake_case, \
          non_upper_case_globals, static_mut_refs)]\n\n\
          use std::sync::LazyLock;\n\n\
-         use rticx_xbin_mock::{MockBackend, MockSystem};\n\n\
-         include!(\"sender.rs\");\n\
-         include!(\"receiver.rs\");\n\n\
-         /// The process-global mock system shared by both applications, so a\n\
-         /// spawn on core 0 reaches the dispatcher of core 1.\n\
+         use rticx_xbin_mock::{MockBackend, MockSystem};\n\n",
+    );
+    for (name, expansion) in modules {
+        std::fs::write(
+            root.join(format!("src/{name}.rs")),
+            format!("{expansion}\n"),
+        )
+        .expect("module expansion");
+        main.push_str(&format!("include!(\"{name}.rs\");\n"));
+    }
+    main.push_str(
+        "\n/// The process-global mock system shared by every application, so a\n\
+         /// spawn on one core reaches the router of another.\n\
          fn system() -> &'static MockSystem {\n\
              static SYSTEM: LazyLock<MockSystem> = LazyLock::new(|| {\n\
-                 let mut system = MockSystem::new();\n\
-                 system\n\
-                     .add_region(0, 1, 4096)\n\
-                     .expect(\"the fixture declares the `0->1` region\");\n\
-                 system\n\
-             });\n\
-             &SYSTEM\n\
+                 let mut system = MockSystem::new();\n",
+    );
+    for (source, target) in regions {
+        main.push_str(&format!(
+            "        system\n\
+             \x20           .add_region({source}, {target}, 4096)\n\
+             \x20           .expect(\"the fixture declares the `{source}->{target}` region\");\n"
+        ));
+    }
+    main.push_str(
+        "        system\n\
+         \x20   });\n\
+         \x20   &SYSTEM\n\
          }\n\n\
          fn backend_for(core: u32) -> MockBackend {\n\
-             system().backend(core)\n\
+         \x20   system().backend(core)\n\
          }\n",
-    )
-    .expect("harness source");
+    );
+    std::fs::write(root.join("src/main.rs"), main).expect("harness source");
 
     std::fs::create_dir_all(root.join("pac/src")).expect("pac dir");
     std::fs::write(
@@ -554,13 +1051,37 @@ fn write_project(root: &Path, sender: &str, receiver: &str) {
     .expect("ipc-types source");
 }
 
+/// Runs the throwaway binary and asserts it reached `done`.
+fn run_project(project: &Path, done: &str, scenario: &str) {
+    let output = Command::new(cargo())
+        .arg("run")
+        .arg("--quiet")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(project.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", project.join("target"))
+        .output()
+        .expect("failed to run cargo");
+    assert!(
+        output.status.success(),
+        "the cross-binary end-to-end harness failed:\n\
+         stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(done),
+        "the harness did not reach the end of the {scenario} scenario"
+    );
+}
+
 #[test]
 fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
     let dir = tempfile::tempdir().expect("tempdir");
     let system_path = dir.path().join("system.json");
-    std::fs::write(&system_path, system()).expect("system.json");
+    std::fs::write(&system_path, two_app_system()).expect("system.json");
 
-    let sender = expand_sender(&system_path);
+    let sender = expand_producer(&system_path, "app-m7", "m7", 0, 1, true);
     assert!(
         !sender.contains("compile_error"),
         "sender code generation failed: {sender}"
@@ -570,7 +1091,14 @@ fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
         "the sender API is missing: {sender}"
     );
 
-    let receiver = expand_receiver(&system_path);
+    let receiver = expand_receiver(
+        &system_path,
+        "app-m4",
+        "m4",
+        two_app_receiver_args(),
+        two_app_receiver_module(),
+        &["IRQ0"],
+    );
     assert!(
         !receiver.contains("compile_error"),
         "receiver code generation failed: {receiver}"
@@ -593,26 +1121,85 @@ fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
     );
 
     let project = dir.path().join("project");
-    write_project(&project, &sender, &receiver);
+    write_project(
+        &project,
+        &[("producer_0", &sender), ("receiver", &receiver)],
+        &[(0, 1)],
+    );
+    run_project(&project, "xbin: e2e ok", "two-app");
+}
 
-    let output = Command::new(cargo())
-        .arg("run")
-        .arg("--quiet")
-        .arg("--offline")
-        .arg("--manifest-path")
-        .arg(project.join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", project.join("target"))
-        .output()
-        .expect("failed to run cargo");
+/// The M4-T2 runtime harness extended to the three-application fixture (M6-T1).
+#[test]
+fn three_applications_spawn_through_their_own_routers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let system_path = dir.path().join("system.json");
+    std::fs::write(&system_path, three_app_system()).expect("system.json");
+
+    // Both producers declare nothing: their stubs and ring functions come
+    // from the pass (M5.5). The second producer's stub is generated even
+    // though the application never declares it.
+    let first = expand_producer(&system_path, "app-m7", "m7", 0, 1, true);
     assert!(
-        output.status.success(),
-        "the cross-binary end-to-end harness failed:\n\
-         stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        !first.contains("compile_error"),
+        "first producer generation failed: {first}"
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("xbin: e2e ok"),
-        "the harness did not reach the end of the scenario"
+        first.contains("pub struct EncryptTask") && first.contains("__rticx_xbin_ring_0_1"),
+        "the first producer stub/ring is missing: {first}"
     );
+
+    let second = expand_producer(&system_path, "app-m5", "m5", 2, 1, false);
+    assert!(
+        !second.contains("compile_error"),
+        "second producer generation failed: {second}"
+    );
+    assert!(
+        second.contains("pub struct SensorTask") && second.contains("__rticx_xbin_ring_2_1"),
+        "the second producer stub/ring is missing: {second}"
+    );
+    assert!(
+        second.contains("__rticx_xbin_init_fifos_core0"),
+        "the non-owner producer does not initialize its region: {second}"
+    );
+    assert!(
+        !second.contains("__rticx_xbin_init_shared"),
+        "a non-owner producer must not initialize the shared state: {second}"
+    );
+
+    let receiver = expand_receiver(
+        &system_path,
+        "app-m4",
+        "m4",
+        three_app_receiver_args(),
+        three_app_receiver_module(),
+        &["IRQ0", "IRQ1"],
+    );
+    assert!(
+        !receiver.contains("compile_error"),
+        "receiver code generation failed: {receiver}"
+    );
+    for (symbol, label) in [
+        ("__RticxXbinDispatcher0To1P3", "first line dispatcher"),
+        ("__RticxXbinDispatcher2To1P4", "second line dispatcher"),
+        ("__RticxXbinRouter0To1", "first pair router"),
+        ("__RticxXbinRouter2To1", "second pair router"),
+    ] {
+        assert!(
+            receiver.contains(symbol),
+            "the {label} is missing: {receiver}"
+        );
+    }
+
+    let project = dir.path().join("project");
+    write_project(
+        &project,
+        &[
+            ("producer_0", &first),
+            ("producer_2", &second),
+            ("receiver", &receiver),
+        ],
+        &[(0, 1), (2, 1)],
+    );
+    run_project(&project, "xbin: e2e three-app ok", "three-app");
 }

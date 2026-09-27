@@ -1,0 +1,36 @@
+# Three-application fixture project (M6-T1).
+#
+# Standalone workspace, intentionally outside the experimental workspace: it
+# models a three-binary `cargo xbin` project that builds end to end on the
+# host. Two producer binaries spawn onto one receiver binary:
+#
+# - `app-m7` (bin `m7`, global core id 0) declares nothing: the cross-binary
+#   pass generates its `EncryptTask` sender stub from the synced view;
+# - `app-m5` (bin `m5`, global core id 2) declares nothing either; its
+#   `SensorTask` stub targets the same receiver application through its own
+#   `(2 -> 1)` region and doorbell router;
+# - `app-m4` (bin `m4`, global core id 1) declares the two native `#[sw_task]`
+#   receivers on distinct priority lines, each with its own `ipc_dispatchers`
+#   entry;
+# - `xbin-mock-distro` is the `#[app]` macro of the fixture's mock
+#   distribution. It runs the full core pass on `MockCoreBackend` and binds the
+#   cross-binary pass against `xbin-mock-runtime`, so the generated code
+#   compiles and links without target hardware;
+# - `xbin-mock-runtime` owns the process-global in-memory regions and provides
+#   the receiver-side `RticSwTask` trait;
+# - `mock-pac` is an empty PAC stand-in for `device = mock_pac`;
+# - `ipc-types/` is the `cargo xbin sync`-generated crate (checked in).
+#
+# Commanded by `rticx_xbin_driver::build` from
+# `crates/rticx-xbin-driver/tests/three_app.rs`.
+
+[workspace]
+resolver = "2"
+members = [
+    "app-m7",
+    "app-m5",
+    "app-m4",
+    "mock-pac",
+    "xbin-mock-runtime",
+    "xbin-mock-distro",
+]

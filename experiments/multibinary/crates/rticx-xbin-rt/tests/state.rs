@@ -2,12 +2,15 @@
 //!
 //! Covers the ready bitmap, epoch bumps, raw-memory placement, cross-thread
 //! visibility and the M2-T2 acceptance case: a peer reset (bit cleared, epoch
-//! bumped) must invalidate the epoch a spawner cached earlier.
+//! bumped) must invalidate the epoch a spawner cached earlier. The M6-T2
+//! [`ReadyCache`] tests cover the spawn-side counterpart: not-ready targets
+//! are reported as such, and a reset target is recovered once it re-marks
+//! itself ready in the new epoch.
 
 use std::mem::{MaybeUninit, align_of};
 use std::thread;
 
-use rticx_xbin_rt::{MAX_CORES, SharedState};
+use rticx_xbin_rt::{MAX_CORES, ReadyCache, SharedState};
 
 #[test]
 fn new_state_is_initialized_and_empty() {
@@ -89,6 +92,89 @@ fn stale_epoch_is_detected_after_peer_reset() {
         state.is_ready_at(0, reset_epoch),
         "the core that did not reset stays ready"
     );
+}
+
+#[test]
+fn ready_cache_gates_on_the_cached_epoch() {
+    let state = SharedState::new();
+    let cache = ReadyCache::new();
+
+    // Nothing is ready before the owner initializes and the target marks
+    // itself ready.
+    assert!(!cache.is_ready(&state, 1));
+
+    state.init();
+    assert!(
+        !cache.is_ready(&state, 1),
+        "the target has not marked itself ready"
+    );
+
+    state.mark_ready(1);
+    assert!(
+        cache.is_ready(&state, 1),
+        "the check refreshes the epoch the first time"
+    );
+    assert!(cache.is_ready(&state, 1), "and reuses it afterwards");
+}
+
+#[test]
+fn ready_cache_recovers_after_peer_reset() {
+    let state = SharedState::new();
+    let cache = ReadyCache::new();
+    state.init();
+    state.mark_ready(0);
+    state.mark_ready(1);
+
+    assert!(cache.is_ready(&state, 1));
+    assert!(cache.is_ready(&state, 0), "an unrelated core stays ready");
+
+    // Peer reset: clear the bit and bump the epoch before re-marking.
+    state.clear_ready(1);
+    let reset_epoch = state.bump_epoch();
+    assert!(
+        !cache.is_ready(&state, 1),
+        "the stale epoch must not validate readiness after a reset"
+    );
+    assert!(
+        cache.is_ready(&state, 0),
+        "another target's readiness is unaffected"
+    );
+
+    state.mark_ready(1);
+    assert!(
+        cache.is_ready(&state, 1),
+        "the refreshed epoch recovers readiness"
+    );
+    assert_eq!(
+        state.epoch(),
+        reset_epoch,
+        "the check does not bump the epoch"
+    );
+}
+
+#[test]
+fn ready_cache_refreshes_on_reinitialization() {
+    // `init_shared` (an owner re-boot) clears every ready bit and bumps the
+    // epoch; a spawner must not trust its cached readiness across it.
+    let state = SharedState::new();
+    let cache = ReadyCache::new();
+    state.init();
+    state.mark_ready(1);
+    assert!(cache.is_ready(&state, 1));
+
+    state.init();
+    assert!(
+        !cache.is_ready(&state, 1),
+        "reinitialization clears readiness until the target re-marks"
+    );
+    state.mark_ready(1);
+    assert!(cache.is_ready(&state, 1));
+}
+
+#[test]
+fn ready_cache_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ReadyCache>();
 }
 
 #[test]

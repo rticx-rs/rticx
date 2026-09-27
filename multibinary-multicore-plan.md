@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5.5 and M6.5 complete; M6 next)
+**Status:** in progress (M0–M6.5, M6-T1 through M6-T4 complete; M8-T1 next)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -482,6 +482,10 @@ longer requires cross-task declarations (M5.5):
   task. A name collision with a user item is a dedicated compile error.
 - **Sender API:** `Task::cross_spawn(input)`:
   - runtime global-core guard (`if current_global_core_id() != expected { return Err(Some(input)) }`);
+  - target-ready gate through the spawner-local cached epoch
+    (`rticx_xbin_rt::ReadyCache`, M6-T2): `Err(Some(input))` while the target
+    has not marked itself ready, refreshing the epoch once after a peer reset
+    or reinitialization;
   - enqueue into the task FIFO inside `__rticx_interrupt_free` (v1);
   - call the generated per-pair ring function
     `__rticx_xbin_ring_{source}_{target}(task_id)`, which delivers the task id to
@@ -516,7 +520,8 @@ external `task_trait` paths, so no core changes are required.
   - `unsafe fn view_at(addr: usize) -> *mut Self` for fixed-address placement.
 - `unsafe trait CrossCoreMessage: Copy + 'static {}` — implemented only by generated
   types.
-- Ready/epoch helpers: atomic ready bitmap, epoch word for peer-reset detection.
+- Ready/epoch helpers: atomic ready bitmap, epoch word for peer-reset detection,
+  and the spawn-side `ReadyCache` (cached epoch, refresh-on-reset, M6-T2).
 - Deliberately separate from `rticx-spsc` so existing non-atomic single-binary
   semantics stay frozen.
 
@@ -886,7 +891,7 @@ multi-source acceptance is written against this model.
 
 ### M6 — Multi-source/target, ready/epoch, complete docs
 
-- [ ] **M6-T1** Support multiple source cores per target with disjoint priority
+- [x] **M6-T1** Support multiple source cores per target with disjoint priority
       lines, one dispatcher line per `(source, priority)` from the
       `ipc_dispatchers` pool and one doorbell router per producer pair, building
       on the native `#[sw_task]` syntax (M5.5) and the M6.5 dispatch model.
@@ -909,17 +914,15 @@ multi-source acceptance is written against this model.
       harness is extended to it — three applications in one process, spawns from
       both producer cores drain through their own router and dispatcher, and the
       non-owner producer initializes its region; priority-line validation tests.
-- [ ] **M6-T2** Ready/epoch integration in generated spawn (target-not-ready error);
+- [x] **M6-T2** Ready/epoch integration in generated spawn (target-not-ready error);
       peer reset recovery path documented and tested in the mock.
       *Acceptance:* tests for not-ready and post-reset spawns.
-- [ ] **M6-T3** Complete user guide and architecture doc, including the native
+- [x] **M6-T3** Complete user guide and architecture doc, including the native
       `#[sw_task]` declaration model and the pass-generated sender stubs of
       M5.5.
       *Acceptance:* a fresh reader can build the fixture following only the docs.
-- [ ] **M6-T4** Complete PlantUML set (diagrams 1–5) as `.puml` sources.
+- [x] **M6-T4** Complete PlantUML set (diagrams 1–5) as `.puml` sources.
       *Acceptance:* diagrams reviewed for small size/clarity (rendering is manual).
-- [ ] **M6-T5** Separate advisory CI workflow for the experimental workspace.
-      *Acceptance:* fmt, clippy, tests, mock e2e green.
 
 ### M7 — STM32H7 acceptance and extraction (separate effort)
 
@@ -931,6 +934,11 @@ multi-source acceptance is written against this model.
       and remove `TODO(extract)` markers; add CI there.
 - [ ] **M7-T4** Optional: re-evaluate promoting reimplemented internals into a shared
       RTICX crate, and the `Producer`-as-shared-resource API with SRP locking.
+
+### M8 
+- [ ] **M8-T1** Separate advisory CI workflow for the experimental workspace.
+      *Acceptance:* fmt, clippy, tests, mock e2e green.
+
 
 ---
 

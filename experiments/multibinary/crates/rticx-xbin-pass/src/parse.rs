@@ -30,6 +30,14 @@
 //! prototype were deleted outright in M5.5: there is no compatibility shim,
 //! no warning and no migration error (the extension has no released users).
 //!
+//! Besides the cross receivers, [`parse_module`] records every local
+//! `#[sw_task]`/`#[async_task]` declaration (its `priority`, `core` and
+//! resolved origin core) in [`ModuleDecls::local_tasks`]. Phase 2 combines
+//! them with the synced view in [`crate::priority::validate_priority_lines`],
+//! which enforces one origin core per `(target core, priority)` line (M6-T1);
+//! the declarations themselves are left untouched, so the software and async
+//! passes keep owning their syntax and errors.
+//!
 //! Everything is parsed into the plain data types of `rticx-xbin-proto` that
 //! the metadata manifest is made of. In codegen mode the receiver structs are
 //! additionally rewritten into the core `#[task(..)]` items the generated
@@ -87,6 +95,9 @@ pub(crate) const IPC_DISPATCHERS_ARG: &str = "ipc_dispatchers";
 const DISPATCHERS_ARG: &str = "dispatchers";
 /// Native software-task attribute.
 pub(crate) const SW_TASK_ATTR: &str = "sw_task";
+/// Native async-task attribute, read (never consumed) by this pass for the
+/// priority-line validation (M6-T1); the async pass owns its syntax.
+pub(crate) const ASYNC_TASK_ATTR: &str = "async_task";
 /// `#[sw_task(spawn_by = G)]`: the (global, in apps declaring
 /// `external_cores`) producer core id.
 pub(crate) const SPAWN_BY_ARG: &str = "spawn_by";
@@ -137,10 +148,57 @@ pub(crate) struct AppExtensions {
 }
 
 /// The cross-binary declarations found inside the `#[app]` module.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct ModuleDecls {
     /// Cross-binary receivers, sorted by name.
     pub receivers: Vec<ReceiverDecl>,
+    /// Local `#[sw_task]`/`#[async_task]` declarations (excluding the cross
+    /// receivers), sorted by name, recorded for the build-phase priority-line
+    /// validation (M6-T1). Their attributes are left for the software/async
+    /// passes.
+    pub local_tasks: Vec<LocalTaskDecl>,
+    /// Span of every cross-binary receiver declaration, keyed by task name,
+    /// so the priority-line validation can point at the receiver (M6-T1).
+    pub receiver_spans: BTreeMap<String, Span>,
+}
+
+/// Whether a local task declaration is a `#[sw_task]` or an `#[async_task]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalTaskKind {
+    /// A native `#[sw_task]`.
+    Software,
+    /// A native `#[async_task]`.
+    Async,
+}
+
+impl LocalTaskKind {
+    /// Human-readable name used in priority-line errors.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Software => "software task",
+            Self::Async => "async task",
+        }
+    }
+}
+
+/// A local task declaration, reduced to what the build-phase priority-line
+/// validation needs (M6-T1).
+#[derive(Debug, Clone)]
+pub(crate) struct LocalTaskDecl {
+    /// Task struct name.
+    pub name: String,
+    /// Whether this is a software or an async task.
+    pub kind: LocalTaskKind,
+    /// Declared priority (`0` when absent, matching the software/async
+    /// passes).
+    pub priority: u16,
+    /// Global id of the core that executes the task (`core_ids[core]`).
+    pub target_core: u32,
+    /// Global id of the task's origin core: its `spawn_by` resolved through
+    /// `core_ids`, or its own core when `spawn_by` is absent.
+    pub origin_core: u32,
+    /// Span of the task struct, for error reporting.
+    pub span: Span,
 }
 
 /// Parses the `#[app]` arguments owned by this pass and returns them together
@@ -465,7 +523,30 @@ pub(crate) fn parse_module(
         let Item::Struct(item_struct) = item else {
             continue;
         };
-        let Some(index) = find_sw_task_attr(&item_struct.attrs) else {
+
+        // Native async tasks are only *read* here for the build-phase
+        // priority-line validation (M6-T1); the async pass owns their syntax,
+        // so malformed arguments are left for it to report.
+        if let Some(index) = find_attr(&item_struct.attrs, ASYNC_TASK_ATTR)
+            && let Ok(attr) = RticAttr::from_meta(&item_struct.attrs[index].meta)
+        {
+            let namespace = if extensions.external_cores.is_empty() {
+                SpawnByNamespace::Local
+            } else {
+                SpawnByNamespace::Global
+            };
+            record_local_task(
+                &mut decls,
+                &item_struct.ident,
+                &attr,
+                extensions,
+                LocalTaskKind::Async,
+                namespace,
+            );
+            continue;
+        }
+
+        let Some(index) = find_attr(&item_struct.attrs, SW_TASK_ATTR) else {
             continue;
         };
         let name = item_struct.ident.clone();
@@ -479,26 +560,53 @@ pub(crate) fn parse_module(
             "shared",
         ])?;
 
-        // `spawn_by` absent: a plain software task, untouched.
+        // `spawn_by` absent: a plain software task, untouched; recorded with
+        // its own core as the origin for the priority-line validation.
         let Some(span) = attr.get_expr(SPAWN_BY_ARG).map(Spanned::span) else {
+            record_local_task(
+                &mut decls,
+                &name,
+                &attr,
+                extensions,
+                LocalTaskKind::Software,
+                SpawnByNamespace::Local,
+            );
             continue;
         };
         // Without `external_cores` the native local-index reading applies and
         // the software pass validates the value (`spawn_by < cores`).
         if extensions.external_cores.is_empty() {
+            record_local_task(
+                &mut decls,
+                &name,
+                &attr,
+                extensions,
+                LocalTaskKind::Software,
+                SpawnByNamespace::Local,
+            );
             continue;
         }
 
         let producer = take_spawn_by(&mut attr, span)?;
         if let Some(local) = extensions.core_ids.iter().position(|&id| id == producer) {
-            // In-app cross-core task: map the global id back to the local
-            // index the software pass compares against.
+            // In-app cross-core task: recorded with its global origin before
+            // the mapping, then rewritten to the local index the software
+            // pass compares against.
+            record_local_task(
+                &mut decls,
+                &name,
+                &attr,
+                extensions,
+                LocalTaskKind::Software,
+                SpawnByNamespace::Global,
+            );
             let local = u32::try_from(local).expect("core count fits in u32");
             attr.elements
                 .insert(SPAWN_BY_ARG.to_string(), syn::parse_quote!(#local));
         } else if extensions.external_cores.contains(&producer) {
             // Cross-binary receiver: recorded here, invisible to sw-pass.
             attr.elements.remove(SPAWN_BY_ARG);
+            decls.receiver_spans.insert(name.to_string(), name.span());
             decls.receivers.push(parse_receiver(
                 name, &attr, &inputs, extensions, producer, span,
             )?);
@@ -511,7 +619,70 @@ pub(crate) fn parse_module(
     }
 
     decls.receivers.sort_by(|a, b| a.name.cmp(&b.name));
+    decls.local_tasks.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(decls)
+}
+
+/// Namespace `spawn_by` values are read in for the priority-line validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnByNamespace {
+    /// Local core index (`spawn_by` absent, or the application does not
+    /// declare `external_cores`).
+    Local,
+    /// Global core id (an application declaring `external_cores`).
+    Global,
+}
+
+/// Records a local (non-cross) task for the build-phase priority-line
+/// validation (M6-T1).
+///
+/// Reads `priority`, `core` and `spawn_by` without consuming them, so the
+/// software and async passes still own their syntax and errors. A declaration
+/// whose values do not resolve (out of range, non-integer) is skipped: the
+/// owning pass reports it with its own precise error.
+fn record_local_task(
+    decls: &mut ModuleDecls,
+    name: &Ident,
+    attr: &RticAttr,
+    extensions: &AppExtensions,
+    kind: LocalTaskKind,
+    namespace: SpawnByNamespace,
+) {
+    let Ok(priority) = parse_attr_int(attr, "priority", 0u16) else {
+        return;
+    };
+    let Ok(core) = parse_attr_int(attr, "core", 0u32) else {
+        return;
+    };
+    let Some(&target_core) = extensions.core_ids.get(core as usize) else {
+        return;
+    };
+    let origin_core = match attr.get_expr(SPAWN_BY_ARG) {
+        None => target_core,
+        Some(_) => {
+            let Ok(spawn_by) = parse_attr_int(attr, SPAWN_BY_ARG, core) else {
+                return;
+            };
+            match namespace {
+                SpawnByNamespace::Local => {
+                    let Some(&global) = extensions.core_ids.get(spawn_by as usize) else {
+                        return;
+                    };
+                    global
+                }
+                SpawnByNamespace::Global => spawn_by,
+            }
+        }
+    };
+
+    decls.local_tasks.push(LocalTaskDecl {
+        name: name.to_string(),
+        kind,
+        priority,
+        target_core,
+        origin_core,
+        span: name.span(),
+    });
 }
 
 /// Reads the singular `spawn_by` producer core id.
@@ -639,7 +810,7 @@ pub(crate) fn inject_receiver_tasks(app_mod: &mut ItemMod, receivers: &[Receiver
         else {
             continue;
         };
-        let Some(index) = find_sw_task_attr(&item_struct.attrs) else {
+        let Some(index) = find_attr(&item_struct.attrs, SW_TASK_ATTR) else {
             continue;
         };
 
@@ -681,17 +852,15 @@ pub(crate) fn strip_receiver_tasks(app_mod: &mut ItemMod, receivers: &[ReceiverD
         {
             continue;
         }
-        if let Some(index) = find_sw_task_attr(&item_struct.attrs) {
+        if let Some(index) = find_attr(&item_struct.attrs, SW_TASK_ATTR) {
             item_struct.attrs.remove(index);
         }
     }
 }
 
-/// Returns the index of the first `#[sw_task]` attribute in `attrs`, if any.
-fn find_sw_task_attr(attrs: &[Attribute]) -> Option<usize> {
-    attrs
-        .iter()
-        .position(|attr| attr.path().is_ident(SW_TASK_ATTR))
+/// Returns the index of the first `#[<name>]` attribute in `attrs`, if any.
+fn find_attr(attrs: &[Attribute], name: &str) -> Option<usize> {
+    attrs.iter().position(|attr| attr.path().is_ident(name))
 }
 
 /// `type SpawnInput = …;` declarations found in `impl RticSwTask` blocks,
@@ -933,7 +1102,10 @@ mod tests {
     }
 
     fn module_decls(receivers: Vec<ReceiverDecl>) -> ModuleDecls {
-        ModuleDecls { receivers }
+        ModuleDecls {
+            receivers,
+            ..Default::default()
+        }
     }
 
     #[test]

@@ -14,10 +14,13 @@
 //!   `<project root>/target/rticx-xbin/system.json`), filters it by this
 //!   application's cores, and emits the cross-binary code:
 //!
-//!   - sender side (M3-T1, M5.5): a generated sender stub
+//!   - sender side (M3-T1, M5.5, M6-T2): a generated sender stub
 //!     (`pub struct <Task>;`) plus FIFO views and `Task::cross_spawn` for
 //!     every view task whose `spawner_core` belongs to this application —
-//!     producer sources declare nothing;
+//!     producer sources declare nothing. The spawn gates on the target's
+//!     readiness through a spawner-local cached epoch
+//!     (`rticx_xbin_rt::ReadyCache`), so a not-ready or just-reset target
+//!     returns `Err(Some(input))` without enqueueing;
 //!   - receiver side (M3-T2, M5.5, M6.5-T3): FIFO views, the
 //!     `SpawnInput: CrossCoreMessage` const assertion, one generated **line
 //!     dispatcher** per `(source -> target, priority)` line bound to its
@@ -25,10 +28,11 @@
 //!     `(source -> target)` pair routing task ids to the line ready queues,
 //!     and the core `#[task(..)]` shape on the native receiver structs
 //!     themselves (see `crate::parse::inject_receiver_tasks`);
-//!   - init hooks (M3-T3): `__rticx_xbin_configure_shared_memory` on every
-//!     core, `__rticx_xbin_init_shared` on the application owning the
-//!     project's owner core, and `__rticx_xbin_mark_ready_core<N>` on every
-//!     local core, wired into the generated entry functions through
+//!   - init hooks (M3-T3, M6-T1): `__rticx_xbin_configure_shared_memory` on
+//!     every core, `__rticx_xbin_init_shared` on the application owning the
+//!     project's owner core, `__rticx_xbin_init_fifos_core<N>` on every core
+//!     producing cross-binary FIFOs, and `__rticx_xbin_mark_ready_core<N>` on
+//!     every local core, wired into the generated entry functions through
 //!     [`RticPass::main_injection`] (see `crate::codegen`);
 //!   - freshness (M3-T4): the generated code embeds the synced
 //!     `__RTICX_XBIN_TOPOLOGY_HASH` and `include_str!`s the system view, so
@@ -36,7 +40,13 @@
 //!     changes. The pass hard-errors on a `topology_hash` that does not match
 //!     the view's contents (it was edited after `cargo xbin sync`) and on an
 //!     application whose source changed since the last `sync` (see
-//!     `crate::codegen::check_source_hash`).
+//!     `crate::codegen::check_source_hash`);
+//!   - priority lines (M6-T1): the pass analyzes the application's raw
+//!     `#[sw_task]`/`#[async_task]` declarations together with the cross
+//!     receivers of the view and rejects a cross receiver sharing its
+//!     `(target core, priority)` line with a task from another origin core
+//!     (see `crate::priority`). `sync` already rejects producer-vs-producer
+//!     collisions; local declarations are only visible at build time.
 //!
 //! Codegen mode loads the view for every application listed in it — not only
 //! for applications declaring cross tasks — because producer endpoints need
@@ -73,6 +83,7 @@
 
 mod codegen;
 mod parse;
+mod priority;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -91,6 +102,7 @@ use crate::parse::{
     AppExtensions, ModuleDecls, inject_receiver_tasks, parse_app_args, parse_module,
     strip_receiver_tasks, validate_ipc_dispatchers,
 };
+use crate::priority::validate_priority_lines;
 
 /// Re-export of the pass trait, so that distributions and fixtures binding
 /// [`XbinPass`] need not depend on `rticx-core` directly.
@@ -334,6 +346,13 @@ impl RticPass for XbinPass {
             // (M5.5).
             let view = load_system(&system.path)?;
             let application = check_application(&view, package, target, &extensions)?;
+
+            // M6-T1: one priority line per target core belongs to exactly one
+            // origin core. `sync` enforced the rule across producer cores;
+            // this application's own raw sw/async declarations are only
+            // visible here, at build time.
+            validate_priority_lines(&view, application, &decls)?;
+
             let mut items =
                 generate_sender_items(&app_mod, &view, application, self.backend.as_deref())?;
             items.extend(generate_receiver_items(

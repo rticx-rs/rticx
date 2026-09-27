@@ -1,0 +1,10 @@
+[package]
+name = "xbin-mock-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Runtime of the mock distribution used by the rticx-xbin end-to-end fixture"
+
+[dependencies]
+rticx-xbin-mock = { path = "../../../crates/rticx-xbin-mock" }
+rticx-xbin-rt = { path = "../../../crates/rticx-xbin-rt" }

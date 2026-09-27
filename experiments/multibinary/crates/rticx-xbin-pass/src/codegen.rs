@@ -25,7 +25,9 @@
 //!     - `Err(None)`: the input is enqueued, but the notification failed
 //!       (do not retry the enqueue; re-notify the target);
 //!     - `Err(Some(input))`: nothing was enqueued (the FIFO is full, the caller
-//!       does not run on the expected core, …); retry later or raise `capacity`.
+//!       does not run on the expected core, or the target has not marked itself
+//!       ready — including after a peer reset, which the spawner detects
+//!       through its cached epoch, M6-T2); retry later or raise `capacity`.
 //! - for every native `#[sw_task]` cross-binary receiver of this application
 //!   (M3-T2, M5.5, M6.5-T3):
 //!   - a hidden **FIFO view** helper like the sender's, but resolving the
@@ -58,8 +60,8 @@
 //! task static, runs the user's `impl RticSwTask`, and checks the trait
 //! implementation — no core-pass changes are required.
 //!
-//! - **Init hooks** (M3-T3): codegen mode also emits three hook functions and
-//!   wires them into the generated entry functions through
+//! - **Init hooks** (M3-T3, M6-T1): codegen mode also emits the hook functions
+//!   and wires them into the generated entry functions through
 //!   [`rticx_core::RticPass::main_injection`]:
 //!   - `__rticx_xbin_configure_shared_memory` runs on every core at the start
 //!     of its entry (`MainInjectionPoint::BeforeInit`, before the user
@@ -67,9 +69,13 @@
 //!     view of the IPC regions Normal, Non-cacheable, Shareable;
 //!   - `__rticx_xbin_init_shared` is generated for the application owning the
 //!     project's **owner core** (the lowest global core id, i.e. the boot
-//!     core). It runs `init_shared()` and zeroes the ring indices of every
-//!     task FIFO, before the owner's `mark_ready` and before any peer may
-//!     rely on the shared memory (`MainInjectionPoint::BeforePostInit`);
+//!     core) and runs `init_shared()` at `BeforePostInit`, before the owner's
+//!     `mark_ready`;
+//!   - `__rticx_xbin_init_fifos_core<N>` is generated for every local core
+//!     that produces cross-binary tasks and runs at `BeforePostInit`: it
+//!     zeroes the ring indices of the core's own FIFOs, so a topology whose
+//!     owner core is not an endpoint of a region initializes correctly
+//!     (M6-T1). The producer is always an endpoint of its region;
 //!   - `__rticx_xbin_mark_ready_core<N>` runs on every core at the end of its
 //!     `post_init` (`MainInjectionPoint::BeforeIdle`): it calls
 //!     `mark_ready(core)`. The router IRQs are enabled and prioritized by the
@@ -216,6 +222,9 @@ pub(crate) struct HookPlan {
     owner_local: Option<u32>,
     /// Global core id of each local core index (`core_ids[local]`).
     global_ids: Vec<u32>,
+    /// Local cores that produce at least one view task, running
+    /// `__rticx_xbin_init_fifos_core<N>` before their `post_init` (M6-T1).
+    fifo_locals: Vec<u32>,
 }
 
 impl HookPlan {
@@ -235,11 +244,24 @@ impl HookPlan {
                     __rticx_xbin_configure_shared_memory(&#backend_expr);
                 })
             }
-            rticx_core::MainInjectionPoint::BeforePostInit if self.owner_local == Some(core) => {
+            rticx_core::MainInjectionPoint::BeforePostInit => {
+                self.global_ids.get(core as usize)?;
                 let backend_expr = backend.backend();
-                Some(quote! {
-                    __rticx_xbin_init_shared(&#backend_expr);
-                })
+                let mut statements = TokenStream::new();
+                if self.owner_local == Some(core) {
+                    statements.extend(quote! {
+                        __rticx_xbin_init_shared(&#backend_expr);
+                    });
+                }
+                if self.fifo_locals.contains(&core) {
+                    // Each FIFO's indices are zeroed by its producer core,
+                    // before its `post_init` can spawn (M6-T1).
+                    let init_fn = format_ident!("__rticx_xbin_init_fifos_core{core}");
+                    statements.extend(quote! {
+                        #init_fn(&#backend_expr);
+                    });
+                }
+                (!statements.is_empty()).then_some(statements)
             }
             rticx_core::MainInjectionPoint::BeforeIdle => {
                 self.global_ids.get(core as usize)?;
@@ -821,10 +843,10 @@ fn local_pend_fn_ident(core: u32, cores: u32) -> Ident {
     }
 }
 
-/// Generates the init hooks of one application (M3-T3): the per-core
+/// Generates the init hooks of one application (M3-T3, M6-T1): the per-core
 /// `__rticx_xbin_configure_shared_memory`, the owner's
-/// `__rticx_xbin_init_shared` and the per-core
-/// `__rticx_xbin_mark_ready_core<N>`.
+/// `__rticx_xbin_init_shared`, one `__rticx_xbin_init_fifos_core<N>` per
+/// producing core and the per-core `__rticx_xbin_mark_ready_core<N>`.
 ///
 /// The returned [`HookPlan`] is stashed by the pass and consulted from
 /// [`rticx_core::RticPass::main_injection`] to wire the hooks into the
@@ -881,11 +903,10 @@ pub(crate) fn generate_init_hooks(
     if let Some(owner) = owner
         && owner_local.is_some()
     {
-        let zero_fifos = generate_fifo_inits(view, owner, backend)?;
         let init_doc = format!(
-            "Initializes the shared ready/epoch state and zeroes the ring indices of every task \
-             FIFO from the owner core (global core {owner}); runs before the owner is marked ready \
-             (M3-T3)."
+            "Initializes the shared ready/epoch state on the owner core (global core {owner}); runs \
+             before the owner is marked ready (M3-T3). The per-task FIFO indices are zeroed by \
+             each FIFO's producer core, in its own `__rticx_xbin_init_fifos_core<N>` (M6-T1)."
         );
         items.push(syn::parse_quote! {
             #[doc = #init_doc]
@@ -895,6 +916,32 @@ pub(crate) fn generate_init_hooks(
                 __rticx_xbin_backend: &impl #rt_path::CrossBinBackend,
             ) {
                 __rticx_xbin_backend.init_shared();
+            }
+        });
+    }
+
+    // Every core zeroes the FIFOs it produces, before its `post_init` can
+    // spawn. The producer is always an endpoint of its region, so a topology
+    // whose owner core is not an endpoint still initializes correctly
+    // (M6-T1).
+    let mut fifo_locals = Vec::new();
+    for (local, &global) in application.core_ids.iter().enumerate() {
+        let zero_fifos = generate_fifo_inits(view, global, backend)?;
+        if zero_fifos.is_empty() {
+            continue;
+        }
+        let local = local as u32;
+        fifo_locals.push(local);
+        let init_doc = format!(
+            "Zeroes the ring indices of every task FIFO produced by this core (global core \
+             {global}) before its `post_init` can spawn (M6-T1)."
+        );
+        let init_fn = format_ident!("__rticx_xbin_init_fifos_core{local}");
+        items.push(syn::parse_quote! {
+            #[doc = #init_doc]
+            #[doc(hidden)]
+            #[allow(non_snake_case)]
+            fn #init_fn(__rticx_xbin_backend: &impl #rt_path::CrossBinBackend) {
                 #(#zero_fifos)*
             }
         });
@@ -905,32 +952,30 @@ pub(crate) fn generate_init_hooks(
         plan: HookPlan {
             owner_local,
             global_ids: application.core_ids.clone(),
+            fifo_locals,
         },
     })
 }
 
-/// Generates the FIFO-zeroing blocks of the owner's `init_shared`.
+/// Generates the FIFO-zeroing blocks of the `producer` core's initializer.
 ///
-/// Only regions the owner is an endpoint of can be addressed through
-/// [`rticx_xbin_rt::backend::IpcRegion::base_for`]. v1 (one pair of binaries)
-/// has a region per direction and the owner is an endpoint of every one of
-/// them; a wider topology needs a per-region initializer and is left to
-/// M6-T1.
+/// The producer of a FIFO is an endpoint of its `(source -> target)` region by
+/// construction, so [`rticx_xbin_rt::backend::IpcRegion::base_for`] always
+/// resolves; a topology whose owner core is not an endpoint of the region
+/// initializes correctly (M6-T1).
 fn generate_fifo_inits(
     view: &SystemView,
-    owner: u32,
+    producer: u32,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<Vec<TokenStream>> {
     let rt_path = backend.rt_path();
     let ipc_types = backend.ipc_types_path();
 
-    let mut blocks = Vec::with_capacity(view.tasks.len());
+    let mut blocks = Vec::new();
     for task in &view.tasks {
         let source = task.fifo.source;
         let target = task.fifo.target;
-        if source != owner && target != owner {
-            // TODO(M6-T1): multi-pair topologies need the region's initializer
-            // to come from one of its endpoints.
+        if source != producer {
             continue;
         }
 
@@ -944,8 +989,9 @@ fn generate_fifo_inits(
             "`cargo xbin sync` allocated the `({source} -> {target})` IPC region; re-run it \
              after changing `rticx.toml`"
         );
-        let wrong_core =
-            format!("the owner core is not an endpoint of the `({source} -> {target})` IPC region");
+        let wrong_core = format!(
+            "the producer core is not an endpoint of the `({source} -> {target})` IPC region"
+        );
         blocks.push(quote! {
             {
                 const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
@@ -977,9 +1023,10 @@ fn generate_fifo_inits(
                     .expect(#wrong_core);
 
                 // SAFETY: `system.json` places the FIFO at `offset`, aligned,
-                // inside the region; no producer or consumer runs before the
-                // owner marks itself ready, and `Fifo::init` documents why it
-                // must not race one.
+                // inside the region; the producer core runs this before its
+                // `post_init` can spawn and no consumer acts before a
+                // notification, and `Fifo::init` documents why it must not
+                // race one.
                 unsafe {
                     (*#rt_path::Fifo::<#ipc_types::#type_ident, #depth>::view_at(
                         __rticx_xbin_base + __RTICX_XBIN_FIFO_OFFSET,
@@ -1323,7 +1370,8 @@ pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::R
 
 /// Generates the sender stub of one view task: the `pub struct <Task>;` the
 /// producer's source does not declare (M5.5), its FIFO view and its
-/// `cross_spawn` impl.
+/// `cross_spawn` impl, including the cached-epoch target-ready gate
+/// (M6-T2).
 fn generate_sender(
     view: &SystemView,
     task: &TaskEntry,
@@ -1364,8 +1412,9 @@ fn generate_sender(
          - `Ok(())`: the input is enqueued and the target router was notified;\n\
          - `Err(None)`: the input is enqueued, but the notification failed. Do **not** \
          retry the spawn; re-notify the target instead;\n\
-         - `Err(Some(input))`: nothing was enqueued (the FIFO is full, or the caller does not \
-         run on global core {source}). Retry later or raise `capacity`.",
+         - `Err(Some(input))`: nothing was enqueued (the FIFO is full, the caller does not \
+         run on global core {source}, or the target core {target_core} has not marked itself \
+         ready). Retry later or raise `capacity`.",
         task.name
     );
     let stub_doc = format!(
@@ -1429,6 +1478,13 @@ fn generate_sender(
                     const __RTICX_XBIN_TARGET_CORE: u32 = #target_core;
                     const __RTICX_XBIN_TASK_ID: u32 = #task_id;
 
+                    // Last shared epoch this spawner observed with the target
+                    // ready. A peer reset or a reinitialization moves the epoch
+                    // on, so the cache refreshes once and the spawn is rejected
+                    // until the target re-marks itself ready in the new epoch
+                    // (M6-T2).
+                    static __RTICX_XBIN_READY: #rt_path::ReadyCache = #rt_path::ReadyCache::new();
+
                     const _: () = assert!(
                         core::mem::size_of::<#input_ty>() == #elem_size,
                         "the IDL layout of the spawn input changed; run `cargo xbin sync`",
@@ -1442,8 +1498,15 @@ fn generate_sender(
                     if __rticx_xbin_backend.current_global_core_id() != __RTICX_XBIN_SOURCE_CORE {
                         return Err(Some(input));
                     }
-                    // TODO(M6-T2): return `Err(Some(input))` while the target
-                    // core is not ready (`CrossBinBackend::is_ready` + epoch).
+                    if !__RTICX_XBIN_READY.is_ready(
+                        __rticx_xbin_backend.shared_state(),
+                        __RTICX_XBIN_TARGET_CORE,
+                    ) {
+                        // The target has not marked itself ready yet, or it
+                        // reset without re-marking: return the input without
+                        // enqueueing (M6-T2).
+                        return Err(Some(input));
+                    }
 
                     __rticx_interrupt_free(|| -> Result<(), Option<#input_ty>> {
                         let __rticx_xbin_fifo = #fifo_fn(&__rticx_xbin_backend);

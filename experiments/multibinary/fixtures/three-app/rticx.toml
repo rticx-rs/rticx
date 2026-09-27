@@ -1,0 +1,31 @@
+# Project topology of the three-application fixture (M6-T1).
+#
+# `app-m7` owns global core 0, `app-m4` global core 1 and `app-m5` global core
+# 2. Both producers spawn onto the receiver core 1, each through its own
+# `(source -> target)` region: `EncryptTask` (priority 3) over `0->1` and
+# `SensorTask` (priority 4) over `2->1`. The dispatcher lines are disjoint, so
+# one priority level per target core belongs to exactly one origin core.
+#
+# The fixture's mock runtime places the regions in process memory and ignores
+# the addresses; they are still declared because the driver validates and
+# sizes every used direction from `rticx.toml`.
+schema = 1
+
+[[application]]
+package = "app-m7"
+target = { kind = "bin", name = "m7" }
+core_ids = [0]
+
+[[application]]
+package = "app-m5"
+target = { kind = "bin", name = "m5" }
+core_ids = [2]
+
+[[application]]
+package = "app-m4"
+target = { kind = "bin", name = "m4" }
+core_ids = [1]
+
+[ipc.regions]
+"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
+"2->1" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }

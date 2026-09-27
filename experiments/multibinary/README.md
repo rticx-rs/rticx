@@ -15,14 +15,16 @@ repository later.
 |---|---|
 | `rticx-xbin-proto` | IDL parser, canonical layout engine, merge + validation, JSON schemas, canonical FIFO image |
 | `rticx-xbin-pass` | `RticPass` implementation (metadata mode + codegen mode) |
-| `rticx-xbin-rt` | Atomic cross-core SPSC queue, marker trait, ready/epoch helpers |
+| `rticx-xbin-rt` | Atomic cross-core SPSC queue, marker trait, ready/epoch helpers (`SharedState`, spawn-side `ReadyCache`) |
 | `rticx-xbin-driver` | `cargo-xbin` subcommand (`sync`, `build`) |
 | `rticx-xbin-mock` | Mock distro/backend for host tests |
 
 ## Documentation
 
-- [docs/](docs/README.md) — user guide outline, architecture outline and
-  PlantUML sources (rendered manually).
+- [docs/](docs/README.md) — [user guide](docs/user-guide.md) (install,
+  topology, task syntax, worked example, build/run, troubleshooting),
+  [architecture](docs/architecture.md) (phases, memory/priority rules,
+  boot/reset, failure modes) and PlantUML sources (rendered manually).
 
 ## Fixtures
 
@@ -47,6 +49,19 @@ and **runs** the generated code over the mock runtime: spawn, doorbell, FIFO
 backpressure and dispatcher execution; the driver's `tests/negative.rs`
 (M4-T3) asserts the documented errors for a missing sync, a stale view or
 source, priority conflicts, unknown types and region overflow.
+
+`fixtures/three-app/` is the M6-T1 project: two producers (`app-m7` on global
+core 0, `app-m5` on global core 2) spawn onto one receiver (`app-m4` on global
+core 1) through two regions, two priority lines and two per-pair routers. The
+driver's `tests/three_app.rs` builds it with `cargo xbin build`, and the pass
+crate's `tests/e2e_runtime.rs` expands all three applications into one host
+binary and runs the multi-source scenario: per-pair routers and dispatcher
+lines, per-source backpressure, and the non-owner producer initializing its
+own region (`tests/priority_lines.rs` covers the build-phase priority-line
+validation). The two-application harness also drives the M6-T2 ready/epoch
+path: a simulated receiver reset makes `cross_spawn` return `Err(Some(input))`
+without enqueueing, and the spawn after the receiver re-marks itself ready
+refreshes the stale epoch and executes.
 
 ## Build & test
 
