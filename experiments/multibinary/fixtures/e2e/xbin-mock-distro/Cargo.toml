@@ -12,5 +12,6 @@ proc-macro = true
 proc-macro2 = "1"
 quote = "1"
 rticx-core = { path = "../../../../../rticx-core" }
+rticx-sw-pass = { path = "../../../../../compilation-passes/rticx-sw-pass" }
 rticx-xbin-pass = { path = "../../../crates/rticx-xbin-pass" }
 syn = { version = "2", features = ["full"] }

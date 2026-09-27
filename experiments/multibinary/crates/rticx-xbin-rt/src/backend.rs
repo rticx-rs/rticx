@@ -7,8 +7,6 @@
 //!
 //! - the shared-memory region of every `(source -> target)` direction
 //!   ([`CrossBinBackend::ipc_region`]);
-//! - the hardware doorbell that wakes a target's dispatcher
-//!   ([`CrossBinBackend::doorbell_setup`] / [`CrossBinBackend::doorbell_ring`]);
 //! - the identity of the running core
 //!   ([`CrossBinBackend::current_global_core_id`]);
 //! - the shared ready/epoch state ([`CrossBinBackend::shared_state`], which
@@ -50,13 +48,22 @@
 //! 2. [`CrossBinBackend::init_shared`] on the owner core (the lowest global
 //!    core id), which also zeroes the per-task FIFO indices, before any peer
 //!    can observe the shared memory;
-//! 3. on every core, [`CrossBinBackend::doorbell_setup`] for the doorbell
-//!    lines targeting that core and then [`CrossBinBackend::mark_ready`] at
-//!    the end of its `post_init`, so a ready bit always implies an armed
-//!    doorbell;
+//! 3. on every core, [`CrossBinBackend::mark_ready`] at the end of its
+//!    `post_init`; the router IRQs are enabled and prioritized by the core
+//!    pass's used-IRQ machinery, so no per-line arming step remains;
 //! 4. [`CrossBinBackend::is_ready`] (with the epoch from
 //!    [`CrossBinBackend::epoch`]) in `cross_spawn`, which reports
 //!    `Err(Some(input))` while the target core is not ready.
+//!
+//! # Doorbell transport
+//!
+//! The runtime trait deliberately carries no doorbell methods: the generated
+//! `__rticx_xbin_ring_{source}_{target}` / `__rticx_xbin_read_{source}_{target}`
+//! bodies are the distribution's transport, emitted by the pass from the
+//! `XbinPassBackend` bindings (M6.5). A producer writes the task id to the
+//! pair's doorbell word and triggers the target's router IRQ; the router pends
+//! the line dispatcher from the application's `ipc_dispatchers` pool through
+//! the software pass's pend function.
 
 use crate::SharedState;
 
@@ -112,18 +119,6 @@ impl IpcRegion {
     }
 }
 
-/// Error returned when a doorbell operation cannot be performed.
-///
-/// A doorbell ring that fails is reported by `cross_spawn` as `Err(None)`:
-/// the input is already in the target's FIFO and the spawner must not retry
-/// the enqueue, only the notification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum DoorbellError {
-    /// The `(target, line)` pair has not been set up (or is out of range).
-    UnknownLine,
-}
-
 /// Runtime backend contract of the cross-binary extension.
 ///
 /// See the [module documentation](self) for the shared-memory requirements and
@@ -141,22 +136,6 @@ pub trait CrossBinBackend {
     /// per-task FIFOs of that direction (see the [module
     /// documentation](self)).
     fn ipc_region(&self, source: u32, target: u32) -> Option<IpcRegion>;
-
-    /// Sets up doorbell `line` of `target` so that
-    /// [`Self::doorbell_ring`] pends `irq` on the target.
-    ///
-    /// Called once per `(target, line)` during boot, before
-    /// [`Self::mark_ready`]. Calling it again (for example after a peer
-    /// reset) must be idempotent.
-    fn doorbell_setup(&self, target: u32, line: u32, irq: u16) -> Result<(), DoorbellError>;
-
-    /// Rings doorbell `line` of `target`, waking its dispatcher.
-    ///
-    /// Called by the generated spawn after the input has been published to
-    /// the target's FIFO. An error means the notification could not be
-    /// delivered; the input is *already enqueued*, and `cross_spawn` reports
-    /// `Err(None)` accordingly.
-    fn doorbell_ring(&self, target: u32, line: u32) -> Result<(), DoorbellError>;
 
     /// Returns the shared ready/epoch state.
     ///
@@ -176,11 +155,10 @@ pub trait CrossBinBackend {
         self.shared_state().init();
     }
 
-    /// Marks global core `core` ready and publishes its FIFO/doorbell state.
+    /// Marks global core `core` ready and publishes its FIFO state.
     ///
-    /// Called at the end of the core's `post_init`, after its doorbells are
-    /// armed. The default implementation delegates to
-    /// [`SharedState::mark_ready`].
+    /// Called at the end of the core's `post_init`. The default implementation
+    /// delegates to [`SharedState::mark_ready`].
     fn mark_ready(&self, core: u32) {
         self.shared_state().mark_ready(core);
     }

@@ -1,16 +1,16 @@
 //! Host tests for the mock cross-binary backend.
 //!
-//! Covers the region table, the per-handle core identity, the mock doorbell,
-//! the ready/epoch defaults and the no-op cache hooks, plus the M2-T3
-//! acceptance case: two threads spawn and drain through a raw `Fifo` placed in
-//! a mock region.
+//! Covers the region table, the per-handle core identity, the pair doorbell
+//! message word, the ready/epoch defaults and the no-op cache hooks, plus the
+//! M2-T3 acceptance case: two threads spawn and drain through a raw `Fifo`
+//! placed in a mock region, notified through the pair doorbell.
 
 use std::mem::size_of;
 use std::thread;
 use std::time::Duration;
 
 use rticx_xbin_mock::{MockError, MockSystem};
-use rticx_xbin_rt::backend::{CrossBinBackend, DoorbellError};
+use rticx_xbin_rt::backend::CrossBinBackend;
 use rticx_xbin_rt::{CrossCoreMessage, FIFO_ALIGN, FIFO_HEADER, Fifo};
 
 #[repr(C)]
@@ -90,38 +90,6 @@ fn current_global_core_id_comes_from_the_handle() {
     assert_eq!(system.backend(0).current_global_core_id(), 0);
     assert_eq!(system.backend(7).current_global_core_id(), 7);
     assert_eq!(system.backend(7).global_core_id(), 7);
-}
-
-#[test]
-fn doorbell_requires_setup_and_clears_on_take() {
-    let system = MockSystem::new();
-    let backend = system.backend(1);
-
-    assert_eq!(backend.doorbell_ring(0, 3), Err(DoorbellError::UnknownLine));
-    assert!(!backend.doorbell_take(0, 3));
-    assert!(!backend.doorbell_wait(0, 3, Duration::from_millis(10)));
-
-    backend.doorbell_setup(0, 3, 7).unwrap();
-    backend.doorbell_setup(0, 3, 7).unwrap();
-    assert_eq!(backend.doorbell_ring(0, 3), Ok(()));
-    assert!(backend.doorbell_take(0, 3));
-    assert!(!backend.doorbell_take(0, 3));
-}
-
-#[test]
-fn doorbell_wakes_a_waiting_thread() {
-    let system = MockSystem::new();
-    let target = system.backend(1);
-    let source = system.backend(0);
-    target.doorbell_setup(1, 0, 0).unwrap();
-
-    thread::scope(|scope| {
-        let waiter = scope.spawn(|| {
-            assert!(target.doorbell_wait(1, 0, Duration::from_secs(5)));
-        });
-        source.doorbell_ring(1, 0).unwrap();
-        waiter.join().unwrap();
-    });
 }
 
 #[test]
@@ -209,7 +177,6 @@ fn two_threads_spawn_and_drain_via_raw_fifo() {
 
     let sender = system.backend(0);
     let receiver = system.backend(1);
-    sender.doorbell_setup(1, 0, 0).unwrap();
 
     thread::scope(|scope| {
         let producer = scope.spawn(move || {
@@ -223,7 +190,11 @@ fn two_threads_spawn_and_drain_via_raw_fifo() {
                     value = returned;
                     thread::yield_now();
                 }
-                sender.doorbell_ring(1, 0).expect("doorbell line is set up");
+                // The task id is irrelevant here: the mock router word
+                // coalesces and the consumer drains the FIFO until empty.
+                sender
+                    .doorbell_send(0, 1, 1)
+                    .expect("the mock doorbell accepts the id");
             }
         });
 
@@ -234,10 +205,10 @@ fn two_threads_spawn_and_drain_via_raw_fifo() {
             let mut expected = 0;
             while expected < MESSAGES {
                 assert!(
-                    receiver.doorbell_wait(1, 0, Duration::from_secs(10)),
+                    receiver.router_wait(0, 1, Duration::from_secs(10)),
                     "timed out after {expected} of {MESSAGES} messages"
                 );
-                receiver.doorbell_take(1, 0);
+                receiver.take_message(0, 1);
                 while let Some(value) = unsafe { (*fifo).dequeue() } {
                     assert_eq!(value, msg(expected));
                     expected += 1;

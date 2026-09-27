@@ -19,6 +19,7 @@ use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{
     Analysis, App, AppArgs, CorePassBackend, RticMacroBuilder, RticTask, SubAnalysis, SubApp,
 };
+use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 use rticx_xbin_pass::{XbinPass, XbinPassBackend};
 use rticx_xbin_proto::SystemView;
 
@@ -129,6 +130,41 @@ impl XbinPassBackend for CompileBackend {
     }
 }
 
+/// Software-task backend of the compile fixture (M6.5-T5).
+///
+/// Binding [`SoftwarePass`] generates the `RticSwTask` trait the receiver
+/// implements and the `__rticx_local_irq_pend` the router calls; the mock has
+/// no interrupt controller, so the pend body runs the bound dispatcher ISR
+/// directly.
+struct CompileSwBackend;
+
+impl SwPassBackend for CompileSwBackend {
+    fn queue_path(&self) -> syn::Path {
+        syn::parse_quote!(rticx_xbin_rt::Queue)
+    }
+
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: syn::ItemFn) -> syn::ItemFn {
+        empty_body_fn.block = Box::new(syn::parse_quote!({
+            match irq_nbr {
+                __XbinInterrupt::IRQ0 => IRQ0(),
+            }
+        }));
+        empty_body_fn
+    }
+
+    fn generate_cross_pend_fn(
+        &self,
+        _core: u32,
+        _empty_body_fn: syn::ItemFn,
+    ) -> Option<syn::ItemFn> {
+        None
+    }
+
+    fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
+        Some(syn::parse_quote!(__XbinInterrupt))
+    }
+}
+
 /// The core backend of the receiver fixture: [`MockCoreBackend`] with a
 /// working resource-proxy lock body.
 ///
@@ -231,18 +267,10 @@ fn receiver_app() -> syn::ItemMod {
             }
 
             /// Fixture interrupt enum: `custom_interrupt_path` points the
-            /// generated router at it, and the stand-in pend function is what
-            /// `rticx-sw-pass` would generate for the receiver core.
+            /// generated router and the software pass's pend function at it.
             #[allow(non_camel_case_types)]
             pub enum __XbinInterrupt {
                 IRQ0,
-            }
-
-            fn __rticx_local_irq_pend(_irq: __XbinInterrupt) {}
-
-            trait RticSwTask {
-                type SpawnInput;
-                fn exec(&mut self, input: Self::SpawnInput);
             }
 
             #[shared]
@@ -279,44 +307,37 @@ fn receiver_args() -> TokenStream {
 /// The fixture view with the receiver application's source hash recorded, as
 /// `cargo xbin sync` would (M3-T4).
 fn receiver_system() -> String {
-    system_for(&receiver_app())
-}
-
-/// Like [`receiver_system`] for an arbitrary receiver module.
-fn system_for(app_mod: &syn::ItemMod) -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     let application = view
         .apps
         .iter_mut()
         .find(|application| application.package == "app-m4")
         .expect("fixture app-m4");
-    application.source_hash = rticx_xbin_pass::app_source_hash(&receiver_args(), app_mod);
+    application.source_hash = rticx_xbin_pass::app_source_hash(&receiver_args(), &receiver_app());
     view.seal();
     view.to_json()
 }
 
-/// The receiver module without the `RticSwTask` trait definition: what a
-/// distribution without the `swtasks` feature leaves in scope (M5.5).
-fn receiver_app_without_sw_task_trait() -> syn::ItemMod {
-    let mut app_mod = receiver_app();
-    if let Some((_, items)) = app_mod.content.as_mut() {
-        items.retain(|item| !matches!(item, syn::Item::Trait(item) if item.ident == "RticSwTask"));
-    }
-    app_mod
-}
-
-/// Runs the extension pass and the core pass and returns the expansion.
+/// Runs the extension pass, the software pass and the core pass and returns
+/// the expansion.
 fn expand(system: &Path) -> String {
-    expand_with(system, receiver_app())
+    let pass = XbinPass::with_system(system, "app-m4", "m4").with_backend(CompileBackend);
+    let mut builder = RticMacroBuilder::new(FixtureCoreBackend::default());
+    builder.bind_pre_core_pass(pass);
+    builder.bind_pre_core_pass(SoftwarePass::new(CompileSwBackend));
+    builder
+        .build_rtic_macro2(receiver_args(), receiver_app(), None)
+        .to_string()
 }
 
-/// Like [`expand`], over an arbitrary receiver module.
-fn expand_with(system: &Path, app_mod: syn::ItemMod) -> String {
+/// Like [`expand`], but without the software pass: what a distribution whose
+/// `swtasks` feature is off produces (M5.5).
+fn expand_without_sw_pass(system: &Path) -> String {
     let pass = XbinPass::with_system(system, "app-m4", "m4").with_backend(CompileBackend);
     let mut builder = RticMacroBuilder::new(FixtureCoreBackend::default());
     builder.bind_pre_core_pass(pass);
     builder
-        .build_rtic_macro2(receiver_args(), app_mod, None)
+        .build_rtic_macro2(receiver_args(), receiver_app(), None)
         .to_string()
 }
 
@@ -523,17 +544,16 @@ fn receiver_fixture_expands_and_compiles() {
 
 #[test]
 fn missing_sw_task_trait_is_a_compile_error() {
-    // The `swtasks` feature is what makes `rticx-sw-pass` generate the
-    // `RticSwTask` trait and its check function. A distribution that binds
-    // the cross-binary pass without it leaves `RticSwTask` undefined, so the
+    // The `swtasks` feature is what binds `rticx-sw-pass`, which generates
+    // the `RticSwTask` trait and its check function. A distribution that
+    // binds only the cross-binary pass leaves `RticSwTask` undefined, so the
     // receiver's `impl RticSwTask` and the injected
     // `task_trait = RticSwTask` must fail to resolve (M5.5).
     let dir = tempfile::tempdir().expect("tempdir");
     let system = dir.path().join("system.json");
-    let app_mod = receiver_app_without_sw_task_trait();
-    std::fs::write(&system, system_for(&app_mod)).expect("system.json");
+    std::fs::write(&system, receiver_system()).expect("system.json");
 
-    let expanded = expand_with(&system, app_mod);
+    let expanded = expand_without_sw_pass(&system);
     assert!(
         !expanded.contains("compile_error"),
         "pipeline failed: {expanded}"

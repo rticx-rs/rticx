@@ -33,7 +33,8 @@
 //!    publishes the magic;
 //! 2. initialize the FIFO indices (`Fifo::init`) of every task;
 //! 3. [`SharedState::mark_ready`]`(own_core)` last, at the end of
-//!    `post_init`, after the core armed the doorbell lines targeting it.
+//!    `post_init` (the router IRQs are enabled by the core pass's used-IRQ
+//!    machinery, not by a per-line arming step).
 //!
 //! Peer core boot (in particular after a peer reset):
 //!
@@ -42,7 +43,7 @@
 //! 2. [`SharedState::bump_epoch`] — invalidates every cached epoch
 //!    observation so spawners re-assess readiness instead of trusting stale
 //!    state;
-//! 3. re-establish its FIFO/doorbell state, then
+//! 3. re-establish its FIFO state, then
 //!    [`SharedState::mark_ready`]`(own_core)`.
 //!
 //! A spawner caches the epoch it observed as valid; passing that epoch to
@@ -199,8 +200,8 @@ impl SharedState {
         self.is_ready(core) && self.epoch() == epoch
     }
 
-    /// Marks global core `core` as ready and publishes its FIFO/doorbell
-    /// state (Release).
+    /// Marks global core `core` as ready and publishes its FIFO state
+    /// (Release).
     ///
     /// # Panics
     ///

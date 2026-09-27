@@ -13,24 +13,18 @@
 //!
 //! let sender = system.backend(0);
 //! let receiver = system.backend(1);
-//! sender.doorbell_setup(1, 0, 0).unwrap();
 //!
 //! assert_eq!(sender.ipc_region(0, 1).unwrap().size(), 4096);
 //! assert_eq!(receiver.current_global_core_id(), 1);
 //! ```
 //!
 //! A region is backed by an 8-byte-aligned, zeroed in-process array (the
-//! "array" variant of the plan's `mmap`/array choice). Two doorbell flavours
-//! coexist:
-//!
-//! - the per-line **pending flag** of the `CrossBinBackend` contract
-//!   ([`MockBackend::doorbell_ring`], [`MockBackend::doorbell_wait`],
-//!   [`MockBackend::doorbell_take`]) let a test thread act as a target's
-//!   dispatcher ISR;
-//! - the per-`(source -> target)` **pair message word** of the M6.5 router
-//!   transport ([`MockBackend::doorbell_send`], [`MockBackend::take_message`],
-//!   [`MockBackend::router_wait`]) carries the task id a producer publishes
-//!   to the target's router.
+//! "array" variant of the plan's `mmap`/array choice). The doorbell transport
+//! is the per-`(source -> target)` **pair message word** of the M6.5 router
+//! ([`MockBackend::doorbell_send`], [`MockBackend::take_message`],
+//! [`MockBackend::router_wait`]): it carries the task id a producer publishes
+//! to the target's router, which then pends the line dispatcher. There are no
+//! per-line doorbell methods (M6.5).
 //!
 //! This crate is host-only test support: it is not `no_std` and its
 //! `MockBackend` implements the [`CrossBinBackend`] cache/MPU hooks with the
@@ -39,11 +33,11 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use rticx_xbin_rt::backend::{CrossBinBackend, DoorbellError, IpcRegion};
+use rticx_xbin_rt::backend::{CrossBinBackend, IpcRegion};
 use rticx_xbin_rt::{FIFO_ALIGN, SharedState};
 
 const _: () = assert!(
@@ -64,7 +58,6 @@ pub struct MockSystem {
 
 struct SystemInner {
     regions: BTreeMap<(u32, u32), RegionBacking>,
-    doorbells: Mutex<BTreeMap<(u32, u32), Arc<Doorbell>>>,
     /// Per-`(source -> target)` pair message words of the M6.5 doorbell
     /// routers, keyed by `(source, target)`.
     pair_doorbells: Mutex<BTreeMap<(u32, u32), Arc<PairDoorbell>>>,
@@ -86,7 +79,6 @@ impl MockSystem {
         Self {
             inner: Arc::new(SystemInner {
                 regions: BTreeMap::new(),
-                doorbells: Mutex::new(BTreeMap::new()),
                 pair_doorbells: Mutex::new(BTreeMap::new()),
                 state: SharedState::new(),
             }),
@@ -143,15 +135,6 @@ impl MockSystem {
         }
     }
 
-    fn doorbell(&self, target: u32, line: u32) -> Option<Arc<Doorbell>> {
-        self.inner
-            .doorbells
-            .lock()
-            .expect("mock doorbell table is never poisoned")
-            .get(&(target, line))
-            .cloned()
-    }
-
     /// Returns the pair message word of `(source -> target)`, creating it on
     /// first use (like a hardware doorbell, which exists independently of the
     /// software that rings it).
@@ -193,29 +176,6 @@ impl MockBackend {
     /// Returns the [`MockSystem`] this handle belongs to.
     pub fn system(&self) -> &MockSystem {
         &self.system
-    }
-
-    /// Waits until doorbell `line` of `target` is pending, up to `timeout`.
-    ///
-    /// Returns `false` on timeout. Simulates the target core sleeping until
-    /// its doorbell ISR fires; pair it with [`Self::doorbell_take`], which
-    /// acts as the ISR clearing the pending flag.
-    pub fn doorbell_wait(&self, target: u32, line: u32, timeout: Duration) -> bool {
-        match self.system.doorbell(target, line) {
-            Some(doorbell) => doorbell.wait_timeout(timeout),
-            None => false,
-        }
-    }
-
-    /// Returns whether doorbell `line` of `target` was pending, clearing it.
-    ///
-    /// Simulates the target's doorbell ISR observing and acknowledging the
-    /// ring before pending the dispatcher.
-    pub fn doorbell_take(&self, target: u32, line: u32) -> bool {
-        match self.system.doorbell(target, line) {
-            Some(doorbell) => doorbell.take(),
-            None => false,
-        }
     }
 
     /// Publishes `task_id` to the `(source -> target)` pair message word and
@@ -270,75 +230,8 @@ impl CrossBinBackend for MockBackend {
             .map(|region| IpcRegion::new(region.base, region.base, region.size))
     }
 
-    fn doorbell_setup(&self, target: u32, line: u32, _irq: u16) -> Result<(), DoorbellError> {
-        self.system
-            .inner
-            .doorbells
-            .lock()
-            .expect("mock doorbell table is never poisoned")
-            .entry((target, line))
-            .or_insert_with(|| Arc::new(Doorbell::new()));
-        Ok(())
-    }
-
-    fn doorbell_ring(&self, target: u32, line: u32) -> Result<(), DoorbellError> {
-        let doorbell = self
-            .system
-            .doorbell(target, line)
-            .ok_or(DoorbellError::UnknownLine)?;
-        doorbell.ring();
-        Ok(())
-    }
-
     fn shared_state(&self) -> &SharedState {
         self.system.state()
-    }
-}
-
-/// A pending flag plus a condition variable, the mock's doorbell line.
-struct Doorbell {
-    pending: AtomicBool,
-    lock: Mutex<()>,
-    ready: Condvar,
-}
-
-impl Doorbell {
-    fn new() -> Self {
-        Self {
-            pending: AtomicBool::new(false),
-            lock: Mutex::new(()),
-            ready: Condvar::new(),
-        }
-    }
-
-    fn ring(&self) {
-        self.pending.store(true, Ordering::Release);
-        let _guard = self.lock.lock().expect("mock doorbell is never poisoned");
-        self.ready.notify_all();
-    }
-
-    fn take(&self) -> bool {
-        self.pending.swap(false, Ordering::AcqRel)
-    }
-
-    fn wait_timeout(&self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        let mut guard = self.lock.lock().expect("mock doorbell is never poisoned");
-        while !self.pending.load(Ordering::Acquire) {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            let (next, result) = self
-                .ready
-                .wait_timeout(guard, remaining)
-                .expect("mock doorbell is never poisoned");
-            guard = next;
-            if result.timed_out() && !self.pending.load(Ordering::Acquire) {
-                return false;
-            }
-        }
-        true
     }
 }
 

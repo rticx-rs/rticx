@@ -7,8 +7,8 @@
 //! the generated `__rticx_xbin_init_shared` must zero the FIFO indices and
 //! publish the shared state, and the generated
 //! `__rticx_xbin_mark_ready_core0` must publish the owner core's ready bit
-//! without arming any doorbell (M6.5-T4: the router IRQs are configured by the
-//! core pass's used-IRQ machinery, which the harness simulates itself).
+//! without any doorbell arming step (M6.5: the router IRQs are enabled and
+//! prioritized by the core pass's used-IRQ machinery, not by generated code).
 //!
 //! The hooks are private to the `#[app]` module, so the fixture declares
 //! `pub` wrappers next to them for the harness to call.
@@ -24,8 +24,9 @@ use rticx_xbin_proto::SystemView;
 /// A two-application system view: `app-m7` (global core 0, the owner) spawns
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, and `app-m4`
 /// spawns `DecryptTask` back on `app-m7` at priority 4. The reverse direction
-/// gives the owner a doorbell targeting itself, so the executed test covers
-/// both the `init_shared` FIFO zeroing and the `mark_ready` ready publication.
+/// adds a second FIFO whose region the owner does not produce, so the executed
+/// test covers `init_shared` zeroing every view FIFO and `mark_ready`
+/// publishing the ready bit.
 const SYSTEM_JSON: &str = r#"{
   "schema_version": 1,
   "rticx_generation": "0.2",
@@ -292,9 +293,6 @@ fn write_project(root: &Path, expanded: &str) {
              assert!(unsafe { (*in_fifo).enqueue(msg(2)) }.is_ok());\n\
              assert_eq!(unsafe { (*out_fifo).len() }, 1, \"one dirty element\");\n\
              assert_eq!(unsafe { (*in_fifo).len() }, 1, \"one dirty element\");\n\n\
-             // The owner's own doorbell is not armed before `mark_ready`.\n\
-             let backend = system.backend(0);\n\
-             assert!(backend.doorbell_ring(0, 0).is_err(), \"unarmed before mark_ready\");\n\n\
              app::test_init_shared();\n\
              assert_eq!(system.state().epoch(), 1, \"init_shared bumps the epoch\");\n\
              assert!(\n\
@@ -303,37 +301,16 @@ fn write_project(root: &Path, expanded: &str) {
              );\n\
              assert_eq!(unsafe { (*out_fifo).len() }, 0, \"the 0->1 FIFO is zeroed\");\n\
              assert_eq!(unsafe { (*in_fifo).len() }, 0, \"the 1->0 FIFO is zeroed\");\n\
-             assert!(!system.state().is_ready(0), \"init clears the ready bits\");\n\
-             assert!(\n\
-                 backend.doorbell_ring(0, 0).is_err(),\n\
-                 \"init_shared does not arm the doorbells\"\n\
-             );\n\n\
+             assert!(!system.state().is_ready(0), \"init clears the ready bits\");\n\n\
              app::test_mark_ready();\n\
              assert!(system.state().is_ready(0), \"the owner core is ready\");\n\
              assert!(\n\
                  system.state().is_ready_at(0, system.state().epoch()),\n\
                  \"the ready bit belongs to the published epoch\"\n\
              );\n\n\
-             // Generated code never arms doorbells (M6.5-T4): the core pass\n\
-             // enables the router IRQ through its used-IRQ machinery. This\n\
-             // harness simulates that arming step itself.\n\
-             assert!(\n\
-                 backend.doorbell_ring(0, 0).is_err(),\n\
-                 \"mark_ready publishes the ready bit without arming doorbells\"\n\
-             );\n\
-             backend\n\
-                 .doorbell_setup(0, 0, 100)\n\
-                 .expect(\"the simulated used-IRQ machinery arms the router line\");\n\
-             backend\n\
-                 .doorbell_ring(0, 0)\n\
-                 .expect(\"the router line rings once armed\");\n\
-             assert!(backend.doorbell_take(0, 0));\n\n\
-             // The 1 -> 0 doorbell belongs to the receiver core: this harness\n\
-             // never arms it.\n\
-             assert!(\n\
-                 backend.doorbell_ring(1, 0).is_err(),\n\
-                 \"the receiver core arms its own router line\"\n\
-             );\n\n\
+             // Generated code has no doorbell arming step (M6.5): the core\n\
+             // pass enables the router IRQ through its used-IRQ machinery, so\n\
+             // `mark_ready` only publishes the ready bit.\n\n\
              println!(\"xbin: owner ready\");\n\
          }\n",
     )

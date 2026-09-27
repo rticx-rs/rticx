@@ -18,10 +18,9 @@ use xbin_mock_distro::app;
     ipc_dispatchers = [XBIN_IPC_LINE_0]
 )]
 mod app {
-    use xbin_mock_runtime::RticSwTask;
-
     /// Receiver task: one spawn input per execution, `EncryptReq` from the
-    /// shared IDL.
+    /// shared IDL. `RticSwTask` is generated inside this module by the
+    /// software pass the mock distribution binds (M6.5-T5).
     #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
     pub struct EncryptTask;
 

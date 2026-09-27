@@ -20,9 +20,10 @@
 //!   software pass uses, re-exported so generated code reaches it through one
 //!   path;
 //! - [`backend`] — the [`CrossBinBackend`] contract a distribution
-//!   implements for its IPC regions, doorbells, core identity and
-//!   cache/MPU policy; the in-tree `rticx-xbin-mock` implements it for host
-//!   tests.
+//!   implements for its IPC regions, core identity and cache/MPU policy; the
+//!   in-tree `rticx-xbin-mock` implements it for host tests. The doorbell
+//!   transport itself lives in the generated ring/read functions (M6.5), so
+//!   the trait carries no per-line doorbell methods.
 
 #![no_std]
 
@@ -30,7 +31,7 @@ pub mod backend;
 pub mod fifo;
 pub mod state;
 
-pub use backend::{CrossBinBackend, DoorbellError, IpcRegion};
+pub use backend::{CrossBinBackend, IpcRegion};
 pub use fifo::{Consumer, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer};
 pub use rticx_spsc::Queue;
 pub use state::{MAX_CORES, SharedState};

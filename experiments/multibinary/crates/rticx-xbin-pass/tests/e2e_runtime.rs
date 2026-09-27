@@ -5,9 +5,11 @@
 //! Both fixture applications are expanded with the **real** phase-2 pipeline —
 //! the sender through [`XbinPass`] (its expansion is a plain module: no core
 //! pass runs and the fixture provides `__rticx_interrupt_free`), the receiver
-//! through the full [`RticMacroBuilder`] on `MockCoreBackend` (so the receiver
-//! struct becomes a core task and the dispatcher becomes a hardware task) —
-//! and written into one throwaway binary together with the in-tree
+//! through the full [`RticMacroBuilder`] on `MockCoreBackend` with
+//! [`SoftwarePass`] bound after the cross-binary pass (so the receiver struct
+//! becomes a core task, the dispatcher becomes a hardware task and the
+//! generated `RticSwTask` trait and pend function come from the software pass)
+//! — and written into one throwaway binary together with the in-tree
 //! `rticx-xbin-mock` runtime.
 //!
 //! The binary is `#![no_main]`: the receiver expansion generates the project
@@ -38,6 +40,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
+use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 use rticx_xbin_pass::{XbinPass, XbinPassBackend};
 use rticx_xbin_proto::SystemView;
 
@@ -148,6 +151,43 @@ impl XbinPassBackend for TestBackend {
     }
 }
 
+/// Software-task backend of the receiver harness.
+///
+/// Binding [`SoftwarePass`] gives the receiver the generated `RticSwTask`
+/// trait and the generated `__rticx_local_irq_pend` the router calls (M6.5-T5).
+/// The mock has no interrupt controller, so the generated pend body runs the
+/// bound dispatcher ISR synchronously (tail-chaining).
+struct TestSwBackend;
+
+impl SwPassBackend for TestSwBackend {
+    fn queue_path(&self) -> syn::Path {
+        syn::parse_quote!(rticx_xbin_rt::Queue)
+    }
+
+    fn generate_local_pend_fn(&self, _core: u32, mut empty_body_fn: syn::ItemFn) -> syn::ItemFn {
+        empty_body_fn.block = Box::new(syn::parse_quote!({
+            match irq_nbr {
+                // The dispatcher's `binds = IRQ0` makes the core pass
+                // generate the handler under that interrupt name.
+                __XbinInterrupt::IRQ0 => IRQ0(),
+            }
+        }));
+        empty_body_fn
+    }
+
+    fn generate_cross_pend_fn(
+        &self,
+        _core: u32,
+        _empty_body_fn: syn::ItemFn,
+    ) -> Option<syn::ItemFn> {
+        None
+    }
+
+    fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
+        Some(syn::parse_quote!(__XbinInterrupt))
+    }
+}
+
 /// The producer fixture application: it declares nothing (the pass generates
 /// the `EncryptTask` stub from the view) plus the pieces its codegen-only
 /// expansion needs and `pub` wrappers over the generated private init hooks.
@@ -194,13 +234,15 @@ fn sender_args() -> TokenStream {
 /// The receiver fixture application: the task, a log of executed inputs and
 /// the scenario driver in `#[idle]`.
 ///
-/// The receiver runs through the full core pass, so the generated entry boots
-/// the application (init, init hooks, idle). The driver runs after the boot
-/// sequence, from the idle task, and calls the generated **router ISR**
-/// directly; the router pends the line dispatcher through the stand-in
-/// `__rticx_local_irq_pend`, which runs the dispatcher ISR synchronously —
-/// the mock backend has no interrupt controller, so the idle task stands in
-/// for the hardware that would invoke it (M6.5-T3).
+/// The receiver runs through the full pipeline — the cross-binary pass, the
+/// bound [`SoftwarePass`] (which generates the `RticSwTask` trait and the
+/// `__rticx_local_irq_pend` function) and the core pass — so the generated
+/// entry boots the application (init, init hooks, idle). The driver runs after
+/// the boot sequence, from the idle task, and calls the generated **router
+/// ISR** directly; the router pends the line dispatcher through the generated
+/// pend function, which runs the dispatcher ISR synchronously — the mock
+/// backend has no interrupt controller, so the idle task stands in for the
+/// hardware that would invoke it (M6.5-T3).
 fn receiver_module() -> syn::ItemMod {
     syn::parse_quote! {
         pub mod receiver_app {
@@ -213,21 +255,11 @@ fn receiver_module() -> syn::ItemMod {
             }
 
             /// Fixture interrupt enum of the line dispatcher, reached by the
-            /// generated router through `custom_interrupt_path`, plus the
-            /// stand-in pend function `rticx-sw-pass` would generate on a real
-            /// distribution. The mock has no interrupt controller, so the pend
-            /// runs the dispatcher ISR synchronously (tail-chaining).
+            /// generated router through `custom_interrupt_path`. On a real
+            /// distribution this is the PAC's `Interrupt` enum.
             #[allow(non_camel_case_types)]
             pub enum __XbinInterrupt {
                 IRQ0,
-            }
-
-            fn __rticx_local_irq_pend(irq: __XbinInterrupt) {
-                match irq {
-                    // The dispatcher's `binds = IRQ0` makes the core pass
-                    // generate the handler under that interrupt name.
-                    __XbinInterrupt::IRQ0 => IRQ0(),
-                }
             }
 
             fn request(addr: u32) -> ipc_types::EncryptReq {
@@ -240,11 +272,6 @@ fn receiver_module() -> syn::ItemMod {
 
             /// Inputs executed by the receiver task, in dispatcher order.
             pub static RECEIVED: Mutex<Vec<ipc_types::EncryptReq>> = Mutex::new(Vec::new());
-
-            trait RticSwTask {
-                type SpawnInput;
-                fn exec(&mut self, input: Self::SpawnInput);
-            }
 
             #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
             pub struct EncryptTask;
@@ -411,12 +438,13 @@ fn expand_sender(system: &Path) -> String {
     module.to_token_stream().to_string()
 }
 
-/// Expands the receiver fixture through the cross-binary pass and the full
-/// core pass.
+/// Expands the receiver fixture through the cross-binary pass, the software
+/// pass and the full core pass (the real phase-2 pipeline).
 fn expand_receiver(system: &Path) -> String {
     let pass = XbinPass::with_system(system, "app-m4", "m4").with_backend(TestBackend);
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(pass);
+    builder.bind_pre_core_pass(SoftwarePass::new(TestSwBackend));
     builder
         .build_rtic_macro2(receiver_args(), receiver_module(), None)
         .to_string()

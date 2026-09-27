@@ -1,14 +1,35 @@
 @startuml 04-memory-priority-map
-' Diagram 4 — Memory/priority map: per-task FIFOs, priority lines, doorbells.
+' Diagram 4 — Memory/priority map: per-task FIFOs in the A->B region, the
+' ipc_dispatchers pool and the per-pair routers (M6.5).
 ' Source of truth: docs/architecture.md §6–§7, plan §7.2 §9.
-' TODO(M6-T4): author this diagram.
 
-title memory / priority map (stub)
+title memory / priority map (M6.5)
 
 skinparam shadowing false
 skinparam monochrome true
 skinparam defaultFontName monospace
 
-note "TODO(M6-T4): author this diagram" as todo
+package "shared region A->B (Normal, Non-cacheable, Shareable)" {
+  rectangle "Fifo<EncryptTask>\noffset 0, depth capacity+1" as F1
+  rectangle "Fifo<OtherTask>\noffset N, depth capacity+1" as F2
+}
+
+package "core B priority levels" {
+  rectangle "router A->B\nbinds = pair doorbell IRQ" as R
+  rectangle "line dispatcher (A, prio 3)\nbinds = ipc_dispatchers[0]" as D1
+  rectangle "line dispatcher (A, prio 2)\nbinds = ipc_dispatchers[1]" as D2
+}
+
+F1 --> D1
+F2 --> D2
+R --> D1
+R --> D2
+
+note right of R
+  one router per (source -> target) pair,
+  at the pair's highest line priority;
+  one line per (source, priority) from the
+  application's ipc_dispatchers pool
+end note
 
 @enduml

@@ -2,7 +2,7 @@
 
 Status: **outline**. The design is specified in
 [`multibinary-multicore-plan.md`](../../../multibinary-multicore-plan.md);
-this document condenses it and records which parts exist through M5.5.
+this document condenses it and records which parts exist through M6.5-T5.
 Completed by
 [M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
 
@@ -42,9 +42,10 @@ Renode, M7).*
 
 ```text
 distribution (out-of-tree H7 / in-tree mock)
-  └─ backend: regions, doorbells, ready/epoch, cache/MPU
+  └─ backend: regions, ready/epoch, cache/MPU
+     (doorbell transport = the generated ring/read functions, M6.5)
 compilation passes
-  └─ rticx-xbin-pass: metadata mode (M1) + codegen mode (M3/M4)
+  └─ rticx-xbin-pass: metadata mode (M1) + codegen mode (M3/M4/M6.5)
 core
   └─ rticx-xbin-proto:  IDL + layout + project manifest + system.json schema
      rticx-xbin-rt:     cross-core SPSC FIFO, marker trait, ready/epoch (M2)
@@ -55,9 +56,9 @@ core
 |---|---|
 | `rticx-xbin-proto` | IDL parse/validate, layout engine, crate generator with change-detecting write (`GeneratedCrate::write_if_changed`), `rticx.toml` parse/validate, `Hash64`, `system.json` / manifest schemas, merge + validation + FIFO allocation, `system_view` emission and the canonical FIFO image (`fifo`) |
 | `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `ipc-types` generation with change detection; `build`: `sync`, then `cargo build --package … --bin …` per application with `RTICX_XBIN_SYSTEM` pointing at the just-written view (M4-T1) |
-| `rticx-xbin-pass` | metadata mode: `#[app]` additions and native `#[sw_task]` cross receivers parsed and stripped (M1-T3, M5.5), `<target>.xbin.json` emit (M1-T2); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path) for every application listed in it (M5.5 removed the cross-declaration gate), filters it by the application's cores and emits the generated sender stubs (`pub struct <Task>;` + FIFO views + `Task::cross_spawn` for every view task it produces, M3-T1/M5.5), the receiver FIFO views, the `SpawnInput: CrossCoreMessage` const assertion and doorbell dispatchers (M3-T2/M5.5), the init hooks (`__rticx_xbin_init_shared` on the owner, `__rticx_xbin_mark_ready_core<N>` per core) wired into the entry functions via `RticPass::main_injection` (M3-T3), and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view) plus the stale-view and stale-source hard errors (M3-T4); a discovered `rticx.toml` without a synced view is also a hard error, so plain `cargo build` never silently skips code generation (M4-T3). The pass is bound before `rticx-sw-pass` and requires the distribution's `swtasks` feature: sw-pass generates the `RticSwTask` trait the injected `task_trait = RticSwTask` receivers compile through, so without the feature the generated code fails on the unresolved trait (M5.5) |
-| `rticx-xbin-rt` | marker trait `CrossCoreMessage`; `Fifo<T, DEPTH>` atomic SPSC ring mirroring the canonical image (Vyukov, `Release`/`Acquire`, cache-line-padded indices, `view_at`/`init`/`split`), with a drift guard against `rticx-xbin-proto` and a threaded hand-off test; `SharedState` magic/ready-bitmap/epoch helpers (M2-T2) with stale-epoch reset tests; `backend::CrossBinBackend` + `IpcRegion`/`DoorbellError` contract (M2-T3) with no-op `configure_shared_memory`/`clean_range`/`invalidate_range` hooks and the Normal/Non-cacheable/Shareable + Device-forbidden rules documented in rustdoc (M2-T4) |
-| `rticx-xbin-mock` | `MockSystem`: aligned, zeroed in-process IPC regions, condvar mock doorbells (`ring` through the trait, `wait`/`take` for the simulated dispatcher ISR), per-handle `current_global_core_id`, ready/epoch defaults over one `SharedState`; two-thread spawn→drain over a raw `Fifo` (M2-T3) |
+| `rticx-xbin-pass` | metadata mode: `#[app]` additions, native `#[sw_task]` cross receivers and the `ipc_dispatchers` pool parsed and stripped (M1-T3, M5.5, M6.5-T1), `<target>.xbin.json` emit (M1-T2); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path) for every application listed in it (M5.5 removed the cross-declaration gate), filters it by the application's cores and emits the generated sender stubs (`pub struct <Task>;` + FIFO views + `Task::cross_spawn` for every view task it produces, M3-T1/M5.5), the per-pair `__rticx_xbin_ring_{s}_{t}` / `__rticx_xbin_read_{s}_{t}` functions from the `XbinPassBackend` templates (M6.5-T2), the receiver FIFO views, the `SpawnInput: CrossCoreMessage` const assertion, one **line dispatcher** per `(source, priority)` line bound to its `ipc_dispatchers` entry and one **doorbell router** per `(source → target)` pair (M6.5-T3/T4), the init hooks (`__rticx_xbin_init_shared` on the owner, `__rticx_xbin_mark_ready_core<N>` per core, no per-line arming) wired into the entry functions via `RticPass::main_injection` (M3-T3), and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view) plus the stale-view and stale-source hard errors (M3-T4); a discovered `rticx.toml` without a synced view is also a hard error, so plain `cargo build` never silently skips code generation (M4-T3). The pass is bound before `rticx-sw-pass` and requires the distribution's `swtasks` feature: sw-pass generates the `RticSwTask` trait the injected `task_trait = RticSwTask` receivers compile through and the `__rticx_local_irq_pend` the routers call, so without the feature the generated code fails on the unresolved trait (M5.5) |
+| `rticx-xbin-rt` | marker trait `CrossCoreMessage`; `Fifo<T, DEPTH>` atomic SPSC ring mirroring the canonical image (Vyukov, `Release`/`Acquire`, cache-line-padded indices, `view_at`/`init`/`split`), with a drift guard against `rticx-xbin-proto` and a threaded hand-off test; `SharedState` magic/ready-bitmap/epoch helpers (M2-T2) with stale-epoch reset tests; the `Queue` re-export backing the generated line ready queues (M6.5-T3); `backend::CrossBinBackend` + `IpcRegion` contract (M2-T3) with no-op `configure_shared_memory`/`clean_range`/`invalidate_range` hooks and the Normal/Non-cacheable/Shareable + Device-forbidden rules documented in rustdoc (M2-T4). No doorbell methods: the generated ring/read bodies are the transport (M6.5-T5) |
+| `rticx-xbin-mock` | `MockSystem`: aligned, zeroed in-process IPC regions, per-`(source → target)` condvar **pair doorbell message word** carrying the task id to the target's router (`doorbell_send`/`take_message`/`router_wait`, M6.5), per-handle `current_global_core_id`, ready/epoch defaults over one `SharedState`; two-thread spawn→drain over a raw `Fifo` notified through the pair word (M2-T3, M6.5-T5) |
 
 No public API of the root workspace changes in v1; the generated code only
 uses the frozen external `task_trait` surface.
@@ -123,9 +124,10 @@ section is the human-readable reference for both.
 
 ## 4. Phase 2: `cargo xbin build`
 
-*Sender side landed in M3-T1, the receiver doorbell dispatchers in M3-T2 and
-the init hooks in M3-T3; the freshness anchors and hard errors landed in
-M3-T4. `cargo xbin build` runs phase 2 for every application in M4-T1: after
+*Sender side landed in M3-T1, the receiver dispatchers in M3-T2, the init
+hooks in M3-T3 and the M6.5 router/line-dispatcher split in M6.5; the
+freshness anchors and hard errors landed in M3-T4. `cargo xbin build` runs
+phase 2 for every application in M4-T1: after
 `sync`, the driver builds each `[[application]]` with
 `cargo build --package <package> --bin <target>` and
 `RTICX_XBIN_SYSTEM=<project root>/target/rticx-xbin/system.json`, so the pass
@@ -144,20 +146,27 @@ own cores and emits, per app:
   `spawner_core` belongs to the application (M3-T1/M5.5; no local input queue,
   no forwarder). The producer source declares nothing; a generated stub name
   colliding with a user item is a dedicated compile error;
-- receiver-side FIFO views plus, per `(source → target, priority)` doorbell
-  line, one generated dispatcher: a `#[task(binds = <doorbell IRQ>, priority,
-  core, init = generated)]` hardware task whose `exec` drains each FIFO of the
-  line directly (single consumer) and calls the receiver task's
-  `exec(input)`. The native `#[sw_task]` receiver structs themselves are
+- receiver-side FIFO views plus, per `(source → target, priority)` line, one
+  generated **line dispatcher**: a `#[task(binds = <ipc_dispatchers entry>,
+  priority, core, init = generated)]` hardware task whose `exec` drains the
+  line's ready queue and, per popped task, drains its FIFO until empty and
+  calls the receiver task's `exec(input)` (M6.5-T4). One **doorbell router**
+  per `(source → target)` pair runs at the pair's highest line priority, reads
+  task ids from the pair doorbell word and pends the line dispatcher through
+  the software pass's `__rticx_local_irq_pend[_core{N}]`; unknown ids are
+  ignored (M6.5-T3). The native `#[sw_task]` receiver structs themselves are
   rewritten into `#[task(priority, core, task_trait = RticSwTask,
   init = generated)]` (preserving `shared`), the same external-`task_trait`
   shape the single-binary software-task pass uses, so the core pass generates
   the task static and enforces the user's `impl RticSwTask` (M3-T2/M5.5);
 - `Task::cross_spawn(input)`: runtime global-core guard, enqueue inside
-  `__rticx_interrupt_free` (v1), ring the doorbell; `Ok(())` / `Err(None)`
-  (enqueued, doorbell failed) / `Err(Some(input))` (not enqueued) (M3-T1);
-- init hooks: `init_shared`, `mark_ready`, doorbell arming before ready,
-  optional `configure_shared_memory` (M3-T3);
+  `__rticx_interrupt_free` (v1), call the per-pair ring function
+  `__rticx_xbin_ring_{source}_{target}(task_id)`; `Ok(())` / `Err(None)`
+  (enqueued, notification failed) / `Err(Some(input))` (not enqueued)
+  (M3-T1/M6.5-T2);
+- init hooks: `init_shared`, `mark_ready`, optional
+  `configure_shared_memory` (M3-T3). No per-line arming: the router IRQs are
+  enabled and prioritized by the core pass's used-IRQ machinery (M6.5-T4);
 - assertions: layout consts, `__RTICX_XBIN_TOPOLOGY_HASH`, FIFO bounds and
   alignment (layout consts in M3-T1, freshness in M3-T4), and the
   `SpawnInput: rticx_xbin_rt::CrossCoreMessage` const assertion per receiver
@@ -214,10 +223,13 @@ cache-maintenance decision tree.*
 - Priority lines on a target core must be disjoint between local tasks and
   each remote source core (extends `check_disjoint_priorities` and
   `check_uniform_spawn_by` to the project view).
-- One doorbell line per `(source, target, priority)`. In v1 (M3-T2) the
-  generated dispatcher is itself bound to that doorbell IRQ and runs at the
-  line's priority; a later split may run a shared ISR at the highest priority
-  and pend the per-priority dispatchers.
+- One dispatcher line per `(source, priority)` on a target core, taken from
+  the application's `ipc_dispatchers` pool in ascending `(source, priority)`
+  order; the generated dispatcher runs at the line's priority. One doorbell
+  router per `(source → target)` pair runs at the pair's highest line
+  priority and pends the line dispatchers, so a router is at least as urgent
+  as every dispatcher it wakes and enqueueing happens before the pend
+  (M6.5).
 
 ## 8. Boot, ready/epoch and reset
 
@@ -232,10 +244,11 @@ hooks (M3-T3) implement the protocol: every core runs
 start of its entry, before the user `init`; the owner application emits
 `__rticx_xbin_init_shared`, which runs `init_shared()` and zeroes the ring
 indices of every task FIFO before any peer relies on the region; every core
-emits `__rticx_xbin_mark_ready_core<N>`, which arms the doorbell lines
-targeting that core (`doorbell_setup`) and then calls `mark_ready(core)` at
-the end of its `post_init` (`MainInjectionPoint::BeforeIdle`), so a ready bit
-always implies an armed doorbell. `cross_spawn` caches the epoch and checks
+emits `__rticx_xbin_mark_ready_core<N>`, which calls `mark_ready(core)` at
+the end of its `post_init` (`MainInjectionPoint::BeforeIdle`). The router
+IRQs are enabled and prioritized by the core pass's used-IRQ machinery from
+the generated router `#[task(binds = …)]`, so there is no per-line arming
+step (M6.5-T4). `cross_spawn` caches the epoch and checks
 `is_ready_at(target, epoch)`: it returns `Err(Some(input))` while the target
 is not ready, and a reset invalidates the cached epoch until the spawner
 refreshes its observation.
@@ -245,15 +258,24 @@ refreshes its observation.
 `rticx_xbin_rt::backend::CrossBinBackend` (owned by the extension; defined in
 M2-T3/T4, implemented by the out-of-tree H7 distribution and by the in-tree
 mock): `ipc_region()`, `configure_shared_memory()` plus the no-op
-`clean_range`/`invalidate_range` fallback hooks, `doorbell_setup/ring`,
-`current_global_core_id()`, `shared_state()` with default
-`init_shared()`/`mark_ready()`/`is_ready()`/`epoch()`. Dispatcher IRQ type
-paths are code-generation configuration, not runtime methods: the
-distribution's `rticx_xbin_pass::XbinPassBackend::dispatcher_irq(target,
-line)` names the handler the generated dispatcher binds to, and
-`XbinPassBackend::doorbell_irq(target, line)` gives the numeric IRQ the
-target core's generated `mark_ready` hook arms through
-`CrossBinBackend::doorbell_setup` before publishing its ready bit (M3-T3).
+`clean_range`/`invalidate_range` fallback hooks, `current_global_core_id()`,
+`shared_state()` with default `init_shared()`/`mark_ready()`/`is_ready()`/
+`epoch()`. It carries **no doorbell methods** (M6.5-T5): the transport is the
+generated per-pair ring/read bodies, whose templates the distribution fills
+through the code-generation contract
+`rticx_xbin_pass::XbinPassBackend`:
+
+| Binding | Emits / names |
+|---|---|
+| `ring_doorbell_fn(source, target, template)` | `__rticx_xbin_ring_{source}_{target}(task_id) -> Result<(), ()>` on the producer side |
+| `doorbell_interrupt(target, source) -> Ident` | the router's `binds` |
+| `read_doorbell_msg_fn(target, source, template)` | `__rticx_xbin_read_{source}_{target}() -> Option<u32>` on the target side |
+| `custom_interrupt_path(core)` | the interrupt type the router pends through (mirrors the software pass's backend) |
+
+A portable implementation writes the task id to a per-pair shared atomic word
+and triggers one IRQ; hardware with a payload-capable doorbell can implement
+the same contract directly. The router IRQ is enabled and prioritized by the
+core pass's used-IRQ machinery (no `doorbell_setup` call remains, M6.5).
 
 ## 10. Failure modes
 
@@ -284,13 +306,14 @@ optionally `riscv32imc`); the in-tree two-app fixture `fixtures/e2e` built via
 `cargo xbin build` (M4-T1), with its own mock distribution so the generated
 phase-2 code compiles and links on the host.
 M4-T2 expands both fixture applications into one host binary and drives the
-generated code end to end: `cross_spawn` on the sender, the generated doorbell
-ISR/dispatcher on the receiver, input verification and FIFO backpressure
-(`Err(Some(input))`). M4-T3 adds the negative acceptance suite: a plain build
-without a synced view, a source changed after `sync`, a hand-edited
-`system.json`, a priority line shared by two source cores, an input type absent
-from the IDL and a region too small for its FIFOs, each asserted against its
-documented message.
+generated code end to end: `cross_spawn` on the sender, the per-pair ring
+function, the generated router ISR, the pended line dispatcher, input
+verification and FIFO backpressure (`Err(Some(input))`), including coalesced
+and duplicate notifications (M6.5-T3/T5). M4-T3 adds the negative acceptance
+suite: a plain build without a synced view, a source changed after `sync`, a
+hand-edited `system.json`, a priority line shared by two source cores, an input
+type absent from the IDL and a region too small for its FIFOs, each asserted
+against its documented message.
 
 ## 12. Open questions
 

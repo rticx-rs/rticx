@@ -1,6 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Implementation Plan
 
-**Status:** in progress (M0–M5.5 and M6.5-T1/T2/T3/T4 complete; M6.5-T5 next, then M6)
+**Status:** in progress (M0–M5.5 and M6.5 complete; M6 next)
 **Date:** 2026-09-27
 **Target:** experimental, in-tree development, designed for later extraction into its own repository.
 
@@ -874,7 +874,7 @@ multi-source acceptance is written against this model.
       (the router IRQ is configured through the core pass's used-IRQ machinery).
       *Acceptance:* snapshots; two lines on one target with distinct pool IRQs;
       insufficient-list/duplicate errors name the line.
-- [ ] **M6.5-T5** Contracts, mock/fixtures and docs: `XbinPassBackend` exposes
+- [x] **M6.5-T5** Contracts, mock/fixtures and docs: `XbinPassBackend` exposes
       the three bindings + `custom_interrupt_path`; `CrossBinBackend` drops
       `doorbell_setup`/`doorbell_ring`/`doorbell_take` and `DoorbellError`; the
       mock distro and host harnesses bind `SoftwarePass` and migrate to

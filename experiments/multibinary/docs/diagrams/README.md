@@ -13,8 +13,8 @@ plantuml -tsvg docs/diagrams/*.puml   # writes SVG next to each source
 |---|---|---|---|
 | 1 | [01-project-topology.puml](01-project-topology.puml) | two binaries, global core ids, IPC regions (`rticx.toml`) | authored |
 | 2 | [02-sync-build-pipeline.puml](02-sync-build-pipeline.puml) | `sync` → merge/validate/allocate → `build` | stub |
-| 3 | [03-spawn-timeline.puml](03-spawn-timeline.puml) | spawn flow A→B: producer, FIFO, doorbell, ISR, dispatcher, exec | stub |
-| 4 | [04-memory-priority-map.puml](04-memory-priority-map.puml) | per-task FIFOs, priority lines, doorbells | stub |
+| 3 | [03-spawn-timeline.puml](03-spawn-timeline.puml) | spawn flow A→B: producer, FIFO, ring function, router, ready queue, line dispatcher, exec | authored |
+| 4 | [04-memory-priority-map.puml](04-memory-priority-map.puml) | per-task FIFOs, `ipc_dispatchers` pool, per-pair routers | authored |
 | 5 | [05-type-pipeline.puml](05-type-pipeline.puml) | IDL → generated crate → layout asserts | stub |
 
 Conventions:

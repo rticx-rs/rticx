@@ -1,8 +1,8 @@
 # User guide (outline)
 
 Status: **outline**. Sections marked *implemented* describe behaviour that
-exists through M5.5; the worked examples and troubleshooting are completed by
-[M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
+exists through M6.5-T5; the worked examples and troubleshooting are completed
+by [M6-T3](../../../multibinary-multicore-plan.md#m6--multi-sourcetarget-readyepoch-complete-docs).
 
 1. [Installing `cargo-xbin`](#1-installing-cargo-xbin)
 2. [Project layout](#2-project-layout)
@@ -165,8 +165,6 @@ use my_distro::app;
     ipc_dispatchers = [IPC_LINE_0]
 )]
 mod app {
-    use my_distro::RticSwTask;
-
     #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
     pub struct EncryptTask;
 
@@ -180,12 +178,26 @@ mod app {
 }
 ```
 
+`RticSwTask` is generated inside the `#[app]` module by the software pass the
+distribution binds (its `swtasks` feature), together with the
+`__rticx_local_irq_pend` the generated router calls — do not import it from
+the distribution.
+
 The receiver's `ipc_dispatchers` pool names the interrupt line of every cross
 line on every local core: one entry per distinct `(producer core, priority)`
 pair, in ascending `(producer core, priority)` order (a flat array for
 `cores = 1`, one inner array per core otherwise). The pool is consumed by the
 pass; on each core its entries must be unique and disjoint from that core's
 software `dispatchers` entries.
+
+At runtime a spawn travels through the M6.5 dispatch chain:
+`cross_spawn` enqueues the input in the task's FIFO and calls the generated
+per-pair ring function, which publishes the task id on the pair's doorbell
+word and triggers the target's **doorbell router**; the router enqueues the
+task in its line's ready queue and pends the line's **line dispatcher** from
+the pool, whose `exec` drains the task FIFO until empty and calls the
+receiver's `exec(input)`. Duplicate and coalesced notifications are idempotent
+because the dispatcher drains until empty.
 
 Producer binary (declares nothing; the pass generates the stub from the
 synced system view):
