@@ -830,42 +830,6 @@ breaking triggers the coordinated generation bump.
       *Acceptance:* all fixture builds and workspace tests green; no
       xbin-specific task attribute remains in code or docs.
 
-### M6 — Multi-source/target, ready/epoch, complete docs
-
-- [ ] **M6-T1** Support multiple source cores per target with disjoint priority
-      lines, one dispatcher line per `(source, priority)` from the
-      `ipc_dispatchers` pool and one doorbell router per producer pair, building
-      on the native `#[sw_task]` syntax (M5.5) and the M6.5 dispatch model.
-      - Tasks from different producer cores on one target must declare disjoint
-        priorities; producer-vs-producer collisions are hard `sync` errors and the
-        driver never shifts priorities (the single-binary rule extended
-        project-wide).
-      - The pass validates priority lines at `build`: it runs pre-core and
-        analyzes the app's raw `#[sw_task]`/`#[async_task]` declarations
-        (`priority`, `core`, `spawn_by` mapped through `core_ids`) together with
-        the cross-bin receivers from the view. One priority level per target core
-        belongs to exactly one origin core; a collision with a core-local sw/async
-        task, an in-app `spawn_by` task or a receiver from another producer is a
-        hard compile error. `sync` catches producer-vs-producer collisions only.
-      - FIFO index initialization moves from the owner core to each FIFO's
-        producer core (`BeforePostInit`), so topologies whose owner core is not
-        an endpoint of a region work.
-      *Acceptance:* new three-app fixture (two producer binaries, one receiver
-      binary, two dispatcher lines and two per-pair routers); the M4-T2 runtime
-      harness is extended to it — three applications in one process, spawns from
-      both producer cores drain through their own router and dispatcher, and the
-      non-owner producer initializes its region; priority-line validation tests.
-- [ ] **M6-T2** Ready/epoch integration in generated spawn (target-not-ready error);
-      peer reset recovery path documented and tested in the mock.
-      *Acceptance:* tests for not-ready and post-reset spawns.
-- [ ] **M6-T3** Complete user guide and architecture doc, including the native
-      `#[sw_task]` declaration model and the pass-generated sender stubs of
-      M5.5.
-      *Acceptance:* a fresh reader can build the fixture following only the docs.
-- [ ] **M6-T4** Complete PlantUML set (diagrams 1–5) as `.puml` sources.
-      *Acceptance:* diagrams reviewed for small size/clarity (rendering is manual).
-- [ ] **M6-T5** Separate advisory CI workflow for the experimental workspace.
-      *Acceptance:* fmt, clippy, tests, mock e2e green.
 
 ### M6.5 — IPC dispatcher pool and doorbell routing
 
@@ -918,6 +882,44 @@ multi-source acceptance is written against this model.
       doc, user guide and diagrams 3/4 updated.
       *Acceptance:* rustdoc, docs and every workspace/fixture test green; no
       per-line doorbell description remains.
+
+
+### M6 — Multi-source/target, ready/epoch, complete docs
+
+- [ ] **M6-T1** Support multiple source cores per target with disjoint priority
+      lines, one dispatcher line per `(source, priority)` from the
+      `ipc_dispatchers` pool and one doorbell router per producer pair, building
+      on the native `#[sw_task]` syntax (M5.5) and the M6.5 dispatch model.
+      - Tasks from different producer cores on one target must declare disjoint
+        priorities; producer-vs-producer collisions are hard `sync` errors and the
+        driver never shifts priorities (the single-binary rule extended
+        project-wide).
+      - The pass validates priority lines at `build`: it runs pre-core and
+        analyzes the app's raw `#[sw_task]`/`#[async_task]` declarations
+        (`priority`, `core`, `spawn_by` mapped through `core_ids`) together with
+        the cross-bin receivers from the view. One priority level per target core
+        belongs to exactly one origin core; a collision with a core-local sw/async
+        task, an in-app `spawn_by` task or a receiver from another producer is a
+        hard compile error. `sync` catches producer-vs-producer collisions only.
+      - FIFO index initialization moves from the owner core to each FIFO's
+        producer core (`BeforePostInit`), so topologies whose owner core is not
+        an endpoint of a region work.
+      *Acceptance:* new three-app fixture (two producer binaries, one receiver
+      binary, two dispatcher lines and two per-pair routers); the M4-T2 runtime
+      harness is extended to it — three applications in one process, spawns from
+      both producer cores drain through their own router and dispatcher, and the
+      non-owner producer initializes its region; priority-line validation tests.
+- [ ] **M6-T2** Ready/epoch integration in generated spawn (target-not-ready error);
+      peer reset recovery path documented and tested in the mock.
+      *Acceptance:* tests for not-ready and post-reset spawns.
+- [ ] **M6-T3** Complete user guide and architecture doc, including the native
+      `#[sw_task]` declaration model and the pass-generated sender stubs of
+      M5.5.
+      *Acceptance:* a fresh reader can build the fixture following only the docs.
+- [ ] **M6-T4** Complete PlantUML set (diagrams 1–5) as `.puml` sources.
+      *Acceptance:* diagrams reviewed for small size/clarity (rendering is manual).
+- [ ] **M6-T5** Separate advisory CI workflow for the experimental workspace.
+      *Acceptance:* fmt, clippy, tests, mock e2e green.
 
 ### M7 — STM32H7 acceptance and extraction (separate effort)
 
