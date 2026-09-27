@@ -553,8 +553,10 @@ mock backend.
 - `current_global_core_id()`.
 - `init_shared()`, `mark_ready(core)`, `is_ready(core)`, `epoch()`.
 - Boot sequencing is distribution-owned (H7: CM7 initializes the region and then
-  releases CM4, e.g. via `RCC_GCR.BOOT_C2`); the ready bitmap makes boot order and
-  peer reset safe. `cross_spawn` returns `Err` when the target is not ready.
+  releases CM4 via `RCC_GCR.BOOT_C2`; the available M7/M4 doorbells are HSEM
+  IRQ 125/126 and per-core-masked EXTI lines, §11.1); the ready bitmap makes
+  boot order and peer reset safe. `cross_spawn` returns `Err` when the target is
+  not ready.
 
 ---
 
@@ -589,10 +591,57 @@ mock backend.
   per-source backpressure. The single-pair harness additionally drives the full
   M6.5 path: `cross_spawn` → ring function → router ISR → pended line dispatcher
   → `exec`, including coalesced notifications.
-- **Acceptance (out-of-tree):** STM32H7 M7+M4 distribution under Renode with a
-  real doorbell (HSEM/EXTI or IPCC where available) and non-cacheable shared SRAM.
+- **Acceptance (out-of-tree):** STM32H7 M7+M4 distribution under the in-tree
+  Renode harness (§11.1) with a real doorbell (HSEM/EXTI) and non-cacheable
+  shared SRAM.
 - **CI:** separate advisory workflow for `experiments/multibinary` (fmt, clippy,
   tests, mock e2e). Root CI untouched.
+
+### 11.1 Renode acceptance harness (STM32H7 M7+M4)
+
+The harness the H7 distribution is validated with is in-tree until the M7-T3
+extraction, at `experiments/multibinary/renode/`:
+
+| Item | Path | Notes |
+|---|---|---|
+| Platform | `renode/platforms/cpus/stm32h7_dualcore.repl` | Self-contained: the RCC (`RCC_GCR.BOOT_C2`), PWR, HSEM and EXTI models are embedded between `// >>> pydev:` markers; no C#/Renode build is required |
+| Startup script | `renode/scripts/single-node/stm32h7_dualcore.resc` | Loads the M7 image on `cpu0`, the M4 image on `cpu1` and runs `machine Reset` |
+| Launcher | `renode/run.sh <cm7.elf> <cm4.elf> [seconds]` | Headless (`--console --disable-gui`), routes USART1 (M7) and USART2 (M4) to the log, runs, quits |
+| Notes | `renode/README.md` | Provenance, memory map, doorbell paths, limitations |
+
+Provenance: copied on 2026-09-27 from the standalone simulation repository
+`/home/zakaria/stm32-renode` (commit `c7caf8c`); that repository keeps the
+canonical Peripheral-Script sources (`scripts/pydev/*.py`), the
+`sync_pydev_into_repl.py` regenerator, the known-bug log and the Python/Robot
+test suites. The installed Renode is v1.16.1. Verified 2026-09-27 with the
+upstream Rust ping-pong ELFs: boot handshake and 5 M7↔M4 round trips.
+
+Platform facts the H7 distribution must be written against:
+
+- **Boot.** CPU0 (M7) boots from flash bank 1 (`0x0800_0000`); CPU1 (M4)
+  starts halted with `VTOR = 0x0810_0000` and runs only after the M7 writes
+  `RCC_GCR.BOOT_C2`. That release is the distribution's `init_shared` → boot
+  step (§10).
+- **Execution.** `Machine SetSerialExecution True`, so both cores are
+  deterministic and the IPC paths are race-free in simulation.
+- **Shared memory.** AXI SRAM (`0x2400_0000`), SRAM1–3 (`0x3000_0000`,
+  `0x3002_0000`, `0x3004_0000`, aliased at `0x1000_0000`+ for the D2/M4 view)
+  and SRAM4 (`0x3800_0000`) are shared and coherent; DTCM/ITCM are M7-private.
+  IPC regions go in one of the shared blocks (SRAM4 carries the upstream demo's
+  mailbox).
+- **Doorbells.** HSEM (`0x5802_6400`): releasing semaphore `n` raises IRQ 125
+  (`HSEM1`) on `nvic0`/M7 and IRQ 126 (`HSEM2`) on `nvic1`/M4, and sets the
+  status bit on both cores. EXTI (`0x5800_0000`): a shared `SWIERx` write sets
+  the pending bit in both `C1PRx` and `C2PRx`; each core masks through its own
+  `CxIMR` and clears through its own `CxPRx`, which makes EXTI lines usable as
+  one-directional doorbells. There is no IPCC on this line, so the M6.5
+  portable shape (per-pair doorbell word + router IRQ) applies.
+- **Console.** USART1 is the M7 console and USART2 the M4 console;
+  `showAnalyzer` is required even headless.
+- **No cache model.** Renode does not emulate the M7 D-cache, so the
+  non-cacheable MPU configuration is invisible in simulation: a green Renode
+  run validates boot sequencing, transport and interrupt routing, never cache
+  policy.
 
 ---
 
@@ -929,7 +978,14 @@ multi-source acceptance is written against this model.
 - [ ] **M7-T1** Out-of-tree STM32H7 (M7+M4) distribution implementing
       `CrossBinBackend` (non-cacheable shared region, boot release) and the
       `XbinPassBackend` doorbell bindings (ring/read/router IRQ, M6.5).
+      *Acceptance:* the M7 and M4 example binaries boot under
+      `experiments/multibinary/renode/run.sh` (§11.1): the M7 initializes the
+      shared region, releases the M4 through `RCC_GCR.BOOT_C2`, and both cores
+      mark themselves ready.
 - [ ] **M7-T2** Renode acceptance demo: cross-binary spawn M7→M4 and M4→M7.
+      *Acceptance:* `renode/run.sh <m7.elf> <m4.elf>` shows both cross-binary
+      directions executing (console output and/or a shared result word) through
+      the M6.5 path.
 - [ ] **M7-T3** Extract `experiments/multibinary` into its own repository; resolve
       and remove `TODO(extract)` markers; add CI there.
 - [ ] **M7-T4** Optional: re-evaluate promoting reimplemented internals into a shared
@@ -960,6 +1016,9 @@ multi-source acceptance is written against this model.
 | Router ready-queue overflow | Sized to the sum of the line's task capacities: each spawn adds exactly one FIFO element and one ready entry, so it cannot overflow (M6.5) |
 | Router priority vs its dispatchers | Each router runs at the highest line priority of its pair, so it is at least as urgent as every dispatcher it pends; enqueueing happens before the pend (M6.5) |
 | Project-dependent `ipc_dispatchers` count | Another binary adding a producer adds a line to the receiver; the receiver can derive its line count from its own declarations, and `build` fails with a precise error naming the missing line when `ipc_dispatchers` is too short (M6.5) |
+| Renode does not model the M7 D-cache | A green Renode run validates boot sequencing, transport and interrupt routing only; the non-cacheable-region/MPU requirement needs hardware evidence or static review (§11.1) |
+| Renode platform drift from upstream | The in-tree copy records its source commit in `renode/README.md`; the upstream simulation repository keeps the canonical Peripheral-Script sources and Python/Robot tests, so platform changes are re-copied deliberately |
+| H7 doorbell wiring | HSEM (IRQ 125/126) and per-core-masked EXTI lines are both available on the harness; the M6.5 portable per-pair doorbell word + router IRQ fits both, and the router IRQ is armed through the core pass's used-IRQ machinery |
 | Local vs global core ids in out-of-tree distros | The identity default keeps rp2040/riscv correct; they adopt `core_ids` in follow-up PRs per `COMPATIBILITY.md` after the M5 release |
 
 ---
@@ -1007,3 +1066,6 @@ multi-source acceptance is written against this model.
   `external_cores` and the system view: local index `i` maps to `core_ids[i]`
   (identity by default, M5).
 - **Epoch** — shared counter used to detect peer reset and re-synchronize FIFOs.
+- **Renode harness** — the dual-core STM32H7 platform, startup script and
+  `run.sh` launcher under `experiments/multibinary/renode/` (copied from the
+  standalone simulation repository) used as the M7 acceptance target (§11.1).
