@@ -185,6 +185,11 @@ on mismatch with a "run `cargo xbin sync`" hint. Phase 2 recomputes the
 topology hash from the loaded view (`load_system`, M3-T4) and recomputes the
 application's `source_hash` against the one recorded at sync time
 (`check_source_hash`, M3-T4); both are hard errors with the documented hint.
+`source_hash` is computed from a canonical, proc-macro-host-independent
+serialization of the application's token tree, not from
+`TokenStream::to_string()`: rustc and rust-analyzer's proc-macro server render
+the same tokens with different punctuation spacing and formatting, so hashing
+the rendering would make a view synced by cargo look stale in the IDE.
 Generated `ipc-types` embeds `LAYOUT_HASH`. The pass emits
 `include_str!("system.json")` so rustc's dep-info rebuilds when the file
 changes.

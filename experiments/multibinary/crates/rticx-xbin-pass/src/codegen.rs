@@ -1254,19 +1254,29 @@ fn generate_receiver_fifo_view(
 
 /// Finds the application in `view` and checks that its core mapping still
 /// matches the source being compiled.
+///
+/// `target` is the Cargo target name (`CARGO_BIN_NAME`) when the compiler
+/// provides one. Cargo always does; rust-analyzer's proc-macro server
+/// deliberately does not, so a `None` target resolves the application by
+/// package alone. `rticx.toml` rejects two applications sharing a package, so
+/// the package is an unambiguous key and IDE macro expansion keeps working.
 pub(crate) fn check_application<'a>(
     view: &'a SystemView,
     package: &str,
-    target: &str,
+    target: Option<&str>,
     extensions: &AppExtensions,
 ) -> syn::Result<&'a AppEntry> {
     let application = view
         .apps
         .iter()
-        .find(|app| app.package == package && app.target.name == target)
+        .find(|app| app.package == package && target.is_none_or(|target| app.target.name == target))
         .ok_or_else(|| {
+            let target = match target {
+                Some(target) => format!(" (target `{target}`)"),
+                None => String::new(),
+            };
             error(format!(
-                "the synced system view has no application `{package}` (target `{target}`); \
+                "the synced system view has no application `{package}`{target}; \
                  run `cargo xbin sync`"
             ))
         })?;

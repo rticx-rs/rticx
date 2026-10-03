@@ -88,7 +88,7 @@ mod priority;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use rticx_core::{InfoBus, MainInjectionPoint};
 use rticx_xbin_proto::{AppManifest, Hash64, MANIFEST_SCHEMA_VERSION, SystemView, TargetRef};
@@ -334,11 +334,15 @@ impl RticPass for XbinPass {
                      code generation must run through cargo",
                 )
             })?;
-            let target = system
-                .target
-                .as_deref()
-                .filter(|target| !target.is_empty())
-                .unwrap_or(package);
+            // `CARGO_BIN_NAME` is set by cargo for every target-specific
+            // invocation. rust-analyzer's proc-macro server deliberately does
+            // not set it (its `inject_cargo_package_env` leaves the variable
+            // out), so when it is missing the pass resolves the application by
+            // package alone: `rticx.toml` rejects two applications sharing a
+            // package, so the package is unambiguous. Falling back to the
+            // package *name* as if it were the target name, by contrast, makes
+            // a bin named `m4` in package `app-m4` look like target `app-m4`.
+            let target = system.target.as_deref().filter(|target| !target.is_empty());
 
             // Every application listed in the view loads it: producer
             // endpoints need their generated stubs and every application
@@ -542,18 +546,64 @@ fn write_manifest(meta: &MetaMode, manifest: &AppManifest) -> syn::Result<()> {
     })
 }
 
-/// Deterministic hash of the macro arguments and the annotated module.
+/// Deterministic, proc-macro-host-independent hash of the macro arguments and
+/// the annotated module.
 ///
 /// This is the `source_hash` recorded in the application manifest and in
 /// `system.json` (M1-T2). Phase 2 recomputes it with the same function and
 /// rejects an application that changed after the last `cargo xbin sync`
 /// (M3-T4). It is public so tests and tooling can build views that match a
 /// given source.
+///
+/// The hash must not depend on *which* compiler expands the macro. `rustc`
+/// and rust-analyzer's proc-macro server represent the same token tree with
+/// different punctuation `Spacing` and render it very differently through
+/// `TokenStream`'s `Display`, so hashing `to_string()` would make a view
+/// synced by cargo look stale to the IDE (and vice versa). [`write_canonical`]
+/// instead serializes the token tree structurally, ignoring spacing and
+/// formatting.
 pub fn app_source_hash(args: &TokenStream, app_mod: &ItemMod) -> Hash64 {
-    let mut source = args.to_string();
+    let mut source = String::new();
+    write_canonical(args.clone(), &mut source);
     source.push('\n');
-    source.push_str(&app_mod.to_token_stream().to_string());
+    write_canonical(app_mod.to_token_stream(), &mut source);
     Hash64::of(source.as_bytes())
+}
+
+/// Appends a canonical serialization of `stream` to `out`.
+///
+/// Only the token *tree* matters: group delimiters are structural and every
+/// list of tokens is explicit, so no separator or `Spacing` choice can change
+/// the result. Identifiers, punctuation characters and literals are tagged so
+/// that different token kinds cannot collide.
+fn write_canonical(stream: TokenStream, out: &mut String) {
+    use std::fmt::Write as _;
+    for token in stream {
+        match token {
+            TokenTree::Group(group) => {
+                let (open, close) = match group.delimiter() {
+                    Delimiter::Parenthesis => ('(', ')'),
+                    Delimiter::Bracket => ('[', ']'),
+                    Delimiter::Brace => ('{', '}'),
+                    // Invisible groups are transparent; their delimiters must
+                    // not be confused with the visible ones.
+                    Delimiter::None => ('<', '>'),
+                };
+                out.push(open);
+                write_canonical(group.stream(), out);
+                out.push(close);
+            }
+            TokenTree::Ident(ident) => {
+                let _ = write!(out, "i{ident};");
+            }
+            TokenTree::Punct(punct) => {
+                let _ = write!(out, "p{};", punct.as_char());
+            }
+            TokenTree::Literal(literal) => {
+                let _ = write!(out, "l{literal};");
+            }
+        }
+    }
 }
 
 fn meta_error(message: impl Into<String>) -> syn::Error {

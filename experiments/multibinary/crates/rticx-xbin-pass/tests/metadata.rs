@@ -8,11 +8,11 @@
 use std::sync::Mutex;
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::quote;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
 use rticx_xbin_pass::{META_OUT_ENV, XbinPass};
-use rticx_xbin_proto::{AppManifest, Hash64};
+use rticx_xbin_proto::AppManifest;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -179,10 +179,9 @@ fn source_hash_covers_the_source_before_stripping() {
         ipc_dispatchers = [IRQ0]
     );
 
-    let mut expected_source = args.to_string();
-    expected_source.push('\n');
-    expected_source.push_str(&app_mod.to_token_stream().to_string());
-    let expected = Hash64::of(expected_source.as_bytes());
+    // The hash covers the arguments and module exactly as the user wrote
+    // them, before any pass-owned attribute is stripped.
+    let expected = rticx_xbin_pass::app_source_hash(&args, &app_mod);
 
     let (dir, manifest) = run_manifest(app_mod, args, "app-m4", "m4");
     assert_eq!(manifest.source_hash, expected);

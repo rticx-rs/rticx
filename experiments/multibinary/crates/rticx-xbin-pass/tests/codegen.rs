@@ -42,6 +42,22 @@ impl EnvGuard {
         }
         Self { saved }
     }
+
+    /// Removes `names` from the environment, restoring them on drop.
+    ///
+    /// Models compilers that leave a variable unset: rust-analyzer's
+    /// proc-macro server never defines `CARGO_BIN_NAME`.
+    fn unset_all(names: &[&'static str]) -> Self {
+        let saved = names
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for name in names {
+            // SAFETY: the process environment is guarded by ENV_LOCK.
+            unsafe { std::env::remove_var(name) };
+        }
+        Self { saved }
+    }
 }
 
 impl Drop for EnvGuard {
@@ -1648,6 +1664,61 @@ fn codegen_mode_is_detected_from_the_environment() {
         .run_pass(sender_args(), sender_app())
         .expect("codegen succeeds");
     assert!(module.to_token_stream().to_string().contains("cross_spawn"));
+}
+
+#[test]
+fn codegen_mode_resolves_the_application_without_cargo_bin_name() {
+    // rust-analyzer's proc-macro server does not set `CARGO_BIN_NAME` (its
+    // `inject_cargo_package_env` leaves the variable out), unlike cargo. The
+    // pass must still resolve the application by package so the IDE expands
+    // `#[app]` instead of reporting a spurious
+    // "no application `app-m7` (target `app-m7`); run `cargo xbin sync`".
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let system = dir.path().join("system.json");
+    std::fs::write(
+        &system,
+        with_source_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+    )
+    .expect("system.json");
+
+    let _env = EnvGuard::set_all(&[
+        (SYSTEM_ENV, system.as_os_str()),
+        ("CARGO_PKG_NAME", std::ffi::OsStr::new("app-m7")),
+    ]);
+    let _unset = EnvGuard::unset_all(&["CARGO_BIN_NAME"]);
+
+    let pass = XbinPass::from_env();
+    assert!(pass.is_codegen_mode());
+    let (_, module) = pass
+        .with_backend(TestBackend)
+        .run_pass(sender_args(), sender_app())
+        .expect("a package-only environment still resolves the application");
+    assert!(module.to_token_stream().to_string().contains("cross_spawn"));
+}
+
+#[test]
+fn source_hash_ignores_token_spacing() {
+    // rustc and rust-analyzer's proc-macro server represent the same token
+    // tree with different punctuation `Spacing` and render it very
+    // differently; the freshness hash must not depend on either.
+    use proc_macro2::{Punct, Spacing, TokenStream, TokenTree};
+
+    let module: syn::ItemMod = syn::parse_quote!(
+        mod app {}
+    );
+    let stream = |spacing| {
+        TokenStream::from_iter([
+            TokenTree::Ident(format_ident!("a")),
+            TokenTree::Punct(Punct::new(',', spacing)),
+            TokenTree::Ident(format_ident!("b")),
+        ])
+    };
+
+    assert_eq!(
+        rticx_xbin_pass::app_source_hash(&stream(Spacing::Alone), &module),
+        rticx_xbin_pass::app_source_hash(&stream(Spacing::Joint), &module),
+    );
 }
 
 #[test]
