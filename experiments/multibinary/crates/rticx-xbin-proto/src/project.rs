@@ -20,15 +20,20 @@
 //! core_ids = [1]
 //!
 //! [ipc.regions]
-//! "0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-//! "1->0" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
+//! # Shorthand when both cores see the same absolute address:
+//! "0->1" = { base = 0x30040000, size = 4096 }
+//! # Granular form for aliased views (source and target differ):
+//! "1->0" = { base_from_source = 0x30041000, base_from_target = 0x10041000, size = 4096 }
 //! ```
 //!
 //! Values can only be produced by [`parse_project_str`] /
 //! [`parse_project_file`], so the invariants checked while parsing (unique
 //! package names, globally unique core ids, well-formed region keys, distinct
-//! region endpoints) hold for every instance. [`ProjectConfig::to_toml_string`]
-//! renders the canonical form; parsing it back yields an equal value.
+//! region endpoints, non-overlapping per-core region views) hold for every
+//! instance. [`ProjectConfig::to_toml_string`]
+//! renders the canonical form (always the fully explicit
+//! `base_from_source`/`base_from_target` form); parsing it back yields an equal
+//! value.
 //!
 //! Cross-referencing the manifest against the per-application metadata
 //! manifests (region endpoints vs. declared core ids, priority disjointness,
@@ -94,7 +99,9 @@ impl ProjectConfig {
     ///
     /// The output is deterministic (declaration order for applications,
     /// `(source, target)` order for regions, lowercase hex addresses) and
-    /// always parses back to an equal [`ProjectConfig`].
+    /// always parses back to an equal [`ProjectConfig`]. Regions are always
+    /// rendered in the explicit `base_from_source`/`base_from_target` form; the
+    /// `base` shorthand is accepted on input only.
     pub fn to_toml_string(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "schema = {}", self.schema);
@@ -158,6 +165,79 @@ impl ProjectConfig {
                     )));
                 }
                 core_ids.insert(core_id, application.package.as_str());
+            }
+        }
+
+        self.validate_region_views()?;
+
+        Ok(())
+    }
+
+    /// Rejects regions that map two different address ranges into the same
+    /// core's address space.
+    ///
+    /// Each region contributes one range to each of its two endpoint cores: the
+    /// source core sees the region at `base_from_source`, the target core at
+    /// `base_from_target`. A core therefore has one range per region it
+    /// participates in (as source and/or target), and those ranges must be
+    /// pairwise disjoint: otherwise the core would see two different regions at
+    /// the same addresses. Overlap is checked on `[base, base + size)`.
+    ///
+    /// The check is independent of the `source != target` view aliasing: the
+    /// source and target views of one region belong to different cores, so a
+    /// region whose two views are equal is fine; only ranges assigned to the
+    /// *same* core are compared.
+    fn validate_region_views(&self) -> Result<(), ProjectError> {
+        struct View<'a> {
+            region: &'a RegionKey,
+            role: &'static str,
+            base: u32,
+            end: u64,
+        }
+
+        let mut by_core: BTreeMap<u32, Vec<View<'_>>> = BTreeMap::new();
+        for (key, region) in &self.regions {
+            by_core.entry(key.source()).or_default().push(View {
+                region: key,
+                role: "source view",
+                base: region.base_from_source,
+                end: u64::from(region.base_from_source) + u64::from(region.size),
+            });
+            by_core.entry(key.target()).or_default().push(View {
+                region: key,
+                role: "target view",
+                base: region.base_from_target,
+                end: u64::from(region.base_from_target) + u64::from(region.size),
+            });
+        }
+
+        for (core, views) in &mut by_core {
+            views.sort_by(|left, right| {
+                (left.base, left.end, left.region, left.role).cmp(&(
+                    right.base,
+                    right.end,
+                    right.region,
+                    right.role,
+                ))
+            });
+            for pair in views.windows(2) {
+                let (first, second) = (&pair[0], &pair[1]);
+                if u64::from(second.base) < first.end {
+                    return Err(ProjectError::invalid(format!(
+                        "`ipc.regions` overlap on core {core}: `{first_region}` \
+                         ({first_role} 0x{first_base:08x}..0x{first_end:08x}) and \
+                         `{second_region}` ({second_role} 0x{second_base:08x}..0x{second_end:08x}); \
+                         a core's source and target views must map to non-overlapping addresses",
+                        first_region = first.region,
+                        second_region = second.region,
+                        first_role = first.role,
+                        first_base = first.base,
+                        first_end = first.end,
+                        second_role = second.role,
+                        second_base = second.base,
+                        second_end = second.end,
+                    )));
+                }
             }
         }
 
@@ -276,7 +356,10 @@ impl fmt::Display for RegionKey {
 /// FIFOs of every cross-binary task spawned by `source` and executed by
 /// `target` are allocated inside this region. The two base addresses are the
 /// addresses through which each core sees the same physical memory (aliases
-/// are allowed; they are often but not necessarily equal).
+/// are allowed; they are often but not necessarily equal). When both cores see
+/// the region at the same absolute address, `rticx.toml` may use the `base`
+/// shorthand instead of the two explicit keys; it is expanded to equal
+/// `base_from_source`/`base_from_target` values here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Region {
     base_from_source: u32,
@@ -565,12 +648,14 @@ fn parse_key_core_id(text: &str, key: &str, side: &str) -> Result<u32, ProjectEr
 fn parse_region(path: &str, value: &toml::Value) -> Result<Region, ProjectError> {
     let table = expect_table(value, path)?;
 
+    let mut base = None;
     let mut base_from_source = None;
     let mut base_from_target = None;
     let mut size = None;
 
     for (key, value) in table {
         match key.as_str() {
+            "base" => base = Some(expect_u32(value, &format!("{path}.base"), 0)?),
             "base_from_source" => {
                 base_from_source = Some(expect_u32(value, &format!("{path}.base_from_source"), 0)?);
             }
@@ -581,20 +666,37 @@ fn parse_region(path: &str, value: &toml::Value) -> Result<Region, ProjectError>
             other => {
                 return Err(ProjectError::invalid(format!(
                     "`{path}` has unknown key `{other}`; \
-                     expected `base_from_source`, `base_from_target` or `size`"
+                     expected `base`, `base_from_source`, `base_from_target` or `size`"
                 )));
             }
         }
     }
 
-    let base_from_source = base_from_source.ok_or_else(|| {
+    // `base` is shorthand for a region both cores see at the same absolute
+    // address; combining it with an explicit view would be ambiguous.
+    if base.is_some() && base_from_source.is_some() {
+        return Err(ProjectError::invalid(format!(
+            "`{path}` combines the `base` shorthand with `base_from_source`; \
+             set `base` for equal source/target addresses, or the two explicit keys"
+        )));
+    }
+    if base.is_some() && base_from_target.is_some() {
+        return Err(ProjectError::invalid(format!(
+            "`{path}` combines the `base` shorthand with `base_from_target`; \
+             set `base` for equal source/target addresses, or the two explicit keys"
+        )));
+    }
+
+    let base_from_source = base_from_source.or(base).ok_or_else(|| {
         ProjectError::invalid(format!(
-            "`{path}` is missing the required `base_from_source` key"
+            "`{path}` is missing the required `base_from_source` key \
+             (or the `base` shorthand for equal source/target addresses)"
         ))
     })?;
-    let base_from_target = base_from_target.ok_or_else(|| {
+    let base_from_target = base_from_target.or(base).ok_or_else(|| {
         ProjectError::invalid(format!(
-            "`{path}` is missing the required `base_from_target` key"
+            "`{path}` is missing the required `base_from_target` key \
+             (or the `base` shorthand for equal source/target addresses)"
         ))
     })?;
     let size = size.ok_or_else(|| {

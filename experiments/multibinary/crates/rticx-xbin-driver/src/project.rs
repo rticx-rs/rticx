@@ -19,6 +19,10 @@ pub const OUTPUT_DIR: &str = "target/rticx-xbin";
 /// Driver-generated system view inside [`OUTPUT_DIR`] (M1-T6).
 pub const SYSTEM_FILE: &str = "system.json";
 
+/// Self-contained HTML visualization of the system view, written inside
+/// [`OUTPUT_DIR`] by `cargo xbin sync --html`.
+pub const HTML_FILE: &str = "system.html";
+
 /// Returns the driver output directory below `project_root`.
 pub fn output_dir(project_root: &Path) -> PathBuf {
     project_root.join(OUTPUT_DIR)

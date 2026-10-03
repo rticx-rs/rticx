@@ -78,9 +78,15 @@ keyed `"<source>-><target>"`:
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `base_from_source` | integer | yes | region base as seen by the source core |
-| `base_from_target` | integer | yes | region base as seen by the target core (aliases allowed) |
+| `base` | integer | shorthand | region base for **both** cores; expands to equal `base_from_source`/`base_from_target` |
+| `base_from_source` | integer | yes\* | region base as seen by the source core |
+| `base_from_target` | integer | yes\* | region base as seen by the target core (aliases allowed) |
 | `size` | integer | yes | region size in bytes (`>= 1`) |
+
+\* The granular form requires **both** `base_from_source` and `base_from_target`.
+`base` is an alternative to that pair and may not be combined with either of
+them; the shorthand only applies when the source and target see the region at
+the same absolute address.
 
 Addresses and sizes are bare TOML integers; the `0x` prefix is accepted and
 the canonical form is lowercase hex. Validation at parse time:
@@ -89,13 +95,22 @@ the canonical form is lowercase hex. Validation at parse time:
 - unique `package` names and globally unique core ids;
 - region keys of the form `<source>-><target>` with integers and
   `source != target`;
+- each region uses either `base` or the `base_from_source`/`base_from_target`
+  pair, never a mix;
+- the ranges a single core sees do not overlap: every region contributes one
+  range to each endpoint core (the source view to the source, the target view
+  to the target), and two ranges assigned to the same core must not overlap,
+  checked on `[base, base + size)`. This catches a core that would otherwise
+  see two different regions at the same addresses (for example the same
+  `0x30040000` used both to send to and to receive from another core);
 - no unknown top-level, `[[application]]`, `target` or region keys.
 
 Declare only the directions that carry cross-binary tasks: the driver sizes and
 allocates a region only for the directions it sees in the application
 manifests (`sync` fails with ``needs a `S->T` region`` otherwise).
 
-Example (the `fixtures/e2e` topology):
+Example (the `fixtures/e2e` topology, using the shorthand because both cores
+see the region at the same address):
 
 ```toml
 schema = 1
@@ -111,8 +126,28 @@ target = { kind = "bin", name = "m4" }
 core_ids = [1]
 
 [ipc.regions]
+"0->1" = { base = 0x30040000, size = 4096 }
+```
+
+The same region written in the more granular form:
+
+```toml
+[ipc.regions]
 "0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
 ```
+
+Use the granular form when the two cores see the region through **different**
+addresses (aliases), for example the D2/M4 alias window of SRAM3:
+
+```toml
+[ipc.regions]
+# Same physical memory: CM7 sees SRAM3 at 0x3004_0000, CM4 at 0x1004_0000.
+"0->1" = { base_from_source = 0x30040000, base_from_target = 0x10040000, size = 4096 }
+```
+
+Canonical rendering (`ProjectConfig::to_toml_string`) always expands `base` to
+the explicit `base_from_source`/`base_from_target` pair, so tooling that
+round-trips a manifest normalizes the shorthand.
 
 `core_ids` is the only place global core ids are declared: the `#[app]` macro
 uses them in the runtime core checks, `external_cores`/`spawn_by` refer to
@@ -562,8 +597,8 @@ cargo test -p rticx-xbin-pass --test e2e_runtime
 
 ```toml
 [ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"2->1" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
+"0->1" = { base = 0x30040000, size = 4096 }
+"2->1" = { base = 0x30041000, size = 4096 }
 ```
 
 The receiver lists one dispatcher line per cross line, in ascending
@@ -713,7 +748,9 @@ source of runtime-only failures:
   device's MPU rules, e.g. power-of-two regions on Cortex-M).
 - **Aliases:** if the two cores see the region at different addresses, declare
   both views (`base_from_source`/`base_from_target`); the generated code uses
-  the view of the core that runs it.
+  the view of the core that runs it. When both cores see the same absolute
+  address, use the `base = <addr>` shorthand instead
+  (see [`rticx.toml` regions](#3-writing-rticxtoml)).
 - **Cacheable fallback (unsupported v1):** if the region cannot be made
   non-cacheable, use the `clean_range`/`invalidate_range` hooks on the
   producer/consumer paths and keep the atomic ordering; the
@@ -755,6 +792,9 @@ source of runtime-only failures:
 | ``global core id N is declared by both ...`` | core ids must be unique across applications |
 | ``key `x` is not of the form `<source>-><target>` `` | quote the key: `"0->1"` |
 | ``key `0->0` connects core 0 to itself`` | regions are directional; declare `0->1` and `1->0` separately |
+| ``combines the `base` shorthand with `base_from_source` `` | use `base` alone when both views are equal, or both explicit views when they differ |
+| ``is missing the required `base_from_source` key`` | set `base` for equal views, or set both `base_from_source` and `base_from_target` |
+| ```ipc.regions` overlap on core N`` | on core `N` two regions map to intersecting address ranges; move one region's view (use a distinct `base`/alias) so each core sees disjoint ranges |
 | ``references unknown type `T` `` | declare `[message.T]` or `[enum.T]` in `ipc-types.toml` |
 | ``cyclic message reference: A -> B -> A`` | break the cycle; messages are stored inline |
 | ``message `FooBar` and message `Foo_Bar` would both generate the constant `SIZE_FOO_BAR` `` | rename one IDL type so the generated constants stay unique |

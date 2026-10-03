@@ -370,6 +370,8 @@ dependencies = [
  "clap",
  "rticx-xbin-pass",
  "rticx-xbin-proto",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

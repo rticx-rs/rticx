@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTICX multi-binary system view</title>
+<style>
+/*__XBIN_STYLE__*/
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>RTICX multi-binary system view</h1>
+  <p class="meta" id="meta"></p>
+</header>
+
+<section class="controls">
+  <span class="controls-label">Focus interaction</span>
+  <div class="filters" id="filters"></div>
+  <button type="button" id="clear">Clear</button>
+</section>
+
+<main id="stage">
+  <div class="rail" id="rail"></div>
+  <div class="regions" id="regions"></div>
+  <svg id="arrows" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg>
+</main>
+
+<section class="legend" id="legend"></section>
+
+<script type="application/json" id="xbin-view">__XBIN_VIEW_JSON__</script>
+<script>
+/*__XBIN_SCRIPT__*/
+</script>
+</body>
+</html>

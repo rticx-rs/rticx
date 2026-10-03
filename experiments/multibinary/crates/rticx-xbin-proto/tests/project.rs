@@ -116,6 +116,73 @@ fn parses_multi_application_project_with_regions() {
 }
 
 #[test]
+fn parses_base_shorthand_for_equal_views() {
+    let config = parse_project_str(
+        r#"
+        schema = 1
+
+        [[application]]
+        package = "app-m7"
+        target = { kind = "bin", name = "m7" }
+        core_ids = [0]
+
+        [[application]]
+        package = "app-m4"
+        target = { kind = "bin", name = "m4" }
+        core_ids = [1]
+
+        [ipc.regions]
+        "0->1" = { base = 0x30040000, size = 128 }
+        "#,
+    )
+    .expect("valid manifest");
+
+    let region = config.region(0, 1).expect("region exists");
+    assert_eq!(region.base_from_source(), 0x3004_0000);
+    assert_eq!(
+        region.base_from_target(),
+        0x3004_0000,
+        "`base` sets both core views to the same absolute address"
+    );
+    assert_eq!(region.size(), 128);
+
+    assert_eq!(
+        config.to_toml_string(),
+        "schema = 1\n\
+         \n\
+         [[application]]\n\
+         package = \"app-m7\"\n\
+         target = { kind = \"bin\", name = \"m7\" }\n\
+         core_ids = [0]\n\
+         \n\
+         [[application]]\n\
+         package = \"app-m4\"\n\
+         target = { kind = \"bin\", name = \"m4\" }\n\
+         core_ids = [1]\n\
+         \n\
+         [ipc.regions]\n\
+         \"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 128 }\n",
+        "canonical rendering expands the `base` shorthand to both explicit views"
+    );
+}
+
+#[test]
+fn base_shorthand_equals_explicit_equal_views() {
+    let shorthand = parse_project_str(
+        "schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0x30040000, size = 128 }\n",
+    )
+    .expect("valid manifest");
+    let explicit = parse_project_str(
+        "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 128 }\n",
+    )
+    .expect("valid manifest");
+    assert_eq!(
+        shorthand, explicit,
+        "`base` must expand to equal explicit source/target views"
+    );
+}
+
+#[test]
 fn preserves_application_and_core_id_order() {
     let config = parse_project_str(
         r#"
@@ -515,17 +582,19 @@ fn rejects_invalid_region_body() {
         "`ipc.regions.\"0->1\"` must be a table, found an integer"
     );
     assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0 }\n"),
-        "`ipc.regions.\"0->1\"` has unknown key `base`; \
-         expected `base_from_source`, `base_from_target` or `size`"
+        err("schema = 1\n[ipc.regions]\n\"0->1\" = { bases = 0 }\n"),
+        "`ipc.regions.\"0->1\"` has unknown key `bases`; \
+         expected `base`, `base_from_source`, `base_from_target` or `size`"
     );
     assert_eq!(
         err("schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_target = 0, size = 1 }\n"),
-        "`ipc.regions.\"0->1\"` is missing the required `base_from_source` key"
+        "`ipc.regions.\"0->1\"` is missing the required `base_from_source` key \
+         (or the `base` shorthand for equal source/target addresses)"
     );
     assert_eq!(
         err("schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0, size = 1 }\n"),
-        "`ipc.regions.\"0->1\"` is missing the required `base_from_target` key"
+        "`ipc.regions.\"0->1\"` is missing the required `base_from_target` key \
+         (or the `base` shorthand for equal source/target addresses)"
     );
     assert_eq!(
         err(
@@ -533,6 +602,69 @@ fn rejects_invalid_region_body() {
         ),
         "`ipc.regions.\"0->1\"` is missing the required `size` key"
     );
+}
+
+#[test]
+fn rejects_base_shorthand_mixed_with_explicit_views() {
+    assert_eq!(
+        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0, base_from_source = 1, size = 1 }\n"),
+        "`ipc.regions.\"0->1\"` combines the `base` shorthand with `base_from_source`; \
+         set `base` for equal source/target addresses, or the two explicit keys"
+    );
+    assert_eq!(
+        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0, base_from_target = 1, size = 1 }\n"),
+        "`ipc.regions.\"0->1\"` combines the `base` shorthand with `base_from_target`; \
+         set `base` for equal source/target addresses, or the two explicit keys"
+    );
+}
+
+#[test]
+fn rejects_overlapping_views_on_the_same_core() {
+    // Core 1 is the source of `1->0` (0x30040000) and the target of `2->1`
+    // (0x30040000): the same range in one core's address space.
+    assert_eq!(
+        err("schema = 1\n\
+             [ipc.regions]\n\
+             \"1->0\" = { base_from_source = 0x30040000, base_from_target = 0x10040000, size = 4096 }\n\
+             \"2->1\" = { base_from_source = 0x10000000, base_from_target = 0x30040000, size = 4096 }\n"),
+        "`ipc.regions` overlap on core 1: `1->0` (source view 0x30040000..0x30041000) \
+         and `2->1` (target view 0x30040000..0x30041000); \
+         a core's source and target views must map to non-overlapping addresses"
+    );
+}
+
+#[test]
+fn rejects_contained_view_on_the_same_core() {
+    // A smaller region fully contained in another region on the same core.
+    assert_eq!(
+        err("schema = 1\n\
+             [ipc.regions]\n\
+             \"0->1\" = { base = 0x30040000, size = 4096 }\n\
+             \"0->2\" = { base = 0x30040080, size = 128 }\n"),
+        "`ipc.regions` overlap on core 0: `0->1` (source view 0x30040000..0x30041000) \
+         and `0->2` (source view 0x30040080..0x30040100); \
+         a core's source and target views must map to non-overlapping addresses"
+    );
+}
+
+#[test]
+fn accepts_adjacent_and_cross_core_views() {
+    // `0->1` and `0->2` are adjacent on core 0 (`end == next base`), and the
+    // four cores' single views share the same absolute address but belong to
+    // different cores, so they are independent address spaces.
+    let config = parse_project_str(
+        r#"
+        schema = 1
+
+        [ipc.regions]
+        "0->1" = { base = 0x30040000, size = 4096 }
+        "0->2" = { base = 0x30041000, size = 4096 }
+        "2->3" = { base = 0x30040000, size = 4096 }
+        "#,
+    )
+    .expect("adjacent ranges and cross-core aliases are fine");
+
+    assert_eq!(config.regions().len(), 3);
 }
 
 #[test]
@@ -548,6 +680,10 @@ fn rejects_region_fields_of_the_wrong_type_or_range() {
             "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = -1, base_from_target = 0, size = 1 }\n"
         ),
         "`ipc.regions.\"0->1\".base_from_source` = -1 is out of range 0..=4294967295"
+    );
+    assert_eq!(
+        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = \"0x30040000\", size = 1 }\n"),
+        "`ipc.regions.\"0->1\".base` must be an integer, found a string"
     );
     assert_eq!(
         err(

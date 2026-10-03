@@ -84,6 +84,27 @@ pub enum DriverError {
         source: io::Error,
     },
 
+    /// `--html` was requested but the project produced no system view.
+    #[error(
+        "cannot render `--html`: no system view was produced for `{}`\n\
+         `cargo xbin sync --html` needs a project with an `rticx.toml` manifest",
+        root.display()
+    )]
+    NoSystemView {
+        /// Project root that was synced.
+        root: PathBuf,
+    },
+
+    /// The HTML visualization could not be written.
+    #[error("failed to write the HTML visualization `{}`: {source}", path.display())]
+    WriteHtml {
+        /// Path the driver tried to write.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+
     /// The generated `ipc-types` crate could not be written.
     #[error("failed to write the generated `ipc-types` crate at `{}`: {source}", path.display())]
     WriteGenerated {

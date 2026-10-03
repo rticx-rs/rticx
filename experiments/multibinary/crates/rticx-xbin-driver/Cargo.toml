@@ -19,6 +19,8 @@ path = "src/main.rs"
 clap = { workspace = true }
 rticx-xbin-pass = { workspace = true }
 rticx-xbin-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

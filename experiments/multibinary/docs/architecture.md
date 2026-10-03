@@ -197,11 +197,18 @@ changes.
 ## 6. Memory and layout
 
 - One region per `(source, target)` direction, with per-core base views
-  (aliases allowed); one FIFO per cross-binary task inside it. The canonical
-  in-region image (two 32-byte-padded ring indices, then the element payload,
-  8-byte FIFO alignment, depth `capacity + 1`) and the size math live in
-  `rticx_xbin_proto::fifo`; the phase-1 merge checks the FIFOs fit their
-  region.
+  (aliases allowed); one FIFO per cross-binary task inside it. `rticx.toml`
+  accepts the `base` shorthand when both cores see the region at the same
+  absolute address (expanded to equal `base_from_source`/`base_from_target`),
+  or the granular pair for aliased views; `system.json` and the generated code
+  always carry the explicit pair. Parsing rejects a project in which the ranges
+  assigned to one core overlap: every region adds its source view to its
+  source core and its target view to its target core, and those per-core ranges
+  must be pairwise disjoint (`[base, base + size)`), so a core can never be
+  handed two regions at the same addresses. The canonical in-region image (two 32-byte-padded ring
+  indices, then the element payload, 8-byte FIFO alignment, depth
+  `capacity + 1`) and the size math live in `rticx_xbin_proto::fifo`; the
+  phase-1 merge checks the FIFOs fit their region.
 - Canonical layout: `repr(C)`, little-endian, natural alignment capped at 4;
   `bool`/pointers/64-bit scalars rejected by the IDL subset.
 - Runtime FIFO (`rticx_xbin_rt::Fifo<T, DEPTH>`, M2-T1): atomic SPSC ring,

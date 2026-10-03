@@ -9,23 +9,32 @@
 //!   generate/update the `ipc-types` crate (M1-T7);
 //! - `cargo xbin build`: `sync`, then build every application against the
 //!   emitted system view (M4-T1).
+//!
+//! `cargo xbin sync --html` additionally renders a self-contained HTML
+//! visualization of the system view to `target/rticx-xbin/system.html`
+//! (`--html-open` renders and opens it).
 
 mod cli;
 mod commands;
 mod error;
 mod project;
+mod visualize;
 
 use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use clap::Parser;
 use rticx_xbin_proto::FileChange;
 
-pub use cli::{Cli, Command};
+pub use cli::{Cli, Command, SyncArgs};
 pub use commands::{AppBuild, BuildOutcome, IpcTypesOutcome, SyncOutcome, build, sync};
 use commands::{CargoOutput, build_with_output, sync_with_output};
 pub use error::DriverError;
 pub use project::{
-    IDL_MANIFEST, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE, find_project_root, output_dir,
+    HTML_FILE, IDL_MANIFEST, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE, find_project_root,
+    output_dir,
 };
 
 /// Name under which Cargo invokes this binary (`cargo xbin`).
@@ -67,9 +76,22 @@ fn run(cli: Cli) -> Result<(), DriverError> {
         std::env::current_dir().map_err(|source| DriverError::CurrentDir { source })?;
     let project_root = find_project_root(&current_dir).unwrap_or(current_dir);
     match cli.command {
-        Command::Sync => {
+        Command::Sync(args) => {
             let outcome = sync_with_output(&project_root, CargoOutput::Streamed)?;
             report_ipc_types(&outcome);
+            if args.html || args.html_open {
+                let path = write_html(&outcome)?;
+                let shown = path.strip_prefix(&outcome.project_root).unwrap_or(&path);
+                eprintln!("[cargo-xbin] wrote {}", shown.display());
+                if args.html_open
+                    && let Err(error) = open_in_browser(&path)
+                {
+                    eprintln!(
+                        "[cargo-xbin] warning: failed to open `{}`: {error}",
+                        path.display()
+                    );
+                }
+            }
             Ok(())
         }
         Command::Build => {
@@ -77,6 +99,52 @@ fn run(cli: Cli) -> Result<(), DriverError> {
             report_ipc_types(&outcome.sync);
             Ok(())
         }
+    }
+}
+
+/// Renders and writes the HTML visualization of a completed sync.
+///
+/// `--html` needs a system view, so a sync of a directory without an
+/// `rticx.toml` is an error rather than a silent no-op.
+fn write_html(outcome: &SyncOutcome) -> Result<PathBuf, DriverError> {
+    let Some(view) = &outcome.system else {
+        return Err(DriverError::NoSystemView {
+            root: outcome.project_root.clone(),
+        });
+    };
+    let path = outcome.output_dir.join(HTML_FILE);
+    let html = visualize::render_html(view);
+    std::fs::write(&path, html).map_err(|source| DriverError::WriteHtml {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(path)
+}
+
+/// Opens `path` in the default browser, best-effort.
+///
+/// `RTICX_XBIN_OPENER` overrides the platform opener (and keeps the tests
+/// hermetic); otherwise `xdg-open`, `open` or `cmd /C start` is used.
+fn open_in_browser(path: &Path) -> io::Result<()> {
+    let status = if let Some(opener) = std::env::var_os("RTICX_XBIN_OPENER") {
+        ProcessCommand::new(opener).arg(path).status()?
+    } else if cfg!(target_os = "macos") {
+        ProcessCommand::new("open").arg(path).status()?
+    } else if cfg!(target_os = "windows") {
+        ProcessCommand::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg(path)
+            .status()?
+    } else {
+        ProcessCommand::new("xdg-open").arg(path).status()?
+    };
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("the opener exited with {status}")))
     }
 }
 

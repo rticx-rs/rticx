@@ -259,9 +259,11 @@ target = { kind = "bin", name = "m4" }
 core_ids = [1]
 
 [ipc.regions]                   # distro-documented addresses
-# Example shape, one entry per ordered pair:
-# "0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-# "1->0" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
+# Shorthand: both cores see the region at the same absolute address.
+# "0->1" = { base = 0x30040000, size = 4096 }
+# Granular: per-core base views when the two cores use different addresses
+# (aliases allowed); cannot be combined with `base`.
+# "1->0" = { base_from_source = 0x30041000, base_from_target = 0x10041000, size = 4096 }
 ```
 
 Notes:
@@ -269,8 +271,16 @@ Notes:
 - `core_ids` maps local core indices to globally unique ids used in task attributes
   and the JSON view.
 - IPC regions are per `(source → target)` direction, with per-core base-address
-  views (aliases allowed). The distro documents the values; the user or distro
-  template fills them in.
+  views (aliases allowed). Use `base` when both cores see the region at the same
+  absolute address, otherwise the explicit `base_from_source`/`base_from_target`
+  pair; mixing `base` with either explicit key is an error. Canonical rendering
+  and `system.json` always carry the explicit pair. The distro documents the
+  values; the user or distro template fills them in.
+- Parsing (`sync`) rejects a project in which one core would see two regions at
+  overlapping addresses: each region adds its source view to its source core and
+  its target view to its target core, and a single core's ranges must be pairwise
+  disjoint on `[base, base + size)`. A range contained in another on the same
+  core is an error too.
 - `target` may include an optional target triple; otherwise it comes from
   `.cargo/config.toml`.
 

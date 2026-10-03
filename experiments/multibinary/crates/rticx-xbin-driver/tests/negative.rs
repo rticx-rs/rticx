@@ -11,7 +11,8 @@
 //!   pass in isolation;
 //! - **merge/validation** through `cargo xbin sync` over generated metadata
 //!   projects: a priority line shared by two source cores, an input type
-//!   missing from the IDL and a region too small for its task FIFOs.
+//!   missing from the IDL, a region too small for its task FIFOs and
+//!   overlapping per-core region views in `rticx.toml`.
 //!
 //! Every assertion checks the exact documented message, so a wording change
 //! in the user guide or the error enum fails here.
@@ -469,5 +470,30 @@ fn sync_rejects_region_overflow() {
     assert_eq!(
         error,
         "task `EncryptTask` does not fit the `0->1` region: 100 bytes needed, 99 available"
+    );
+}
+
+#[test]
+fn sync_rejects_overlapping_region_views() {
+    let dir = tempdir().expect("tempdir");
+    // Core 1 is the source of `1->0` and the target of `2->1`, both at
+    // 0x30040000: the same range in one core's address space.
+    std::fs::write(
+        dir.path().join("rticx.toml"),
+        "schema = 1\n\n\
+         [ipc.regions]\n\
+         \"1->0\" = { base_from_source = 0x30040000, base_from_target = 0x10040000, size = 4096 }\n\
+         \"2->1\" = { base_from_source = 0x10000000, base_from_target = 0x30040000, size = 4096 }\n",
+    )
+    .expect("rticx.toml");
+
+    let error = sync(dir.path())
+        .expect_err("overlapping per-core region views must be rejected")
+        .to_string();
+    assert_eq!(
+        error,
+        "`ipc.regions` overlap on core 1: `1->0` (source view 0x30040000..0x30041000) \
+         and `2->1` (target view 0x30040000..0x30041000); \
+         a core's source and target views must map to non-overlapping addresses"
     );
 }
