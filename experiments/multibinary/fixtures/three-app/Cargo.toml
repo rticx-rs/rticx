@@ -12,10 +12,11 @@
 # - `app-m4` (bin `m4`, global core id 1) declares the two native `#[sw_task]`
 #   receivers on distinct priority lines, each with its own `ipc_dispatchers`
 #   entry;
-# - `xbin-mock-distro` is the `#[app]` macro of the fixture's mock
-#   distribution. It runs the full core pass on `MockCoreBackend` and binds the
-#   cross-binary pass against `xbin-mock-runtime`, so the generated code
-#   compiles and links without target hardware;
+# - `xbin-mock-distro` is the `#[app]` macro of the shared mock
+#   distribution (under `crates/mock/` in the experimental workspace). It runs
+#   the full core pass on `MockCoreBackend` and binds the cross-binary pass
+#   against `xbin-mock-runtime`, so the generated code compiles and links
+#   without target hardware;
 # - `xbin-mock-runtime` owns the process-global in-memory regions and provides
 #   the receiver-side `RticSwTask` trait;
 # - `mock-pac` is an empty PAC stand-in for `device = mock_pac`;
@@ -30,7 +31,4 @@ members = [
     "app-m7",
     "app-m5",
     "app-m4",
-    "mock-pac",
-    "xbin-mock-runtime",
-    "xbin-mock-distro",
 ]

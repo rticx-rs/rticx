@@ -3,4 +3,4 @@ name = "mock-pac"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Empty PAC stand-in for the rticx-xbin end-to-end fixture"
+description = "Empty PAC stand-in shared by the rticx-xbin fixtures"

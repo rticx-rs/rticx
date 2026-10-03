@@ -376,7 +376,9 @@ fixtures/e2e/
 ├── rticx.toml, ipc-types.toml      # sections 3 and 4
 ├── ipc-types/                      # generated crate (checked in)
 ├── app-m7/  (binary `m7`, global core 0)   # producer, declares nothing
-├── app-m4/  (binary `m4`, global core 1)   # receiver, declares EncryptTask
+└── app-m4/  (binary `m4`, global core 1)   # receiver, declares EncryptTask
+
+crates/mock/                        # shared by every fixture
 ├── mock-pac/                       # stand-in for a real PAC
 └── xbin-mock-distro/, xbin-mock-runtime/   # stand-in for a real distribution
 ```

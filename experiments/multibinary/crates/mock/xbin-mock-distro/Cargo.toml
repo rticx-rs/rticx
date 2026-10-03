@@ -3,7 +3,7 @@ name = "xbin-mock-distro"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "`#[app]` macro of the mock distribution used by the rticx-xbin end-to-end fixture"
+description = "`#[app]` macro of the mock distribution shared by the rticx-xbin fixtures"
 
 [lib]
 proc-macro = true
@@ -13,5 +13,5 @@ proc-macro2 = "1"
 quote = "1"
 rticx-core = { path = "../../../../../rticx-core" }
 rticx-sw-pass = { path = "../../../../../compilation-passes/rticx-sw-pass" }
-rticx-xbin-pass = { path = "../../../crates/rticx-xbin-pass" }
+rticx-xbin-pass = { path = "../../rticx-xbin-pass" }
 syn = { version = "2", features = ["full"] }

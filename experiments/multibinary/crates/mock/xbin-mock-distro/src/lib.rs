@@ -1,4 +1,4 @@
-//! `#[app]` macro of the fixture's mock distribution (M4-T1).
+//! `#[app]` macro of the shared mock distribution.
 //!
 //! It mirrors what a real distribution does, but with host-testable pieces:
 //!

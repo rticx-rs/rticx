@@ -14,6 +14,11 @@ members = [
     "crates/rticx-xbin-rt",
     "crates/rticx-xbin-driver",
     "crates/rticx-xbin-mock",
+    # Shared mock distribution used by the checked-in fixtures (the fixtures
+    # are standalone workspaces that path-depend on these).
+    "crates/mock/mock-pac",
+    "crates/mock/xbin-mock-distro",
+    "crates/mock/xbin-mock-runtime",
 ]
 
 [workspace.package]

@@ -286,6 +286,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "mock-pac"
+version = "0.1.0"
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -614,6 +618,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "xbin-mock-distro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rticx-core",
+ "rticx-sw-pass",
+ "rticx-xbin-pass",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "xbin-mock-runtime"
+version = "0.1.0"
+dependencies = [
+ "rticx-xbin-mock",
+ "rticx-xbin-rt",
 ]
 
 [[package]]
