@@ -80,7 +80,7 @@ fn idl(source: &str) -> IpcTypes {
 
 fn manifest(package: &str, target: &str, core_ids: &[u32], external_cores: &[u32]) -> AppManifest {
     AppManifest {
-        schema_version: 1,
+        schema_version: 2,
         package: package.to_string(),
         target: TargetRef::bin(target),
         source_hash: Hash64::of(package.as_bytes()),
@@ -89,6 +89,7 @@ fn manifest(package: &str, target: &str, core_ids: &[u32], external_cores: &[u32
         external_cores: external_cores.to_vec(),
         types: Vec::new(),
         receivers: Vec::new(),
+        capabilities: Vec::new(),
     }
 }
 

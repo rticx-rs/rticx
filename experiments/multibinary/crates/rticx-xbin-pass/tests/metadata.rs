@@ -11,7 +11,9 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
-use rticx_xbin_pass::{META_OUT_ENV, XbinPass};
+use rticx_xbin_pass::{
+    CachePolicy, IpcPool, META_OUT_ENV, PhysicalCore, PoolId, XbinPass, XbinPassBackend,
+};
 use rticx_xbin_proto::AppManifest;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -72,6 +74,144 @@ fn run_manifest(
     (dir, manifest)
 }
 
+/// Like [`run_manifest`], but binds a distribution backend so the manifest
+/// records its capability binding (M6.9-T2).
+fn run_manifest_with_backend<B: XbinPassBackend + 'static>(
+    backend: B,
+    app_mod: syn::ItemMod,
+    args: TokenStream,
+    package: &str,
+    target: &str,
+) -> (tempfile::TempDir, AppManifest) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pass = XbinPass::with_manifest(dir.path(), package, target).with_backend(backend);
+    pass.run_pass(args, app_mod)
+        .expect("metadata pass succeeds");
+
+    let path = dir.path().join(AppManifest::file_name(target));
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("missing manifest {}: {error}", path.display()));
+    let manifest = AppManifest::from_json(&source).expect("manifest parses");
+    (dir, manifest)
+}
+
+/// The code-generation bindings that metadata mode never calls; keeping them
+/// inert lets the capability tests implement only the two queries of M6.9-T2.
+macro_rules! inert_bindings {
+    () => {
+        fn backend(&self) -> syn::Expr {
+            syn::parse_quote!(backend())
+        }
+
+        fn rt_path(&self) -> syn::Path {
+            syn::parse_quote!(xbin_rt)
+        }
+
+        fn ring_doorbell_fn(
+            &self,
+            _source: u32,
+            _target: u32,
+            template: syn::ItemFn,
+        ) -> syn::ItemFn {
+            template
+        }
+
+        fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident {
+            quote::format_ident!("__router_{source}_{target}")
+        }
+
+        fn read_doorbell_msg_fn(
+            &self,
+            _target: u32,
+            _source: u32,
+            template: syn::ItemFn,
+        ) -> syn::ItemFn {
+            template
+        }
+    };
+}
+
+/// A backend that leaves [`XbinPassBackend::physical_core`] and
+/// [`XbinPassBackend::ipc_pools`] at their trait defaults: the identity
+/// mapping and no pools.
+struct IdentityBackend;
+
+impl XbinPassBackend for IdentityBackend {
+    inert_bindings!();
+}
+
+/// A multi-core backend with an explicit physical-core mapping and pools,
+/// used to pin the manifest extraction (M6.9-T2).
+struct CapabilityBackend {
+    /// Local core index -> physical core id.
+    physical: Vec<u32>,
+}
+
+impl XbinPassBackend for CapabilityBackend {
+    inert_bindings!();
+
+    fn physical_core(&self, local_core: u32) -> PhysicalCore {
+        PhysicalCore(
+            self.physical
+                .get(local_core as usize)
+                .copied()
+                .unwrap_or(local_core),
+        )
+    }
+
+    fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool> {
+        match local_core {
+            // Deliberately unsorted: the manifest sorts by `(peer, id)`.
+            0 => vec![
+                pool(
+                    "axi",
+                    10,
+                    0x2400_0000,
+                    0x2400_0000,
+                    8192,
+                    CachePolicy::NormalCacheableShareable,
+                ),
+                pool(
+                    "sram3",
+                    8,
+                    0x3004_0000,
+                    0x1004_0000,
+                    4096,
+                    CachePolicy::NormalNonCacheableShareable,
+                ),
+            ],
+            1 => vec![pool(
+                "sram1",
+                7,
+                0x3002_0000,
+                0x1002_0000,
+                1024,
+                CachePolicy::NormalNonCacheableShareable,
+            )],
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Builds one capability pool for the tests.
+fn pool(
+    id: &str,
+    peer: u32,
+    base_local: u32,
+    base_peer: u32,
+    budget: u32,
+    policy: CachePolicy,
+) -> IpcPool {
+    IpcPool {
+        id: PoolId::new(id),
+        peer: PhysicalCore::new(peer),
+        base_local,
+        base_peer,
+        budget,
+        policy,
+    }
+}
+
 #[test]
 fn receiver_fixture_produces_the_expected_manifest() {
     let args = quote!(
@@ -83,7 +223,7 @@ fn receiver_fixture_produces_the_expected_manifest() {
     );
     let (_dir, manifest) = run_manifest(receiver_app(), args, "app-m4", "m4");
 
-    assert_eq!(manifest.schema_version, 1);
+    assert_eq!(manifest.schema_version, 2);
     assert_eq!(manifest.package, "app-m4");
     assert_eq!(manifest.target.name, "m4");
     assert_eq!(manifest.cores, 1);
@@ -101,8 +241,13 @@ fn receiver_fixture_produces_the_expected_manifest() {
     assert_eq!(receiver.input_type, "EncryptReq");
     assert_eq!(receiver.input_type_name(), "EncryptReq");
 
+    assert!(
+        manifest.capabilities.is_empty(),
+        "no distribution backend is bound, so the manifest carries no capability binding"
+    );
+
     let json = manifest.to_json();
-    assert!(json.contains("\"schema_version\": 1"), "{json}");
+    assert!(json.contains("\"schema_version\": 2"), "{json}");
     assert!(json.contains("\"spawn_by\": 0"), "{json}");
     assert!(!json.contains("senders"), "no sender declarations: {json}");
     assert!(json.contains("\"kind\": \"bin\""), "{json}");
@@ -418,4 +563,104 @@ fn malformed_extensions_are_rejected_with_precise_errors() {
             "expected `{expected}` in `{error}`"
         );
     }
+}
+
+/// M6.9-T2: a multi-core application records one capability entry per local
+/// core, and a backend that leaves `physical_core`/`ipc_pools` at their trait
+/// defaults yields the identity physical id and no pools.
+#[test]
+fn manifest_records_the_identity_capability_default() {
+    let (_dir, manifest) = run_manifest_with_backend(
+        IdentityBackend,
+        syn::parse_quote!(
+            mod app {}
+        ),
+        quote!(device = mypac, cores = 2, core_ids = [4, 5]),
+        "app-m4",
+        "m4",
+    );
+
+    assert_eq!(manifest.schema_version, 2);
+    assert_eq!(
+        manifest.capabilities.len(),
+        2,
+        "one capability entry per local core"
+    );
+    for (local_core, capability) in manifest.capabilities.iter().enumerate() {
+        assert_eq!(capability.local_core, local_core as u32);
+        assert_eq!(
+            capability.physical_core, local_core as u32,
+            "the trait default is the identity mapping"
+        );
+        assert!(
+            capability.pools.is_empty(),
+            "the trait default exposes no pool"
+        );
+    }
+
+    let json = manifest.to_json();
+    assert!(json.contains("\"physical_core\": 0"), "{json}");
+    assert!(!json.contains("\"pools\""), "no pools are recorded: {json}");
+}
+
+/// M6.9-T2: the manifest records the bound distribution's physical ids and
+/// pools for every local core, with pool entries sorted by `(peer, id)`.
+#[test]
+fn manifest_records_multi_core_backend_capabilities() {
+    let (_dir, manifest) = run_manifest_with_backend(
+        CapabilityBackend {
+            physical: vec![7, 9],
+        },
+        syn::parse_quote!(
+            mod app {}
+        ),
+        quote!(device = mypac, cores = 2, core_ids = [7, 9]),
+        "app-m4",
+        "m4",
+    );
+
+    assert_eq!(manifest.capabilities.len(), 2);
+
+    let first = &manifest.capabilities[0];
+    assert_eq!(first.local_core, 0);
+    assert_eq!(first.physical_core, 7);
+    let ids: Vec<&str> = first.pools.iter().map(|pool| pool.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["sram3", "axi"],
+        "pools are sorted by peer, not by the backend's return order"
+    );
+
+    let sram3 = &first.pools[0];
+    assert_eq!(sram3.peer, 8);
+    assert_eq!(sram3.base_local, 0x3004_0000);
+    assert_eq!(sram3.base_peer, 0x1004_0000);
+    assert_eq!(sram3.budget, 4096);
+    assert_eq!(
+        sram3.policy,
+        rticx_xbin_proto::PoolCachePolicy::NormalNonCacheableShareable
+    );
+
+    let axi = &first.pools[1];
+    assert_eq!(axi.peer, 10);
+    assert_eq!(axi.budget, 8192);
+    assert_eq!(
+        axi.policy,
+        rticx_xbin_proto::PoolCachePolicy::NormalCacheableShareable
+    );
+
+    let second = &manifest.capabilities[1];
+    assert_eq!(second.local_core, 1);
+    assert_eq!(second.physical_core, 9);
+    assert_eq!(second.pools.len(), 1);
+    assert_eq!(second.pools[0].id, "sram1");
+    assert_eq!(second.pools[0].peer, 7);
+
+    let json = manifest.to_json();
+    assert!(json.contains("\"physical_core\": 7"), "{json}");
+    assert!(json.contains("\"id\": \"sram3\""), "{json}");
+    assert!(
+        json.contains("\"policy\": \"normal_cacheable_shareable\""),
+        "{json}"
+    );
 }

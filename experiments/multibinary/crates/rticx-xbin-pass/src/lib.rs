@@ -6,7 +6,9 @@
 //! - **metadata mode** (phase 1, `cargo xbin sync`): when
 //!   `RTICX_XBIN_META_OUT` is set in the compiler environment, the pass writes
 //!   `<target>.xbin.json` describing the cross-binary tasks declared by this
-//!   application. The driver (`cargo xbin`) sets the variable for the
+//!   application and, per local core, the distribution's capability binding
+//!   (physical core id and reachable IPC pools, M6.9-T2). The driver
+//!   (`cargo xbin`) sets the variable for the
 //!   `cargo check` invocation it runs per application, so the manifest is
 //!   always written by the application's own macro expansion (M1-T2);
 //! - **codegen mode** (phase 2): it reads the driver-generated `system.json`
@@ -92,7 +94,10 @@ use std::path::{Path, PathBuf};
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use rticx_core::{InfoBus, MainInjectionPoint};
-use rticx_xbin_proto::{AppManifest, Hash64, MANIFEST_SCHEMA_VERSION, SystemView, TargetRef};
+use rticx_xbin_proto::{
+    AppManifest, CoreCapability, Hash64, MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl,
+    SystemView, TargetRef,
+};
 use syn::ItemMod;
 
 use crate::codegen::{
@@ -323,7 +328,13 @@ impl RticPass for XbinPass {
         validate_ipc_dispatchers(&extensions, &decls)?;
 
         if let Some(meta) = &self.meta {
-            let manifest = build_manifest(meta, source_hash, extensions.clone(), decls.clone())?;
+            let manifest = build_manifest(
+                meta,
+                source_hash,
+                extensions.clone(),
+                decls.clone(),
+                self.backend.as_deref(),
+            )?;
             write_manifest(meta, &manifest)?;
 
             // Metadata mode does not run the software pass: strip the parsed
@@ -494,6 +505,7 @@ fn build_manifest(
     source_hash: Hash64,
     extensions: AppExtensions,
     decls: ModuleDecls,
+    backend: Option<&dyn XbinPassBackend>,
 ) -> syn::Result<AppManifest> {
     let package = meta.package.as_deref().ok_or_else(|| {
         meta_error(
@@ -515,6 +527,8 @@ fn build_manifest(
     types.sort();
     types.dedup();
 
+    let capabilities = capability_binding(&extensions, backend);
+
     Ok(AppManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
         package: package.to_string(),
@@ -528,7 +542,66 @@ fn build_manifest(
         external_cores: extensions.external_cores,
         types,
         receivers: decls.receivers,
+        capabilities,
     })
+}
+
+/// Extracts the distro capability binding into the manifest schema
+/// (M6.9-T2): one [`CoreCapability`] per local core, carrying its physical
+/// core id and the IPC pools that physical core can reach.
+///
+/// The two binding queries are pure, so they run in metadata mode too. Without
+/// a bound backend there is no distro vocabulary to report and the list stays
+/// empty; real distributions bind their backend unconditionally, so their
+/// manifests always carry the binding.
+///
+/// Each core's pools are sorted by `(peer, id)`, so a distribution that
+/// returns them in any order still produces a deterministic manifest.
+fn capability_binding(
+    extensions: &AppExtensions,
+    backend: Option<&dyn XbinPassBackend>,
+) -> Vec<CoreCapability> {
+    let Some(backend) = backend else {
+        return Vec::new();
+    };
+
+    (0..extensions.cores)
+        .map(|local_core| {
+            let physical_core = backend.physical_core(local_core);
+            let mut pools: Vec<PoolDecl> = backend
+                .ipc_pools(local_core)
+                .into_iter()
+                .map(pool_decl)
+                .collect();
+            pools.sort_by(|left, right| {
+                (left.peer, left.id.as_str()).cmp(&(right.peer, right.id.as_str()))
+            });
+            CoreCapability {
+                local_core,
+                physical_core: physical_core.get(),
+                pools,
+            }
+        })
+        .collect()
+}
+
+/// Converts one distro pool binding into its manifest representation
+/// (M6.9-T2). The binding types and the JSON schema are kept separate; this is
+/// the single conversion point.
+fn pool_decl(pool: IpcPool) -> PoolDecl {
+    PoolDecl {
+        id: pool.id.0,
+        peer: pool.peer.get(),
+        base_local: pool.base_local,
+        base_peer: pool.base_peer,
+        budget: pool.budget,
+        policy: match pool.policy {
+            CachePolicy::NormalNonCacheableShareable => {
+                PoolCachePolicy::NormalNonCacheableShareable
+            }
+            CachePolicy::NormalCacheableShareable => PoolCachePolicy::NormalCacheableShareable,
+        },
+    }
 }
 
 /// Writes `<target>.xbin.json` into the configured directory.

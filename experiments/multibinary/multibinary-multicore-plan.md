@@ -2,11 +2,13 @@
 
 **Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
 native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, ready/epoch, docs). Remaining work: **M6.9**
-(distro-owned IPC pools + ELF verification), **M7** (STM32H7 acceptance +
-extraction) and **M8-T1** (advisory CI), see
+routing, multi-source, ready/epoch, docs), **M6.9-T1** (distro capability
+binding) and **M6.9-T2** (manifest schema 2) complete. Remaining work:
+**M6.9-T3..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
+acceptance + extraction) and **M8-T1** (advisory CI), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-03 (compacted: completed milestone task lists removed).
+**Last updated:** 2026-10-03 (M6.9-T2; compacted: completed milestone task lists
+removed).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
@@ -182,7 +184,7 @@ the root generation.
 | | `layout.rs` | Canonical little-endian layout (natural alignment capped at 4) |
 | | `codegen.rs` | Generate the `ipc-types` crate (types, marker impls, consts, asserts, `LAYOUT_HASH`) with change-detecting writes |
 | | `project.rs` | Parse `rticx.toml` (`[[application]]`, `[ipc.regions]`) |
-| | `manifest.rs` | `<app>.xbin.json` schema (written by the pass in metadata mode) |
+| | `manifest.rs` | `<app>.xbin.json` schema (written by the pass in metadata mode: receivers + per-core distro capability binding) |
 | | `merge.rs` | Merge manifests, validate topology/priority/type/region/core-id rules, allocate FIFOs |
 | | `alloc.rs` | Emit the sealed system view (FIFO offsets, doorbell lines, hashes) |
 | | `system.rs` | `system.json` schema (`seal`, `canonical_topology_text`, `verify_topology_hash`) |
@@ -446,8 +448,10 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
    - the extension helper (detected at the macro level) writes `<app>.xbin.json`:
      package/target, source hash, local cores + core_ids, external cores, cross
      receivers (native `#[sw_task]` items), their `SpawnInput` type paths,
-     priorities, capacities. There are no sender declarations: the driver infers
-     each task's single producer application from the receivers' `spawn_by`.
+     priorities, capacities, and the per-local-core distro capability binding
+     (physical core id + IPC pools; M6.9-T2). There are no sender declarations:
+     the driver infers each task's single producer application from the
+     receivers' `spawn_by`.
 3. Parse `ipc-types.toml`; compute canonical layout; validate the type subset.
 4. Merge manifests and validate:
    - every receiver's `spawn_by` names a single existing producer in another
@@ -802,13 +806,13 @@ reports a pool whose peer is `B` **and** `B` reports the matching pool. A
 direction with no pool is an impossible link; `sync` rejects a receiver whose
 `spawn_by` has no pool path with a precise error.
 
-- [ ] **M6.9-T1 — Distro capability binding.** Add `PhysicalCore`, `PoolId`,
+- [x] **M6.9-T1 — Distro capability binding.** Add `PhysicalCore`, `PoolId`,
   `IpcPool`, `CachePolicy` and the `physical_core` / `ipc_pools` methods to the
   distro code-generation contract; implement them in the mock distro with the
   fixture topology (pools for the `{0,1}`, `{1,2}`, `{0,2}` duals). Unit tests
   pin the binding shape and that the returned pools are symmetric across the two
   endpoints' vocabularies.
-- [ ] **M6.9-T2 — Manifest schema 2.** In metadata mode the pass writes, per
+- [x] **M6.9-T2 — Manifest schema 2.** In metadata mode the pass writes, per
   local core, its physical id and its pool entries (id, peer physical id, both
   views, budget, policy) into `<app>.xbin.json`; `MANIFEST_SCHEMA_VERSION` bumps
   to 2. Extraction tests cover the identity default and multi-core applications.
