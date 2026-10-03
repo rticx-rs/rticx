@@ -24,8 +24,9 @@ use rticx_core::RticMacroBuilder;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::parse_utils::RticAttr;
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use rticx_xbin_pass::{CachePolicy, IpcPool, PhysicalCore, PoolId, XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{IpcPool, PhysicalCore, XbinPass, XbinPassBackend};
 use syn::{Expr, ItemMod, Lit, parse_macro_input};
+use xbin_mock_capability::fixture_pools;
 
 /// Code-generation backend of the mock distribution.
 ///
@@ -100,45 +101,6 @@ impl XbinPassBackend for MockDistroBackend {
 
     fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool> {
         fixture_pools(self.physical(local_core))
-    }
-}
-
-/// IPC pools of the mock fixtures: physical cores 0, 1 and 2 are fully
-/// connected through the three duals `{0, 1}`, `{1, 2}` and `{0, 2}`
-/// (M6.9-T1).
-///
-/// This is the mock distribution's capability binding, the counterpart of the
-/// mock runtime's three shared pools. The mock has a single address
-/// space, so both endpoints of a dual see its base at the same address; the
-/// budget matches the runtime's 4096-byte pools. The entries are ordered by
-/// ascending peer for determinism.
-fn fixture_pools(local: PhysicalCore) -> Vec<IpcPool> {
-    /// Bytes reserved for both directions of one dual.
-    const BUDGET: u32 = 4096;
-
-    let dual = |id: &str, peer: u32, base: u32| IpcPool {
-        id: PoolId::new(id),
-        peer: PhysicalCore(peer),
-        base_local: base,
-        base_peer: base,
-        budget: BUDGET,
-        policy: CachePolicy::NormalNonCacheableShareable,
-    };
-
-    match local.0 {
-        0 => vec![
-            dual("mock-0-1", 1, 0x3000_0000),
-            dual("mock-0-2", 2, 0x3000_2000),
-        ],
-        1 => vec![
-            dual("mock-0-1", 0, 0x3000_0000),
-            dual("mock-1-2", 2, 0x3000_1000),
-        ],
-        2 => vec![
-            dual("mock-0-2", 0, 0x3000_2000),
-            dual("mock-1-2", 1, 0x3000_1000),
-        ],
-        _ => Vec::new(),
     }
 }
 

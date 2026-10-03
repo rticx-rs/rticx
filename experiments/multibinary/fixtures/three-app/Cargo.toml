@@ -22,7 +22,7 @@
 #   the full core pass on `MockCoreBackend` and binds the cross-binary pass
 #   against `xbin-mock-runtime`, so the generated code compiles and links
 #   without target hardware;
-# - `xbin-mock-runtime` owns the process-global in-memory regions and provides
+# - `xbin-mock-runtime` owns the process-global in-memory pools and provides
 #   the receiver-side `RticSwTask` trait;
 # - `mock-pac` is an empty PAC stand-in for `device = mock_pac`;
 # - `ipc-types/` is the `cargo xbin sync`-generated crate (checked in).

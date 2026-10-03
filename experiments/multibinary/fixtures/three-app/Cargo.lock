@@ -528,6 +528,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "xbin-mock-capability"
+version = "0.1.0"
+dependencies = [
+ "rticx-xbin-pass",
+]
+
+[[package]]
 name = "xbin-mock-distro"
 version = "0.1.0"
 dependencies = [
@@ -537,6 +544,7 @@ dependencies = [
  "rticx-sw-pass",
  "rticx-xbin-pass",
  "syn 2.0.119",
+ "xbin-mock-capability",
 ]
 
 [[package]]

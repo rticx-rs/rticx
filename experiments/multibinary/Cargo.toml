@@ -17,6 +17,7 @@ members = [
     # Shared mock distribution used by the checked-in fixtures (the fixtures
     # are standalone workspaces that path-depend on these).
     "crates/mock/mock-pac",
+    "crates/mock/xbin-mock-capability",
     "crates/mock/xbin-mock-distro",
     "crates/mock/xbin-mock-runtime",
 ]

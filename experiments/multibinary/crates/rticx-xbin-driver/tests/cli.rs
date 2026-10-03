@@ -214,6 +214,36 @@ fn sync_html_writes_the_visualization() {
     );
 }
 
+/// Root of the checked-in end-to-end fixture.
+fn e2e_fixture_root() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/e2e")
+        .canonicalize()
+        .expect("the end-to-end fixture ships with the driver crate")
+}
+
+#[test]
+fn sync_html_over_the_fixture_renders_pool_panels() {
+    let root = e2e_fixture_root();
+    let output = run(&root, &["xbin", "sync", "--html"]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let html = std::fs::read_to_string(root.join("target/rticx-xbin/system.html"))
+        .expect("system.html is written");
+    assert!(
+        html.contains("\"id\":\"mock-0-1\""),
+        "the fixture's distro pool is a panel (M6.9-T8/T9)"
+    );
+    assert!(
+        html.contains("\"budget\":4096"),
+        "the panel carries the shared pool budget"
+    );
+}
+
 #[test]
 fn sync_html_open_implies_html_and_uses_the_configured_opener() {
     let dir = tempdir().expect("tempdir");

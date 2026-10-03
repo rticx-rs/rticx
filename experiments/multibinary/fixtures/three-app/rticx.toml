@@ -7,7 +7,7 @@
 # - the mock distribution's capability binding maps every pair of physical
 #   cores through its own pool (`mock-0-1`, `mock-1-2`, `mock-0-2`), so both
 #   directions of each pair allocate inside that pool's shared 4096-byte budget
-#   (per direction, until M6.9-T4 shares it);
+#   (M6.9-T4);
 # - every application is therefore both a producer (it spawns tasks on the two
 #   other cores through generated stubs) and a receiver (it declares its own
 #   `#[sw_task]` cross-binary receivers, each on a priority line disjoint from

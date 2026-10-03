@@ -40,7 +40,7 @@ runs Cargo from there.
 ```text
 my-project/
 ├── Cargo.toml            # (optional) cargo workspace
-├── rticx.toml            # RTICX Multicore project workspace describing the projects topology (cores, applications, IPC regions ..etc)
+├── rticx.toml            # RTICX Multicore project workspace describing the topology (cores, applications)
 ├── ipc-types.toml        # shared data types, the type-only IDL
 ├── ipc-types/            # generated crate; kept in VCS, synced by the driver
 ├── .cargo/config.toml    # target triple, linker, runner (as usual)
@@ -62,8 +62,9 @@ receiver). Section 6 walks through `e2e/`.
 
 ## 3. Writing `rticx.toml`
 
-*Implemented (M0).* Parsed and validated by `cargo xbin sync`; canonical
-rendering is available through `rticx_xbin_proto::ProjectConfig::to_toml_string`.
+*Implemented (M0; IPC memory removed in M6.9-T3).* Parsed and validated by
+`cargo xbin sync`; canonical rendering is available through
+`rticx_xbin_proto::ProjectConfig::to_toml_string`.
 
 `schema` must be `1`. Each `[[application]]` declares one binary:
 
@@ -73,44 +74,15 @@ rendering is available through `rticx_xbin_proto::ProjectConfig::to_toml_string`
 | `target` | table | yes | `{ kind = "bin", name = "<bin>", triple = "<triple>"? }`; `kind` is `"bin"` in v1, `triple` overrides `.cargo/config.toml` |
 | `core_ids` | array of integers | yes | local core index `i` maps to the globally unique id `core_ids[i]` |
 
-`[ipc.regions]` declares one shared-memory region per ordered core pair,
-keyed `"<source>-><target>"`:
+That is the whole schema: since M6.9 the project declares **no IPC memory**.
+The distribution owns it and exposes a *capability binding* — which core pairs
+it can reach, through which pool, with each core's view and a shared per-dual
+budget — which each application records in its metadata manifest. A leftover
+`[ipc.regions]` table is a hard `sync` error naming the removal. Addresses and
+pool budgets are the distribution author's concern (section 7.5); the project
+author only maps applications to cores.
 
-| Key | Type | Required | Meaning |
-|---|---|---|---|
-| `base` | integer | shorthand | region base for **both** cores; expands to equal `base_from_source`/`base_from_target` |
-| `base_from_source` | integer | yes\* | region base as seen by the source core |
-| `base_from_target` | integer | yes\* | region base as seen by the target core (aliases allowed) |
-| `size` | integer | yes | region size in bytes (`>= 1`) |
-
-\* The granular form requires **both** `base_from_source` and `base_from_target`.
-`base` is an alternative to that pair and may not be combined with either of
-them; the shorthand only applies when the source and target see the region at
-the same absolute address.
-
-Addresses and sizes are bare TOML integers; the `0x` prefix is accepted and
-the canonical form is lowercase hex. Validation at parse time:
-
-- exactly one `schema = 1`;
-- unique `package` names and globally unique core ids;
-- region keys of the form `<source>-><target>` with integers and
-  `source != target`;
-- each region uses either `base` or the `base_from_source`/`base_from_target`
-  pair, never a mix;
-- the ranges a single core sees do not overlap: every region contributes one
-  range to each endpoint core (the source view to the source, the target view
-  to the target), and two ranges assigned to the same core must not overlap,
-  checked on `[base, base + size)`. This catches a core that would otherwise
-  see two different regions at the same addresses (for example the same
-  `0x30040000` used both to send to and to receive from another core);
-- no unknown top-level, `[[application]]`, `target` or region keys.
-
-Declare only the directions that carry cross-binary tasks: the driver sizes and
-allocates a region only for the directions it sees in the application
-manifests (`sync` fails with ``needs a `S->T` region`` otherwise).
-
-Example (the `fixtures/e2e` topology, using the shorthand because both cores
-see the region at the same address):
+Example (the `fixtures/e2e` topology):
 
 ```toml
 schema = 1
@@ -124,40 +96,14 @@ core_ids = [0]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base = 0x30040000, size = 4096 }
 ```
-
-The same region written in the more granular form:
-
-```toml
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-```
-
-Use the granular form when the two cores see the region through **different**
-addresses (aliases), for example the D2/M4 alias window of SRAM3:
-
-```toml
-[ipc.regions]
-# Same physical memory: CM7 sees SRAM3 at 0x3004_0000, CM4 at 0x1004_0000.
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x10040000, size = 4096 }
-```
-
-Canonical rendering (`ProjectConfig::to_toml_string`) always expands `base` to
-the explicit `base_from_source`/`base_from_target` pair, so tooling that
-round-trips a manifest normalizes the shorthand.
-
-The addresses declared here are raw fixed addresses: the generated code accesses
-them through `Fifo::view_at(base + offset)` and the linker does not know the
-region exists. You must reserve each region in the linker script of every binary
-whose address map covers it — see
-[§7.5](#75-reserving-the-ipc-regions-in-the-linker-script).
 
 `core_ids` is the only place global core ids are declared: the `#[app]` macro
 uses them in the runtime core checks, `external_cores`/`spawn_by` refer to
-them, and the system view records them. 
+them, and the system view records them. Each application also reports the
+distribution's **physical core id** for its cores; the driver matches the two
+endpoints of a dual through it and allocates both directions of the pair inside
+one shared pool budget (M6.9-T4).
 
 ## 4. Writing `ipc-types.toml`
 
@@ -223,8 +169,8 @@ Who declares what:
 | line dispatcher (`#[task(binds = <ipc_dispatchers entry>)]`) | nobody | the pass, one per `(source, priority)` line |
 | doorbell router (`#[task(binds = <pair IRQ>)]`) | nobody | the pass, one per `(source → target)` pair |
 | `ipc_dispatchers` pool | receiver application | consumed by the pass |
-| per-task FIFO | nobody | driver allocation inside the region, view generated by the pass |
-| regions | `rticx.toml` | — |
+| per-task FIFO | nobody | driver allocation inside the dual's distro pool, view generated by the pass |
+| IPC pools | the distribution (capability binding) | reported per core in the metadata manifest |
 | shared types | `ipc-types.toml` | the generated `ipc-types/` crate |
 
 Receiver binary (the task runs here):
@@ -420,7 +366,9 @@ cd experiments/multibinary/fixtures/e2e
 **Step 2 — the two configuration files.** `ipc-types.toml` declares one
 message — the `EncryptReq` declaration from section 4 — and `rticx.toml` is
 exactly the example from section 3: it maps the two binaries to global cores 0
-and 1 and declares the single `0->1` region.
+and 1 and declares no IPC memory. The mock distribution's capability binding
+provides the `mock-0-1` pool — a 4096-byte budget shared by both directions of
+the `{0, 1}` dual — which `sync` records in the view.
 
 **Step 3 — the receiver** (`app-m4/src/main.rs`, abridged):
 
@@ -558,11 +506,12 @@ matter here (abridged):
     "id": 1, "name": "EncryptTask",
     "receiver_core": 1, "spawner_core": 0,
     "priority": 3, "capacity": 2, "input_type": "EncryptReq",
-    "fifo": { "source": 0, "target": 1, "offset": 0, "elem_size": 12, "depth": 3 }
+    "fifo": { "source": 0, "target": 1, "pool": "mock-0-1",
+              "offset": 0, "elem_size": 12, "depth": 3 }
 } ],
-"regions":   [ { "source": 0, "target": 1,
-                 "base_from_source": "0x30040000",
-                 "base_from_target": "0x30040000", "size": 4096 } ],
+"pools": [ { "id": "mock-0-1", "core_a": 0, "core_b": 1,
+             "base_from_a": "0x30000000", "base_from_b": "0x30000000",
+             "budget": 4096, "used": 100 } ],
 "doorbells": [ { "source": 0, "target": 1, "priority": 3, "line": 0 } ]
 ```
 
@@ -575,7 +524,7 @@ From the view, the pass generated inside the `#[app]` modules:
       -> Result<(), Option<ipc_types::EncryptReq>>;
   ```
 
-  and its FIFO view at `region 0->1 + 0`;
+  and its FIFO view at pool `mock-0-1` + 0;
 - in `app-m4`: the `#[sw_task]` rewritten to
   `#[task(priority = 3, task_trait = RticSwTask, init = generated)]`, the FIFO
   view, the `SpawnInput: CrossCoreMessage` assertion, the `EncryptTask` line
@@ -599,13 +548,12 @@ cargo test -p rticx-xbin-pass --test e2e_runtime
 ### Multi-source variant
 
 `fixtures/three-app/` is the same project with a second producer
-(`app-m5`, global core 2) spawning `SensorTask` onto the same receiver core:
-
-```toml
-[ipc.regions]
-"0->1" = { base = 0x30040000, size = 4096 }
-"2->1" = { base = 0x30041000, size = 4096 }
-```
+(`app-m5`, global core 2) spawning `SensorTask` onto the same receiver core.
+The mock capability binding provides one pool per dual (`mock-0-1`,
+`mock-1-2`, `mock-0-2`), each with its own 4096-byte shared budget; the `0->1`
+and `2->1` directions each carry two FIFOs inside their dual's pool. The
+project's `rticx.toml` still declares only the three applications and their
+`core_ids`.
 
 The receiver lists one dispatcher line per cross line, in ascending
 `(source, priority)` order, and the two producers use disjoint priorities:
@@ -628,7 +576,7 @@ mod app {
 }
 ```
 
-Each producer gets its own region, ring function, router and dispatcher line. See
+Each producer gets its own pool, ring function, router and dispatcher line. See
 [architecture §7](architecture.md#7-priorities-and-locking) for why the
 priority lines must be disjoint.
 
@@ -640,6 +588,8 @@ priority lines must be disjoint.
 cargo xbin --help     # CLI overview
 cargo xbin sync       # validate rticx.toml, collect <app>.xbin.json per application
 cargo xbin build      # sync, then build every application
+cargo xbin build --verify-elf   # ... and verify each linked binary against the pools
+cargo xbin verify               # verify a plain `cargo build` output (--release for the release profile)
 ```
 
 `sync` parses `rticx.toml` and `ipc-types.toml`, creates
@@ -659,10 +609,11 @@ application, be listed in the receiver's `external_cores`, and the producer
 application must list the receiver's core in its `external_cores`; every
 `[[application]]`'s `core_ids`/`external_cores` must be consistent with
 `rticx.toml`; every referenced type must exist in the IDL; and the per-task
-FIFOs must fit their `(source → target)` region. The same
+FIFOs must fit their dual's shared distro pool budget. The same
 deterministic pass allocates every FIFO address (8-byte aligned, plan order,
-depth `capacity + 1`); the first FIFO that does not fit names its task and
-region in the error. The sealed system view is written to
+depth `capacity + 1`) inside the pool, sharing one budget between both
+directions of the dual (M6.9-T4); the first FIFO that does not fit names its
+task, dual and pool in the error. The sealed system view is written to
 `target/rticx-xbin/system.json` (M1-T6), and — when the project has an
 `ipc-types.toml` — the `ipc-types/` crate below the project root is
 generated/updated (M1-T7). `sync` prints one line per created or updated file,
@@ -739,26 +690,25 @@ the ready/epoch protocol:
 
 ### 7.4 Cache and MPU checklist
 
-The shared region is special memory; getting these wrong is the most common
+The shared pool memory is special memory; getting these wrong is the most common
 source of runtime-only failures:
 
-- **Attributes:** map every region Normal, **Non-cacheable, Shareable** (MPU
+- **Attributes:** map every pool Normal, **Non-cacheable, Shareable** (MPU
   or equivalent). Never Device/Strongly-ordered memory: the FIFO's
   `ldrex`/`strex`-based atomics are invalid there.
 - **Timing:** `configure_shared_memory()` runs at the start of each entry,
-  before the user `init` and before any generated code touches the region, so
+  before the user `init` and before any generated code touches a pool, so
   configure it there (the distribution implements the backend method).
-- **Linker/MPU consistency:** reserve the region outside every binary's
-  `.data`/`.bss` ([§7.5](#75-reserving-the-ipc-regions-in-the-linker-script));
-  keep `base_from_source`/`base_from_target` in `rticx.toml`
-  consistent with the MPU region (base and limit alignment/size follow your
-  device's MPU rules, e.g. power-of-two regions on Cortex-M).
-- **Aliases:** if the two cores see the region at different addresses, declare
-  both views (`base_from_source`/`base_from_target`); the generated code uses
-  the view of the core that runs it. When both cores see the same absolute
-  address, use the `base = <addr>` shorthand instead
-  (see [`rticx.toml` regions](#3-writing-rticxtoml)).
-- **Cacheable fallback (unsupported v1):** if the region cannot be made
+- **Linker/MPU consistency:** reserve each pool outside every binary's
+  `.data`/`.bss` (section 7.5); keep the capability binding's per-core pool
+  views consistent with the MPU region (base and limit alignment/size follow
+  your device's MPU rules, e.g. power-of-two regions on Cortex-M).
+- **Aliases:** a dual's two endpoints may see its pool at different addresses
+  (aliases, e.g. the D2/M4 window of SRAM3). The distribution reports each
+  endpoint's own view as `base_local` and the peer's as `base_peer`; the
+  generated code uses the view of the core that runs it. When both cores see
+  the same absolute address, report the same value for both.
+- **Cacheable fallback (unsupported v1):** if a pool cannot be made
   non-cacheable, use the `clean_range`/`invalidate_range` hooks on the
   producer/consumer paths and keep the atomic ordering; the
   [architecture decision tree](architecture.md#6-memory-and-layout) spells
@@ -768,79 +718,53 @@ source of runtime-only failures:
   the core pass's used-IRQ machinery does this from the generated
   `#[task(binds = …)]` items, but the distribution must map the IRQ numbers.
 
-### 7.5 Reserving the IPC regions in the linker script
+### 7.5 For distribution authors: pools, linker reservations and ELF verification
 
-`[ipc.regions]` addresses are accessed through raw fixed-address pointers
-(`Fifo::view_at(base + offset)`); the region is **not** a Rust `static`, so the
-linker does not know about it and will not avoid it. `cargo xbin sync` checks
-only what it can see from `rticx.toml`:
+Everything in this section is the **distribution author's** responsibility.
+Since M6.9 the project (`rticx.toml`) declares no IPC memory: the distribution
+owns the pools, their addresses and aliases, the shared budget, and the linker
+reservations that keep them out of every binary's allocated data. The
+[plan §10](../multibinary-multicore-plan.md#10-distributionbackend-contract)
+is the normative contract; this is the practical checklist.
 
-- two regions handed to the **same core** must not overlap on
-  `[base, base + size)`;
-- the per-task FIFOs must fit the region `size`.
+**1. Report the capability binding.** A distribution's `#[app]` macro binds
+`rticx-xbin-pass` with an `XbinPassBackend` implementing two queries:
 
-It cannot see any binary's linker script, so it cannot tell whether `.data`,
-`.bss` or other allocated sections land on the same bytes. If they do, the
-application and the FIFOs share physical memory silently: no fault, just
-corrupted ring indices/messages and corrupted application variables. You must
-reserve the range in **every** binary whose address map covers it.
+```rust
+fn physical_core(&self, local_core: u32) -> PhysicalCore; // e.g. "cm7" -> 0
+fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool>;
+```
 
-**The rule.** For each application, take the region views that core can see —
-for every region the core is an endpoint of, its `base_from_source` (as source)
-or `base_from_target` (as target) — and make sure its linker scripts never place
-allocated data there. Two practical ways:
+Each `IpcPool` describes one **unordered** core pair (a *dual*) from this
+core's side: a symbolic `id`, the `peer` physical core, this core's view
+(`base_local`) and the peer's view (`base_peer`), the `budget` (bytes reserved
+for IPC, shared by **both** directions of the dual) and a `CachePolicy`. The
+two endpoints of a dual must report the same `id`, budget and policy with the
+physical cores and base views swapped; the driver matches them and rejects a
+one-sided or inconsistent entry, or a used direction with no pool at all. Both
+directions of a dual allocate inside the one shared budget.
 
-1. *Preferred:* put IPC regions in a dedicated shared SRAM block the firmware
+**2. Reserve the pools in the linker scripts.** Pool addresses are accessed
+through raw fixed-address pointers (`Fifo::view_at(base + offset)`); a pool is
+**not** a Rust `static`, so the linker will not avoid it. If `.data`/`.bss`
+lands on a pool, the application and the FIFOs silently share bytes. For each
+application, take the pool views its core can see (`base_local` on the endpoint
+that owns that local core) and keep allocated data out of those ranges:
+
+1. *Preferred:* put the pools in a dedicated shared SRAM block the firmware
    uses for nothing else, and keep that block out of the `RAM` `MEMORY` regions
    that back `.data`/`.bss`.
-2. If the IPC block sits inside a RAM block, split the `MEMORY` declaration
-   around it so the RAM region stops before the IPC range (or resumes after
-   it), and give the IPC range its own region.
+2. If a pool sits inside a RAM block, split the `MEMORY` declaration around it
+   and give the pool range its own region.
 
-Example: the H7's SRAM3 is `0x3004_0000` as seen by the CM7 and `0x1004_0000`
-through the D2 alias as seen by the CM4 — the *same physical bytes* at two
-addresses. Each core needs its own reservation at its own address:
+A dual's two endpoints may see the same physical bytes at different addresses
+(aliases, e.g. the H7's SRAM3 at `0x3004_0000` for the CM7 and `0x1004_0000`
+through the D2 alias for the CM4). Each core reserves **its own view**, on that
+core only: the two linker scripts are independent, and reserving different
+SRAM blocks on the two cores is a silent aliasing bug.
 
-```ld
-/* CM7 (app-m7) memory.x */
-MEMORY {
-  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 2M
-  RAM   (rwx) : ORIGIN = 0x24000000, LENGTH = 0x80000  /* AXI SRAM; stops before SRAM3 */
-  IPC   (rw)  : ORIGIN = 0x30040000, LENGTH = 4K       /* "0->1" region, CM7 view */
-}
-```
-
-```ld
-/* CM4 (app-m4) memory.x */
-MEMORY {
-  FLASH (rx)  : ORIGIN = 0x08100000, LENGTH = 2M
-  RAM   (rwx) : ORIGIN = 0x10000000, LENGTH = 0x40000  /* D2 SRAM; stops before 0x10040000 */
-  IPC   (rw)  : ORIGIN = 0x10040000, LENGTH = 4K       /* "0->1" region, CM4 view */
-}
-```
-
-Both binaries declare an `IPC` region at their own view of the same physical
-block. Keep `LENGTH(IPC)` **>=** the `size` declared for that direction in
-`rticx.toml`: the driver's fit check uses the declared `size`, so a reservation
-smaller than the declared region defeats the check.
-
-To make the linker actually reserve and check the range — so an overflow is a
-link error rather than a silent wrap — place a `NOLOAD` output section in the
-`IPC` region, usually in the wrapper linker script that includes your `memory.x`
-and the runtime's `link.x`:
-
-```ld
-SECTIONS {
-  .rticx_xbin_ipc (NOLOAD) : {
-    KEEP(*(.rticx_xbin_ipc))
-  } > IPC
-}
-```
-
-If nothing is tagged into `.rticx_xbin_ipc`, give the output section an explicit
-extent so the linker accounts for the whole region instead of collapsing an
-empty section, and export bounds you can compare against `system.json` when
-auditing:
+Give each pool a `NOLOAD` output section so an overflow is a link error rather
+than a silent wrap, and export bounds the driver can audit:
 
 ```ld
 SECTIONS {
@@ -849,42 +773,43 @@ SECTIONS {
     . = ORIGIN(IPC) + LENGTH(IPC);   /* force the reservation extent */
   } > IPC
 
-  IPC_0_1_start = ORIGIN(IPC);
-  IPC_0_1_end   = ORIGIN(IPC) + LENGTH(IPC);
+  __rticx_xbin_pool_mock_0_1_start = ORIGIN(IPC);
+  __rticx_xbin_pool_mock_0_1_end   = ORIGIN(IPC) + LENGTH(IPC);
 }
 ```
 
-**Aliasing checklist**
+`LENGTH(IPC)` must be **>=** the pool's declared `budget`, and the pool must be
+mapped Normal, Non-cacheable, Shareable by the MPU (section 7.4) with a base
+and size that satisfy the MPU's alignment rules. Choose addresses that satisfy
+the linker and the MPU at once, and re-check whenever the memory map, the MPU
+configuration or the capability binding changes.
 
-- Compute each core's own view of every region and reserve that view on that
-  core only. Do not assume a region reserved in the CM7 script is reserved in
-  the CM4 script: the two linker scripts are independent.
-- On aliased targets the same physical bytes appear at different addresses
-  (`base_from_source != base_from_target`); both views must be reserved, and
-  both must describe the **same physical block**. Reserving different SRAM
-  blocks on the two cores is a silent aliasing bug — confirm against the
-  reference manual's memory map.
-- The reservation is per *direction*. A `0->1` and a `1->0` region need distinct
-  physical ranges (the parser already rejects overlapping per-core views, but it
-  is your job to give them distinct memory).
-- The region must still be mapped Normal, Non-cacheable, Shareable by the MPU
-  ([§7.4](#74-cache-and-mpu-checklist)) and its base/size must satisfy the MPU's
-  alignment rules (e.g. power-of-two regions on Cortex-M). Choose addresses that
-  satisfy the linker and the MPU at once.
-- Re-check the reservation whenever the memory map, the MPU configuration or the
-  `rticx.toml` regions change.
+**3. Verify the linked images.** `cargo xbin build --verify-elf` runs `sync`,
+links every application and then parses each linked ELF with the `object`
+crate. It fails (naming the application, section/symbol, range and pool) when
 
-> **Not yet checked automatically.** The driver cannot read linker scripts, and
-> the generated code does not (yet) emit a placeholder into the reserved section
-> or assert the reserved bounds against `system.json`. A mismatch between
-> `rticx.toml` and the linker scripts is therefore not diagnosed at build time;
-> treat the reservation as a required manual step. The H7 acceptance
-> distribution (M7-T1) is where the reference linker scripts are written.
+- any `SHF_ALLOC` section (`[address, address + size)`) intersects a pool view
+  of the application's own cores — the silent-corruption class above;
+- the stack bound symbol (`_stack_start` / `__rticx_xbin_stack_start`, when
+  defined) is outside every pool view; or
+- a distro-exported `__rticx_xbin_pool_<id>_start`/`_end` does not match the
+  pool base and shared budget in `system.json`.
+
+`cargo xbin verify` runs the same checks against the output of a plain
+`cargo build` (after an explicit `sync`), and `--release` selects the release
+profile; neither relinks. The check is **detection, not prevention**: it sees
+static `SHF_ALLOC` sections only, not runtime stack/heap growth, and its symbol
+checks need the unstripped link output (a stripped binary loses `.symtab`; the
+section check still works). Run it in CI so a drifted linker script fails the
+build instead of corrupting IPC at runtime.
 
 ### 7.6 Verifying your setup
 
 - `cargo xbin sync` alone validates the whole topology (cores, visibility,
-  priorities, types, region fit) and re-renders `ipc-types/`.
+  priorities, types, pool budget fit) and re-renders `ipc-types/`.
+- `cargo xbin build --verify-elf` additionally checks every linked binary
+  against the distro pools; `cargo xbin verify` does the same for a plain
+  `cargo build` output (section 7.5).
 - The in-tree fixtures are the executable specification of the documented
   behaviour; from `experiments/multibinary/`:
 
@@ -893,6 +818,7 @@ SECTIONS {
   cargo test -p rticx-xbin-pass --test priority_lines # build-phase priority-line errors
   cargo test -p rticx-xbin-driver --test e2e          # `cargo xbin build` over fixtures/e2e
   cargo test -p rticx-xbin-driver --test three_app    # multi-source fixture
+  cargo test -p rticx-xbin-driver --test verify       # linked-ELF verification
   cargo test -p rticx-xbin-driver --test negative     # documented error messages
   ```
 
@@ -910,11 +836,7 @@ SECTIONS {
 | ``missing required top-level key `schema` `` | add `schema = 1` |
 | ``package `x` is declared by more than one `[[application]]` `` | give each binary a unique `package` |
 | ``global core id N is declared by both ...`` | core ids must be unique across applications |
-| ``key `x` is not of the form `<source>-><target>` `` | quote the key: `"0->1"` |
-| ``key `0->0` connects core 0 to itself`` | regions are directional; declare `0->1` and `1->0` separately |
-| ``combines the `base` shorthand with `base_from_source` `` | use `base` alone when both views are equal, or both explicit views when they differ |
-| ``is missing the required `base_from_source` key`` | set `base` for equal views, or set both `base_from_source` and `base_from_target` |
-| ```ipc.regions` overlap on core N`` | on core `N` two regions map to intersecting address ranges; move one region's view (use a distinct `base`/alias) so each core sees disjoint ranges |
+| ```[ipc.regions]` was removed: IPC memory is owned by the distribution's capability binding `` | delete the table; since M6.9 the distribution owns the IPC pools (section 7.5) |
 | ``references unknown type `T` `` | declare `[message.T]` or `[enum.T]` in `ipc-types.toml` |
 | ``cyclic message reference: A -> B -> A`` | break the cycle; messages are stored inline |
 | ``message `FooBar` and message `Foo_Bar` would both generate the constant `SIZE_FOO_BAR` `` | rename one IDL type so the generated constants stay unique |
@@ -942,8 +864,10 @@ SECTIONS {
 | ``receiver `T` is declared by both `x` and `y` `` | task names must be unique across the project |
 | ``task `T` … uses type `Y`, which is not declared in `ipc-types.toml` `` | declare `[message.Y]`/`[enum.Y]` or fix the path |
 | ``tasks `A` … and `B` … share priority P on core N`` | give tasks from different source cores disjoint priority lines |
-| ``task `T` needs a `S->T` region`` | add that direction to `[ipc.regions]` |
-| ``task `T` does not fit the `S->T` region: N bytes needed, M available`` | enlarge the region or lower task `capacity` |
+| ``task `T` needs a `S->T` IPC pool`` | the distribution must report a pool between the producer and receiver physical cores |
+| ``the FIFOs of the `A<->B` pool `P` need N bytes, but the distribution reserves M`` | enlarge the pool budget or lower task `capacity` (both directions share the budget) |
+| ``IPC pool `P` between cores A and B is not reported consistently by both endpoints`` | make the two applications' capability entries symmetric (same id, budget, policy, swapped bases) |
+| ``the `P` and `Q` pool views overlap on core N`` | give the core's pool views disjoint address ranges |
 
 *Build-phase priority-line errors (M6-T1):*
 
@@ -965,9 +889,9 @@ host fixtures in section 7.6 cannot reproduce them.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| inputs arrive corrupted, or a receiver sees a stale/zeroed value | region not cache-coherent: cacheable mapping without maintenance, or wrong base alias | map the region Normal, Non-cacheable, Shareable; reconcile `base_from_source`/`base_from_target` with the MPU view; see section 7.4 |
-| a hard fault or bus error on the first spawn | region in Device/Strongly-ordered memory (exclusive atomics invalid), or the MPU denies access to one core | map Normal memory and grant both cores the MPU region |
-| `cross_spawn` always returns `Err(Some(input))` although the target booted | target never ran `mark_ready` (owner `init_shared` missing, boot released the core but its entry did not run), or its ready bit is not in the shared region | check the generated init hooks and the distribution's boot release; inspect `system.json`/the ready bitmap |
+| inputs arrive corrupted, or a receiver sees a stale/zeroed value | pool not cache-coherent: cacheable mapping without maintenance, or wrong base alias | map the pool Normal, Non-cacheable, Shareable; reconcile the capability binding's `base_local`/`base_peer` with the MPU view; see section 7.4 |
+| a hard fault or bus error on the first spawn | pool in Device/Strongly-ordered memory (exclusive atomics invalid), or the MPU denies access to one core | map Normal memory and grant both cores the MPU region |
+| `cross_spawn` always returns `Err(Some(input))` although the target booted | target never ran `mark_ready` (owner `init_shared` missing, boot released the core but its entry did not run), or its ready bit is not in the shared pool | check the generated init hooks and the distribution's boot release; inspect `system.json`/the ready bitmap |
 | `Ok(())` but the receiver's `exec` never runs | router or dispatcher IRQ not enabled/mapped, or `ipc_dispatchers` order does not match the view's ascending `(source, priority)` lines | map every pool entry and pair IRQ in the distribution; re-run `cargo xbin sync` and compare `doorbells`/`line` with `ipc_dispatchers` |
 | FIFO stays full while the receiver is idle | dispatcher bound to a line whose IRQ never fires; router read the id but the pend is lost | same IRQ mapping check as above; duplicate notifications are harmless (the dispatcher drains until empty) |
 | `Err(None)` repeatedly | the input is enqueued but the doorbell notification fails (IRQ masked, doorbell word not shareable) | fix the pair IRQ/word mapping; the enqueued input is drained by the next successful notification |

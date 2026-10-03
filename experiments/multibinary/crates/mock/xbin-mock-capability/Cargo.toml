@@ -1,0 +1,9 @@
+[package]
+name = "xbin-mock-capability"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Fixture IPC capability table shared by the rticx-xbin mock distributions"
+
+[dependencies]
+rticx-xbin-pass = { path = "../../rticx-xbin-pass" }

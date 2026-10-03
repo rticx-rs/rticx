@@ -13,3 +13,4 @@ proc-macro2 = "1"
 quote = "1"
 rticx-xbin-pass = { path = "../../../crates/rticx-xbin-pass" }
 syn = { version = "2", features = ["full"] }
+xbin-mock-capability = { path = "../../../crates/mock/xbin-mock-capability" }

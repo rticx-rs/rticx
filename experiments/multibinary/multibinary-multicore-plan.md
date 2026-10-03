@@ -2,14 +2,14 @@
 
 **Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
 native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, ready/epoch, docs), **M6.9-T1..T8** (distro capability
+routing, multi-source, ready/epoch, docs), **M6.9-T1..T9** (distro capability
 binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
 budget, `system.json` schema 2, pool-aware codegen/runtime, linked-ELF
-verification, pool-panel visualization) complete. Remaining work:
-**M6.9-T9** (docs and fixtures), **M7** (STM32H7
+verification, pool-panel visualization, docs and fixtures) complete. Remaining
+work: **M7** (STM32H7
 acceptance + extraction) and **M8-T1** (advisory CI), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-04 (M6.9-T8; pool-panel visualization).
+**Last updated:** 2026-10-04 (M6.9-T9; docs and fixtures).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
@@ -174,6 +174,7 @@ the root generation.
 | `rticx-xbin-driver` | `crates/rticx-xbin-driver/` | `cargo-xbin` subcommand (`sync`, `build`, `verify`) |
 | `rticx-xbin-mock` | `crates/rticx-xbin-mock/` | `MockSystem` runtime for host tests |
 | `mock-pac` | `crates/mock/mock-pac/` | Minimal PAC for the mock `#[app]` |
+| `xbin-mock-capability` | `crates/mock/xbin-mock-capability/` | Fixture IPC capability table shared by the mock distributions |
 | `xbin-mock-distro` | `crates/mock/xbin-mock-distro/` | Mock `#[app]` distribution (core pass + xbin pass + sw pass) |
 | `xbin-mock-runtime` | `crates/mock/xbin-mock-runtime/` | Runtime wrapper the generated mock code calls (`xbin_rt`, backend handle) |
 
@@ -215,7 +216,7 @@ workspace crates and (for `e2e`/`three-app`) on the shared mock distribution.
 
 | Fixture | Topology | Exercises |
 |---|---|---|
-| `fixtures/metadata/` | Two apps (`app-m7` producer core 0, `app-m4` receiver core 1) + a minimal `metadata-macro` `#[app]` stand-in that runs only the xbin metadata pass | `cargo xbin sync` end to end: metadata collection, merge/validation, `system.json` emission and `ipc-types/` generation. Driven by the driver's `tests/fixture.rs`; the generated `ipc-types/` crate is checked in like a real project |
+| `fixtures/metadata/` | Two apps (`app-m7` producer core 0, `app-m4` receiver core 1) + a minimal `metadata-macro` `#[app]` stand-in that runs only the xbin metadata pass and binds the mock capability table (M6.9-T9) | `cargo xbin sync` end to end: metadata collection, merge/validation, `system.json` (schema 2, `pools` + physical ids) emission and `ipc-types/` generation. Driven by the driver's `tests/fixture.rs`; the generated `ipc-types/` crate is checked in like a real project |
 | `fixtures/e2e/` | Same two apps, with the mock **distribution** (`xbin-mock-distro` + `xbin-mock-runtime`) running the full core pass on `MockCoreBackend` and the xbin pass against an in-process backend | `cargo xbin build` over a real phase-1/phase-2 cycle (driver `tests/e2e.rs`); phase 2 generates the sender `cross_spawn`, the receiver dispatcher and the init hooks and links both host binaries. The pass crate's `tests/e2e_runtime.rs` expands both apps into one host binary and **runs** the generated chain: `cross_spawn` → ring function → router ISR → pended line dispatcher → `exec`, plus FIFO backpressure and coalesced/duplicate notifications |
 | `fixtures/three-app/` | Three apps: producers `app-m7` (global 0) and `app-m5` (global 2) spawn onto receiver `app-m4` (global 1) through two shared pools, two priority lines and two per-pair routers | Multi-source support: driver `tests/three_app.rs` builds it with `cargo xbin build`; `tests/e2e_runtime.rs` runs all three apps in one process (per-pair routers/dispatcher lines, per-source backpressure, and the non-owner producer initializing its own pool); pass `tests/priority_lines.rs` covers build-phase priority-line validation |
 
@@ -489,8 +490,8 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
 > `pools[]` replaces `regions[]` (one entry per unordered core pair, with each
 > core's view, the shared `budget` and the bytes `used`), and `fifo` carries the
 > `pool` id with a pool-relative `offset`. `fifo.pool` is omitted when the
-> project bound no distro capability table (the minimal `metadata-macro`
-> fixture, until M6.9-T9).
+> project bound no distro capability table (a distribution that has not adopted
+> the M6.9 binding).
 
 v1 keeps one producer core per task, so every `tasks[]` entry has a single
 `spawner_core` and one `fifo` (one FIFO per `(task, source → target)` direction),
@@ -816,8 +817,7 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   tests and every fixture `rticx.toml` updated. To keep the driver green,
   `merge_project` now derives each used direction's region view from the source
   core's capability pool (`base_local`/`base_peer`/`budget`); a project whose
-  manifests carry no capability table (the minimal `metadata-macro` fixture,
-  until T9 supplies the mock table) allocates unbounded and emits no region.
+  manifests carry no capability table allocates unbounded and emits no region.
   T4 replaces this per-direction view with the matched pool model and shared
   budget.
 - [x] **M6.9-T4 — Merge: capability graph, adjacency and shared budget.**
@@ -848,8 +848,8 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   changes the topology hash and forces a rebuild; `SYSTEM_SCHEMA_VERSION` bumps
   to 2. `alloc.rs` copies the matched pools and the per-task pool ids directly.
   `FifoEntry::pool` is `Option<String>` (serialized only when present): a
-  project whose manifests carry no capability table at all (the minimal
-  `metadata-macro` fixture, until T9) has no pool to name and its FIFOs are
+  project whose manifests carry no capability table at all has no pool to name
+  and its FIFOs are
   unbounded, exactly as in T3/T4. `visualize.rs` keeps emitting the existing
   per-direction region panels by expanding each pool into its two directions
   until T8 renders real pool panels. Golden/host fixtures and `alloc.rs` updated
@@ -911,10 +911,19 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   tests (one pool panel per dual, both directions in one panel, occupied-extent
   scaling, empty pool, unpooled fallback, JSON embedding/determinism/escaping).
 
-- [ ] **M6.9-T9 — Docs and fixtures.** Remove every fixture `[ipc.regions]`; the
-  mock distro supplies the capability table. User guide: drop the user-facing
-  region and linker-carving sections and add distro-author guidance (pools,
-  linker reservations, ELF verification). Architecture doc §6/§7/§10/§12 updated.
+- [x] **M6.9-T9 — Docs and fixtures.** The metadata-only fixture now binds the
+  mock capability table (shared through the new `xbin-mock-capability` crate
+  with `xbin-mock-distro`), so `cargo xbin sync` emits `system.json` schema 2
+  with `pools[]` and physical core ids for every fixture; the e2e/three-app
+  `rticx.toml` comments drop the last per-direction language. The user guide
+  loses the region/linker-carving sections: `rticx.toml` documents only
+  applications/`core_ids`, and §7.5 becomes distro-author guidance (the
+  capability binding, pool linker reservations and `--verify-elf`/`verify`).
+  The architecture doc is updated throughout (§2/§3/§4/§6/§7/§9/§10/§11/§12)
+  for pools, physical ids, the shared budget and link-time verification.
+  Fixture test: the metadata `sync` asserts the matched `mock-0-1` pool and the
+  pool-relative FIFO; CLI test: `sync --html` over `fixtures/e2e` renders the
+  `mock-0-1` pool panel with its shared budget.
 
 *Acceptance:* `cargo xbin sync` validates the fixtures with no region syntax and
 emits `system.json` with `pools` and physical ids; `cargo xbin build` links both

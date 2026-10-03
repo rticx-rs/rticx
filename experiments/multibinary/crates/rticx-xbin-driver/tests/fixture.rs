@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use rticx_xbin_driver::{SYSTEM_FILE, sync};
 use rticx_xbin_proto::{
-    DoorbellEntry, FifoEntry, Hash64, RTICX_GENERATION, SystemView, layout_hash,
+    DoorbellEntry, FifoEntry, Hash64, PoolEntry, RTICX_GENERATION, SystemView, layout_hash,
 };
 use tempfile::tempdir;
 
@@ -131,10 +131,20 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(task.fifo_offset(), 0);
     assert_eq!(task.fifo_depth(), 3);
     assert_eq!(task.fifo_bytes(), 100);
-    assert!(
-        merged.pools().is_empty(),
-        "the metadata fixture binds no distro capability table yet, so no pool \
-         is emitted (M6.9-T9 supplies the mock one)"
+    assert_eq!(
+        merged.pools().len(),
+        1,
+        "the fixture binds the mock `{{0, 1}}` dual (M6.9-T9)"
+    );
+    let pool = &merged.pools()[0];
+    assert_eq!(pool.id, "mock-0-1");
+    assert_eq!((pool.core_a, pool.core_b), (0, 1));
+    assert_eq!(pool.base_from_a, 0x3000_0000);
+    assert_eq!(pool.base_from_b, 0x3000_0000);
+    assert_eq!(pool.budget, 4096);
+    assert_eq!(
+        pool.used, 100,
+        "the single `0->1` FIFO uses the shared pool budget"
     );
 
     // -- M1-T6: the allocated system view is emitted ------------------------
@@ -171,11 +181,24 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
         FifoEntry {
             source: 0,
             target: 1,
-            pool: None,
+            pool: Some("mock-0-1".to_string()),
             offset: 0,
             elem_size: 12,
             depth: 3,
         }
+    );
+    assert_eq!(
+        system.pools,
+        [PoolEntry {
+            id: "mock-0-1".to_string(),
+            core_a: 0,
+            core_b: 1,
+            base_from_a: 0x3000_0000,
+            base_from_b: 0x3000_0000,
+            budget: 4096,
+            used: 100,
+        }],
+        "the emitted view carries the matched mock pool (M6.9-T9)"
     );
     assert_eq!(
         system
@@ -184,7 +207,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
             .map(|core| (core.global_id, core.physical_core))
             .collect::<Vec<_>>(),
         [(0, 0), (1, 1)],
-        "without a distro binding the physical core id is the identity"
+        "the mock physical-core vocabulary is the global core id"
     );
     assert_eq!(
         system.doorbells,

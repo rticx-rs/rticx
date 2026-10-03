@@ -15,3 +15,4 @@ rticx-core = { path = "../../../../../rticx-core" }
 rticx-sw-pass = { path = "../../../../../compilation-passes/rticx-sw-pass" }
 rticx-xbin-pass = { path = "../../rticx-xbin-pass" }
 syn = { version = "2", features = ["full"] }
+xbin-mock-capability = { path = "../xbin-mock-capability" }
