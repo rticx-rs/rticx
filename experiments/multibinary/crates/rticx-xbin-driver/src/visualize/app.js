@@ -10,6 +10,11 @@
   "use strict";
 
   var SVG_NS = "http://www.w3.org/2000/svg";
+  // Gap, in pixels, between neighbouring FIFO boxes of the same region. The
+  // region's own left/right padding comes from `.region-slots`, so this is only
+  // subtracted from the right edge of each FIFO: the first FIFO keeps a single
+  // (region) margin, and every later FIFO is separated from the previous one.
+  var BUFFER_GAP = 6;
   var COLORS = [
     "#4f8cff", "#ff8c4f", "#3fbf7f", "#b06cff",
     "#ff5d73", "#2fb9c9", "#c9a227", "#8c8c8c"
@@ -120,12 +125,17 @@
     var node = make("div", "buffer");
     node.dataset.taskId = String(buffer.task_id);
     node.dataset.pair = buffer.pair;
-    node.style.left = (buffer.offset / region.size) * 100 + "%";
-    node.style.width = Math.max((buffer.total_bytes / region.size) * 100, 4) + "%";
+    // The FIFO starts exactly at its allocated offset: the region's left padding
+    // (`.region-slots`) already keeps the first FIFO off the edge. Only the right
+    // edge is trimmed by `BUFFER_GAP`, which spaces neighbouring FIFOs apart.
+    var leftPct = (buffer.offset / region.size) * 100;
+    var widthPct = Math.max((buffer.total_bytes / region.size) * 100, 4);
+    node.style.left = leftPct + "%";
+    node.style.width = "max(4px, calc(" + widthPct + "% - " + BUFFER_GAP + "px))";
     node.style.setProperty("--core-color", colorOf(region.source));
 
     node.appendChild(make("span", "buffer-name",
-      buffer.task_name + "/" + buffer.input_type + " (depth=" + buffer.depth + ")"));
+      buffer.task_name + "/" + buffer.input_type));
     node.appendChild(make("span", "buffer-meta",
       "@" + buffer.offset + " · " + buffer.total_bytes + " B · cap " + buffer.capacity));
     node.title =
@@ -142,13 +152,20 @@
     var panel = make("div", "region");
     panel.dataset.region = region.direction;
     panel.dataset.pair = region.pair;
+    // Let a selected task light up the region that carries its FIFO, without
+    // requiring the whole core pair to be checked.
+    panel.dataset.taskIds = region.buffers.map(function (buffer) {
+      return buffer.task_id;
+    }).join(" ");
     panel.style.setProperty("--core-color", colorOf(region.source));
 
     var head = make("div", "region-head");
-    var toggle = make("button", "region-toggle", "-");
+    var toggle = make("button", "region-toggle", "+");
     toggle.type = "button";
-    toggle.setAttribute("aria-expanded", "true");
+    toggle.setAttribute("aria-expanded", "false");
     toggle.title = "Show or hide the region details";
+    // Region information starts collapsed; the FIFO bar stays visible.
+    panel.classList.add("collapsed");
     toggle.addEventListener("click", function () {
       var collapsed = panel.classList.toggle("collapsed");
       toggle.textContent = collapsed ? "+" : "-";
@@ -302,17 +319,30 @@
 
   // Dims every element that is neither in a selected pair nor a selected task;
   // arrows are drawn separately and only for the selected tasks.
+  function isActive(node, sel) {
+    if (sel.pairs[node.dataset.pair] === true) {
+      return true;
+    }
+    if (node.dataset.taskId !== undefined && sel.tasks[node.dataset.taskId] === true) {
+      return true;
+    }
+    if (node.dataset.taskIds) {
+      var ids = node.dataset.taskIds.split(" ");
+      for (var i = 0; i < ids.length; i++) {
+        if (sel.tasks[ids[i]] === true) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function updateHighlight(sel) {
     var any = Object.keys(sel.pairs).length > 0 || Object.keys(sel.tasks).length > 0;
     stage.classList.toggle("isolated", any);
     var nodes = stage.querySelectorAll("[data-pair]");
     for (var n = 0; n < nodes.length; n++) {
-      var node = nodes[n];
-      var active = sel.pairs[node.dataset.pair] === true;
-      if (!active && node.dataset.taskId !== undefined && sel.tasks[node.dataset.taskId] === true) {
-        active = true;
-      }
-      node.classList.toggle("active", active);
+      nodes[n].classList.toggle("active", isActive(nodes[n], sel));
     }
   }
 
