@@ -3,9 +3,8 @@
 //! [`system_view`] converts a merged, allocated project into the view the
 //! driver writes to `target/rticx-xbin/system.json`: FIFO offsets, doorbell
 //! lines, `layout_hash` and the sealed `topology_hash`. The tests below cover
-//! the reference topology, deterministic allocation, per-direction offset
-//! independence, doorbell line assignment and byte-identical output across
-//! runs.
+//! the reference topology, deterministic allocation, shared pool offsets,
+//! doorbell line assignment and byte-identical output across runs.
 
 use rticx_xbin_proto::{
     AppManifest, CoreCapability, DoorbellEntry, FifoEntry, Hash64, IpcTypes, PoolCachePolicy,
@@ -306,14 +305,22 @@ fn allocates_offsets_in_name_order_within_a_direction() {
 }
 
 #[test]
-fn offsets_are_independent_per_direction() {
-    // m7 -> m4 (`EncryptTask`) and m4 -> m7 (`BackTask`).
+fn offsets_are_shared_within_a_pool() {
+    // m7 -> m4 (`EncryptTask`, 100 bytes) and m4 -> m7 (`BackTask`, 72 bytes)
+    // are the two directions of the one `p01` pool: they share its budget and
+    // are allocated in name order.
     let mut m7 = m7_manifest();
     m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
     let m4 = m4_manifest();
 
     let view = view(TWO_APPS, &[m7, m4]);
 
+    let back = task(&view, "BackTask");
+    assert_eq!(
+        (back.fifo.source, back.fifo.target, back.fifo.offset),
+        (1, 0, 0),
+        "the first task in name order starts the shared pool"
+    );
     let encrypt = task(&view, "EncryptTask");
     assert_eq!(
         (
@@ -321,13 +328,8 @@ fn offsets_are_independent_per_direction() {
             encrypt.fifo.target,
             encrypt.fifo.offset
         ),
-        (0, 1, 0)
-    );
-    let back = task(&view, "BackTask");
-    assert_eq!(
-        (back.fifo.source, back.fifo.target, back.fifo.offset),
-        (1, 0, 0),
-        "each direction allocates inside its own pool view"
+        (0, 1, 72),
+        "the reverse direction continues after the first in the shared pool"
     );
 }
 

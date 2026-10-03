@@ -4,7 +4,8 @@
 //! and hands them, together with `rticx.toml` ([`ProjectConfig`]) and the IDL
 //! ([`IpcTypes`]), to [`merge_project`]. The result is a [`MergedProject`]:
 //! the validated whole-project view with resolved global core ids, canonical
-//! type layouts, tasks with their FIFO allocations and the region list.
+//! type layouts, tasks with their FIFO allocations and the matched IPC pool
+//! list.
 //!
 //! Validation rules (each with a focused [`MergeError`]):
 //!
@@ -19,25 +20,33 @@
 //! - **priority disjointness**: on one target core, tasks from different
 //!   source cores never share a priority line (local tasks are checked by the
 //!   core pass in phase 2);
-//! - **pool fit**: the distribution's capability binding (M6.9-T2) reports,
-//!   per physical core, which IPC pools it can reach; the FIFOs of every used
-//!   `(source -> target)` direction allocate inside the source core's pool
-//!   view of the target and must fit its budget, using the canonical
-//!   [`crate::fifo`] image.
+//! - **pool graph and adjacency** (M6.9-T4): the distribution's capability
+//!   binding reports, per physical core, which IPC pools it can reach. The
+//!   driver matches the two endpoints of every dual (same pool id, opposite
+//!   physical cores, same budget and policy, swapped base views); a one-sided
+//!   or inconsistent entry is [`MergeError::IpcPoolMismatch`]. A used
+//!   `(source -> target)` direction with no matched pool is
+//!   [`MergeError::NoIpcPath`];
+//! - **pool fit**: both directions of a dual allocate inside the pool's shared
+//!   budget, each FIFO aligned to [`crate::FIFO_ALIGN`] with ring depth
+//!   `capacity + 1`, using the canonical [`crate::fifo`] image. The first FIFO
+//!   that does not fit the shared budget is [`MergeError::PoolBudgetExceeded`],
+//!   naming the dual, the pool, the bytes needed and the budget;
+//! - **pool view disjointness**: a core may take part in several pools; the
+//!   views it has of them must be pairwise disjoint, otherwise
+//!   [`MergeError::PoolViewOverlap`].
 //!
-//! Pool fit and FIFO allocation are one deterministic pass: within each
-//! direction, tasks are placed in `(source, target, task name)` order, each
-//! FIFO aligned to [`crate::FIFO_ALIGN`], with ring depth `capacity + 1`. The
-//! first FIFO that does not fit fails with the task and the direction named
-//! ([`MergeError::RegionOverflow`]); a used direction with no pool path in a
-//! project that bound a distribution capability table is rejected
-//! ([`MergeError::MissingRegion`]). The `system.json` emit
-//! ([`crate::system_view`]) then copies the resolved offsets.
+//! Pool matching and FIFO allocation are deterministic: pools are keyed by
+//! `(core_a, core_b)` in ascending order and, within one pool, tasks are placed
+//! in the global (name) task order, so identical inputs always produce equal
+//! offsets. The `system.json` emit ([`crate::system_view`]) then expands each
+//! pool into its two directions until M6.9-T5 switches the schema to `pools[]`.
 //!
-//! M6.9-T4 replaces the per-direction region view with a matched pool model:
-//! both directions of a dual allocate inside one shared budget and a
-//! one-sided or inconsistent capability entry becomes a hard error. This
-//! module keeps the per-direction shape until then.
+//! A project whose manifests carry no capability table at all (the minimal
+//! `metadata-macro` fixture, until M6.9-T9 supplies the mock table) has no pool
+//! graph: its FIFOs are allocated sequentially per direction and no pool is
+//! emitted. Real projects always bind a distribution, so this path only
+//! affects that stand-in.
 //!
 //! v1 supports exactly one producer core per task, so the producer of every
 //! task is its receiver's singular `spawn_by` (M5.5); multi-producer tasks
@@ -53,10 +62,10 @@ use crate::error::MergeError;
 use crate::fifo::{align_up, fifo_depth, fifo_size};
 use crate::idl::IpcTypes;
 use crate::layout::{Layout, Layouts};
-use crate::manifest::{AppManifest, ReceiverDecl, simple_type_name};
+use crate::manifest::{AppManifest, PoolDecl, ReceiverDecl, simple_type_name};
 use crate::project::{Application, ProjectConfig};
 use crate::system::{
-    AppEntry, CoreEntry, FieldEntry, FifoEntry, RegionEntry, TypeEntry, TypeKind, VariantEntry,
+    AppEntry, CoreEntry, FieldEntry, FifoEntry, PoolEntry, TypeEntry, TypeKind, VariantEntry,
 };
 
 /// A merged, validated and allocated whole-project view.
@@ -69,7 +78,7 @@ pub struct MergedProject {
     cores: Vec<CoreEntry>,
     types: Vec<TypeEntry>,
     tasks: Vec<MergedTask>,
-    regions: Vec<RegionEntry>,
+    pools: Vec<PoolEntry>,
 }
 
 impl MergedProject {
@@ -93,9 +102,9 @@ impl MergedProject {
         &self.tasks
     }
 
-    /// Returns every capability pool direction, sorted by `(source, target)`.
-    pub fn regions(&self) -> &[RegionEntry] {
-        &self.regions
+    /// Returns every matched distro IPC pool, ordered by `(core_a, core_b)`.
+    pub fn pools(&self) -> &[PoolEntry] {
+        &self.pools
     }
 
     /// Returns the task named `name`, if any.
@@ -166,8 +175,7 @@ impl MergedTask {
         self.elem_align
     }
 
-    /// Returns the byte offset of the task FIFO inside its
-    /// `(source -> target)` region.
+    /// Returns the byte offset of the task FIFO inside its pool.
     pub fn fifo_offset(&self) -> u32 {
         self.offset
     }
@@ -189,7 +197,7 @@ impl MergedTask {
         }
     }
 
-    /// Returns the total FIFO footprint inside its region, in bytes.
+    /// Returns the total FIFO footprint inside its pool, in bytes.
     pub fn fifo_bytes(&self) -> u64 {
         fifo_size(self.elem_size, self.capacity).expect("validated by merge_project")
     }
@@ -413,79 +421,99 @@ pub fn merge_project(
         }
     }
 
-    // -- distro capability pools ---------------------------------------------
+    // -- distro pool graph ---------------------------------------------------
     // Since M6.9 the distribution owns IPC memory: each application manifest
     // reports, per local core, its physical core and the pools that physical
-    // core can reach. Each pool becomes the region view of the
-    // `source -> target` direction it enables.
-    let (capability_views, capabilities_present) = capability_regions(applications, &manifest_of);
+    // core can reach. Matching the two endpoints of a dual yields one shared
+    // pool per core pair (M6.9-T4).
+    let mut graph = match_pools(applications, &manifest_of)?;
 
     // -- FIFO allocation and pool fit ----------------------------------------
-    // Deterministic layout: within each direction, tasks are placed in
-    // `(source, target, task name)` order, each FIFO aligned to
-    // `FIFO_ALIGN`. The first FIFO that does not fit names its task and
-    // direction in the error. The `(source, target, name)` order restricted to
-    // one direction is the name order of the (name-sorted) task vector, but
-    // the explicit key keeps the allocation independent of the vector order.
-    let mut order: Vec<usize> = (0..tasks.len()).collect();
-    order.sort_by(|&left, &right| {
-        let (left, right) = (&tasks[left], &tasks[right]);
-        (left.spawner_core, left.receiver_core, &left.name).cmp(&(
-            right.spawner_core,
-            right.receiver_core,
-            &right.name,
-        ))
-    });
-
-    let mut offsets = vec![0u32; tasks.len()];
-    let mut region_offset: BTreeMap<(u32, u32), u64> = BTreeMap::new();
-    for &index in &order {
-        let task = &tasks[index];
-        let direction = (task.spawner_core, task.receiver_core);
-        let region = capability_views.get(&direction);
-        if region.is_none() && capabilities_present {
-            return Err(MergeError::MissingRegion {
-                task: task.name.clone(),
-                producer: direction.0,
-                target: direction.1,
-            });
-        }
+    // Each pool is an independent cursor; within a pool the tasks are placed in
+    // the global (name) task order, each FIFO aligned to `FIFO_ALIGN`. Both
+    // directions of a dual share the pool budget, so the first FIFO that does
+    // not fit names its pool and the bytes needed.
+    let mut unbounded: BTreeMap<(u32, u32), u64> = BTreeMap::new();
+    for task in &mut tasks {
+        let spawner = task.spawner_core;
+        let receiver = task.receiver_core;
+        let name = task.name.clone();
+        let capacity = task.capacity;
+        let pair = ordered_core_pair(spawner, receiver);
         let bytes =
-            fifo_size(task.elem_size, task.capacity).ok_or_else(|| MergeError::TaskTooLarge {
-                task: task.name.clone(),
-                capacity: task.capacity,
+            fifo_size(task.elem_size, capacity).ok_or_else(|| MergeError::TaskTooLarge {
+                task: name.clone(),
+                capacity,
             })?;
-        let start = align_up(*region_offset.get(&direction).unwrap_or(&0)).ok_or_else(|| {
-            MergeError::TaskTooLarge {
-                task: task.name.clone(),
-                capacity: task.capacity,
+
+        if let Some(pool_index) = graph.by_pair.get(&pair).copied() {
+            let (start, end, pool, core_a, core_b, budget) = {
+                let pool = &graph.pools[pool_index];
+                let start =
+                    align_up(u64::from(pool.used)).ok_or_else(|| MergeError::TaskTooLarge {
+                        task: name.clone(),
+                        capacity,
+                    })?;
+                let end = start
+                    .checked_add(bytes)
+                    .ok_or_else(|| MergeError::TaskTooLarge {
+                        task: name.clone(),
+                        capacity,
+                    })?;
+                (
+                    start,
+                    end,
+                    pool.id.clone(),
+                    pool.core_a,
+                    pool.core_b,
+                    pool.budget,
+                )
+            };
+            if end > u64::from(budget) {
+                return Err(MergeError::PoolBudgetExceeded {
+                    pool,
+                    core_a,
+                    core_b,
+                    needed: end,
+                    budget,
+                });
             }
-        })?;
-        let end = start
-            .checked_add(bytes)
-            .ok_or_else(|| MergeError::TaskTooLarge {
-                task: task.name.clone(),
-                capacity: task.capacity,
+            task.offset = u32::try_from(start).map_err(|_| MergeError::TaskTooLarge {
+                task: name.clone(),
+                capacity,
             })?;
-        if let Some(region) = region
-            && end > u64::from(region.size)
-        {
-            return Err(MergeError::RegionOverflow {
-                task: task.name.clone(),
-                producer: direction.0,
-                target: direction.1,
-                needed: end,
-                available: region.size,
+            graph.pools[pool_index].used =
+                u32::try_from(end).map_err(|_| MergeError::TaskTooLarge {
+                    task: name.clone(),
+                    capacity,
+                })?;
+        } else if graph.present {
+            return Err(MergeError::NoIpcPath {
+                task: name,
+                producer: spawner,
+                target: receiver,
             });
+        } else {
+            // Transitional no-capability path (M6.9-T9 supplies the mock
+            // capability table to the fixtures): allocate sequentially per
+            // direction, without a budget.
+            let cursor = unbounded.entry(pair).or_insert(0);
+            let start = align_up(*cursor).ok_or_else(|| MergeError::TaskTooLarge {
+                task: name.clone(),
+                capacity,
+            })?;
+            let end = start
+                .checked_add(bytes)
+                .ok_or_else(|| MergeError::TaskTooLarge {
+                    task: name.clone(),
+                    capacity,
+                })?;
+            task.offset = u32::try_from(start).map_err(|_| MergeError::TaskTooLarge {
+                task: name.clone(),
+                capacity,
+            })?;
+            *cursor = end;
         }
-        offsets[index] = u32::try_from(start).map_err(|_| MergeError::TaskTooLarge {
-            task: task.name.clone(),
-            capacity: task.capacity,
-        })?;
-        region_offset.insert(direction, end);
-    }
-    for (index, task) in tasks.iter_mut().enumerate() {
-        task.offset = offsets[index];
     }
 
     // -- assembled view ------------------------------------------------------
@@ -503,59 +531,73 @@ pub fn merge_project(
         })
         .collect();
 
-    let regions = capability_views
-        .iter()
-        .map(|(&(source, target), region)| RegionEntry {
-            source,
-            target,
-            base_from_source: region.base_from_source,
-            base_from_target: region.base_from_target,
-            size: region.size,
-        })
-        .collect();
-
     Ok(MergedProject {
         apps,
         cores,
         types: type_entries(idl, &layouts)?,
         tasks,
-        regions,
+        pools: graph.pools,
     })
 }
 
-/// A `(source -> target)` region view derived from the distro capability
-/// binding.
-#[derive(Debug, Clone, Copy)]
-struct RegionView {
-    base_from_source: u32,
-    base_from_target: u32,
-    size: u32,
+/// A distro pool matched from both endpoints' capability entries, oriented so
+/// `core_a < core_b`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchedPool {
+    id: String,
+    core_a: u32,
+    core_b: u32,
+    base_from_a: u32,
+    base_from_b: u32,
+    budget: u32,
 }
 
-/// Builds the per-direction region views from the manifests' capability
-/// bindings (M6.9-T3).
+/// The matched distro pool graph of a project (M6.9-T4).
+struct PoolGraph {
+    /// One entry per matched dual, ordered by `(core_a, core_b)`; `used` is
+    /// filled in by FIFO allocation.
+    pools: Vec<PoolEntry>,
+    /// `(core_a, core_b)` -> index into `pools`.
+    by_pair: BTreeMap<(u32, u32), usize>,
+    /// Whether any application bound a distribution capability table.
+    present: bool,
+}
+
+/// Orders two global core ids ascending.
+fn ordered_core_pair(left: u32, right: u32) -> (u32, u32) {
+    if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
+/// Builds the project's pool graph from the manifests' capability bindings
+/// (M6.9-T4).
 ///
-/// The distribution reports, per physical core, the IPC pools it can reach. A
-/// pool of the source core whose `peer` names the target core's physical id
-/// becomes the region of the `source -> target` direction: the source's view
-/// is `base_local`, the target's is `base_peer`, and the FIFOs of the
-/// direction must fit the pool [`budget`](crate::PoolDecl::budget).
+/// The distribution reports, per physical core, the IPC pools it can reach.
+/// Two cores `A` and `B` form a dual exactly when `A` reports a pool whose
+/// `peer` is `B`'s physical core **and** `B` reports the matching pool: the
+/// same id, the opposite physical core, the same budget and policy, and the
+/// two base views swapped. A one-sided or inconsistent pair is
+/// [`MergeError::IpcPoolMismatch`].
 ///
-/// The returned flag reports whether any application bound a distribution
-/// capability table at all. Without one (the minimal `metadata-macro` fixture,
-/// until M6.9-T9 supplies the mock capability table) no direction is bounded
-/// and no region is emitted.
+/// The matched pools are oriented so `core_a < core_b` and checked for
+/// per-core view disjointness: a core may take part in several pools and the
+/// views it has of them must not overlap ([`MergeError::PoolViewOverlap`]).
+/// Pools whose peer is not a core of the project are ignored.
 ///
-/// M6.9-T4 replaces this per-direction lookup with a matched pool model: the
-/// two endpoints' entries are cross-checked, both directions share one budget,
-/// and a one-sided or inconsistent entry is a hard error.
-fn capability_regions(
+/// The [`PoolGraph::present`] flag reports whether any application bound a
+/// distribution capability table at all. Without one (the minimal
+/// `metadata-macro` fixture, until M6.9-T9 supplies the mock capability table)
+/// the graph is empty and the caller allocates without a budget.
+fn match_pools(
     applications: &[Application],
     manifest_of: &BTreeMap<&str, &AppManifest>,
-) -> (BTreeMap<(u32, u32), RegionView>, bool) {
-    // Global core id -> distro physical core id, from every application's
-    // capability entries, plus whether any capability table exists at all.
+) -> Result<PoolGraph, MergeError> {
+    // Global core id -> distro physical core id, and the pools it reports.
     let mut physical_of: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut pools_of: BTreeMap<u32, &[PoolDecl]> = BTreeMap::new();
     let mut present = false;
     for application in applications {
         let manifest = manifest_of[application.package()];
@@ -564,9 +606,11 @@ fn capability_regions(
         }
         present = true;
         for capability in &manifest.capabilities {
-            if let Some(&global) = application.core_ids().get(capability.local_core as usize) {
-                physical_of.insert(global, capability.physical_core);
-            }
+            let Some(&global) = application.core_ids().get(capability.local_core as usize) else {
+                continue;
+            };
+            physical_of.insert(global, capability.physical_core);
+            pools_of.insert(global, capability.pools.as_slice());
         }
     }
 
@@ -579,30 +623,126 @@ fn capability_regions(
         global_of_physical.entry(*physical).or_insert(*global);
     }
 
-    let mut views: BTreeMap<(u32, u32), RegionView> = BTreeMap::new();
+    let mut matched: BTreeMap<(u32, u32), MatchedPool> = BTreeMap::new();
     for application in applications {
         let manifest = manifest_of[application.package()];
         for capability in &manifest.capabilities {
             let Some(&source) = application.core_ids().get(capability.local_core as usize) else {
                 continue;
             };
+            let Some(&source_physical) = physical_of.get(&source) else {
+                continue;
+            };
             for pool in &capability.pools {
                 let Some(&target) = global_of_physical.get(&pool.peer) else {
-                    continue;
+                    continue; // a pool to a core outside the project
                 };
                 if target == source {
                     continue;
                 }
-                views.entry((source, target)).or_insert(RegionView {
-                    base_from_source: pool.base_local,
-                    base_from_target: pool.base_peer,
-                    size: pool.budget,
+                let (core_a, core_b) = ordered_core_pair(source, target);
+                let mismatch = || MergeError::IpcPoolMismatch {
+                    id: pool.id.clone(),
+                    core_a,
+                    core_b,
+                };
+
+                // The peer must report the same pool id back to this core.
+                let reverse = pools_of.get(&target).and_then(|pools| {
+                    pools.iter().find(|candidate| {
+                        candidate.id == pool.id && candidate.peer == source_physical
+                    })
+                });
+                let Some(reverse) = reverse else {
+                    return Err(mismatch());
+                };
+                if reverse.budget != pool.budget
+                    || reverse.policy != pool.policy
+                    || reverse.base_local != pool.base_peer
+                    || reverse.base_peer != pool.base_local
+                {
+                    return Err(mismatch());
+                }
+
+                let (base_from_a, base_from_b) = if source == core_a {
+                    (pool.base_local, pool.base_peer)
+                } else {
+                    (pool.base_peer, pool.base_local)
+                };
+                let candidate = MatchedPool {
+                    id: pool.id.clone(),
+                    core_a,
+                    core_b,
+                    base_from_a,
+                    base_from_b,
+                    budget: pool.budget,
+                };
+                match matched.get(&(core_a, core_b)) {
+                    Some(existing) if existing != &candidate => return Err(mismatch()),
+                    Some(_) => {}
+                    None => {
+                        matched.insert((core_a, core_b), candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    // Per-core view disjointness: each pool contributes its `core_a` view to
+    // `core_a` and its `core_b` view to `core_b`; a core's ranges must be
+    // pairwise disjoint on `[base, base + budget)`.
+    let mut by_core: BTreeMap<u32, Vec<(u32, u64, &str)>> = BTreeMap::new();
+    for pool in matched.values() {
+        by_core.entry(pool.core_a).or_default().push((
+            pool.base_from_a,
+            u64::from(pool.base_from_a) + u64::from(pool.budget),
+            pool.id.as_str(),
+        ));
+        by_core.entry(pool.core_b).or_default().push((
+            pool.base_from_b,
+            u64::from(pool.base_from_b) + u64::from(pool.budget),
+            pool.id.as_str(),
+        ));
+    }
+    for (core, views) in &mut by_core {
+        views.sort_unstable();
+        for pair in views.windows(2) {
+            let (first_base, first_end, first) = pair[0];
+            let (second_base, second_end, second) = pair[1];
+            if u64::from(second_base) < first_end {
+                return Err(MergeError::PoolViewOverlap {
+                    core: *core,
+                    first: first.to_string(),
+                    second: second.to_string(),
+                    first_base,
+                    first_end,
+                    second_base,
+                    second_end,
                 });
             }
         }
     }
 
-    (views, present)
+    let mut by_pair = BTreeMap::new();
+    let mut pools = Vec::with_capacity(matched.len());
+    for (key, pool) in matched {
+        by_pair.insert(key, pools.len());
+        pools.push(PoolEntry {
+            id: pool.id,
+            core_a: pool.core_a,
+            core_b: pool.core_b,
+            base_from_a: pool.base_from_a,
+            base_from_b: pool.base_from_b,
+            budget: pool.budget,
+            used: 0,
+        });
+    }
+
+    Ok(PoolGraph {
+        pools,
+        by_pair,
+        present,
+    })
 }
 
 /// Checks that `input` names a type declared in the IDL.

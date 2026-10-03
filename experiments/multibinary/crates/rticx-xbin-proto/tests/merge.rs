@@ -135,11 +135,12 @@ fn capability(local_core: u32, physical_core: u32, pools: Vec<PoolDecl>) -> Core
 
 /// `app-m7`: the producer of global core 0 (physical 0), no declarations.
 fn m7_manifest() -> AppManifest {
-    m7_manifest_with_budget(BUDGET)
+    m7_with_budget(BUDGET)
 }
 
-/// `app-m7` with the `{0, 1}` pool carved to `budget` bytes.
-fn m7_manifest_with_budget(budget: u32) -> AppManifest {
+/// `app-m7` with the `p01` dual carved to `budget` bytes. Both endpoints must
+/// report the same budget, so pair this with [`m4_with_budget`].
+fn m7_with_budget(budget: u32) -> AppManifest {
     let mut manifest = manifest("app-m7", "m7", &[0], &[1]);
     manifest.capabilities = vec![capability(
         0,
@@ -154,6 +155,11 @@ fn m7_manifest_with_budget(budget: u32) -> AppManifest {
 
 /// `app-m4`: executes `EncryptTask` for global core 0 (physical 1).
 fn m4_manifest() -> AppManifest {
+    m4_with_budget(BUDGET)
+}
+
+/// `app-m4` with the `p01` dual carved to `budget` bytes.
+fn m4_with_budget(budget: u32) -> AppManifest {
     let mut manifest = manifest("app-m4", "m4", &[1], &[0]);
     manifest.types = vec!["ipc_types::EncryptReq".to_string()];
     manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, 0, "ipc_types::EncryptReq")];
@@ -161,7 +167,7 @@ fn m4_manifest() -> AppManifest {
         0,
         1,
         vec![
-            pool("p01", 0, BASE_01, BUDGET),
+            pool("p01", 0, BASE_01, budget),
             pool("p12", 2, BASE_12, BUDGET),
         ],
     )];
@@ -269,14 +275,17 @@ fn merges_the_producer_receiver_fixture() {
         }
     );
 
-    let regions: Vec<(u32, u32)> = merged
-        .regions()
+    let pools: Vec<(&str, u32, u32)> = merged
+        .pools()
         .iter()
-        .map(|region| (region.source, region.target))
+        .map(|pool| (pool.id.as_str(), pool.core_a, pool.core_b))
         .collect();
-    assert_eq!(regions, [(0, 1), (1, 0)]);
-    assert_eq!(merged.regions()[0].base_from_source, BASE_01);
-    assert_eq!(merged.regions()[0].size, BUDGET);
+    assert_eq!(pools, [("p01", 0, 1)]);
+    let pool = &merged.pools()[0];
+    assert_eq!(pool.base_from_a, BASE_01);
+    assert_eq!(pool.base_from_b, BASE_01);
+    assert_eq!(pool.budget, BUDGET);
+    assert_eq!(pool.used, 100, "one FIFO uses the shared pool budget");
 }
 
 #[test]
@@ -309,15 +318,15 @@ fn empty_project_merges_to_an_empty_view() {
     assert!(merged.cores().is_empty());
     assert!(merged.types().is_empty());
     assert!(merged.tasks().is_empty());
-    assert!(merged.regions().is_empty());
+    assert!(merged.pools().is_empty());
 }
 
 #[test]
 fn a_project_without_a_capability_binding_allocates_unbounded() {
     // The minimal `metadata-macro` fixture binds no distribution backend, so
     // its manifests carry no capability table: the merge still allocates the
-    // FIFOs deterministically and emits no region (M6.9-T3; T9 supplies the
-    // mock capability table to the fixtures).
+    // FIFOs deterministically and emits no pool (M6.9-T4; T9 supplies the mock
+    // capability table to the fixtures).
     let mut m7 = manifest("app-m7", "m7", &[0], &[1]);
     m7.capabilities = Vec::new();
     let mut m4 = m4_manifest();
@@ -326,7 +335,7 @@ fn a_project_without_a_capability_binding_allocates_unbounded() {
     let merged = merge(TWO_APPS, &[m7, m4]).expect("no capability binding is not an error");
     assert_eq!(merged.tasks().len(), 1);
     assert_eq!(merged.tasks()[0].fifo_offset(), 0);
-    assert!(merged.regions().is_empty());
+    assert!(merged.pools().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -607,103 +616,250 @@ fn allows_the_same_priority_on_different_targets() {
 }
 
 // ---------------------------------------------------------------------------
-// Pool fit
+// Pool graph and adjacency
 // ---------------------------------------------------------------------------
 
 #[test]
-fn rejects_a_used_direction_without_a_pool_path() {
-    // The producer binds a capability table but reports no pool to physical
-    // core 1, so the `0->1` direction has no IPC path.
-    let mut m7 = m7_manifest();
-    m7.capabilities[0].pools.retain(|pool| pool.peer != 1);
+fn rejects_a_one_sided_pool() {
+    // `app-m7` reports `p01` towards physical core 1, but `app-m4` does not
+    // report the matching pool back.
+    let mut m4 = m4_manifest();
+    m4.capabilities[0].pools.retain(|pool| pool.id != "p01");
 
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
+    let error = error(TWO_APPS, &[m7_manifest(), m4]);
     assert_eq!(
         error.to_string(),
-        "task `EncryptTask` needs a `0->1` IPC pool, but the distribution's capability binding \
-         provides no pool between those cores"
+        "IPC pool `p01` between cores 0 and 1 is not reported consistently by both endpoints; \
+         each must report the same pool id with the opposite physical core, the same budget and \
+         policy, and the two base views swapped"
     );
     assert!(matches!(
         &error,
-        MergeError::MissingRegion {
-            producer: 0,
-            target: 1,
-            ..
-        }
+        MergeError::IpcPoolMismatch {
+            id,
+            core_a: 0,
+            core_b: 1
+        } if id == "p01"
     ));
 }
 
 #[test]
-fn rejects_region_overflow() {
-    // `EncryptReq` (12 bytes, capacity 2) needs 64 + 3 * 12 = 100 bytes.
-    let error = error(TWO_APPS, &[m7_manifest_with_budget(99), m4_manifest()]);
+fn rejects_an_inconsistent_budget() {
+    // The two endpoints must agree on the shared budget.
+    let error = error(TWO_APPS, &[m7_with_budget(2048), m4_with_budget(1024)]);
+    assert!(
+        matches!(
+            &error,
+            MergeError::IpcPoolMismatch {
+                id,
+                core_a: 0,
+                core_b: 1
+            } if id == "p01"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn rejects_disagreeing_base_views() {
+    // `app-m4`'s view of core 0 must be `app-m7`'s view of physical core 1.
+    let mut m4 = m4_manifest();
+    m4.capabilities[0].pools[0].base_peer = 0x4000_0000;
+
+    let error = error(TWO_APPS, &[m7_manifest(), m4]);
+    assert!(
+        matches!(&error, MergeError::IpcPoolMismatch { id, .. } if id == "p01"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rejects_a_used_direction_without_a_pool_path() {
+    // Both applications bind a capability table, but neither reports a pool
+    // between cores 0 and 1.
+    let mut m7 = m7_manifest();
+    m7.capabilities[0].pools.retain(|pool| pool.id != "p01");
+    let mut m4 = m4_manifest();
+    m4.capabilities[0].pools.retain(|pool| pool.id != "p01");
+
+    let error = error(TWO_APPS, &[m7, m4]);
     assert_eq!(
         error.to_string(),
-        "task `EncryptTask` does not fit the `0->1` pool: 100 bytes needed, 99 available"
+        "task `EncryptTask` needs a `0->1` IPC pool, but the distribution provides no pool \
+         between those cores"
     );
     assert!(matches!(
         &error,
-        MergeError::RegionOverflow {
-            task,
+        MergeError::NoIpcPath {
             producer: 0,
             target: 1,
-            needed: 100,
-            available: 99
+            task
         } if task == "EncryptTask"
     ));
 }
 
 #[test]
+fn rejects_overlapping_pool_views() {
+    // Core 0 sees two pools at overlapping addresses.
+    let mut m7 = manifest("app-m7", "m7", &[0], &[]);
+    m7.capabilities = vec![capability(
+        0,
+        0,
+        vec![
+            pool("p01", 1, 0x3000_0000, BUDGET),
+            pool("p02", 2, 0x3000_0800, BUDGET),
+        ],
+    )];
+    let mut m4 = manifest("app-m4", "m4", &[1], &[]);
+    m4.capabilities = vec![capability(0, 1, vec![pool("p01", 0, 0x3000_0000, BUDGET)])];
+    let mut m5 = manifest("app-m5", "m5", &[2], &[]);
+    m5.capabilities = vec![capability(0, 2, vec![pool("p02", 0, 0x3000_0800, BUDGET)])];
+
+    let error = error(THREE_APPS, &[m7, m4, m5]);
+    assert_eq!(
+        error.to_string(),
+        "the `p01` and `p02` pool views overlap on core 0: \
+         0x30000000..0x30001000 and 0x30000800..0x30001800; \
+         a core's pool views must be disjoint"
+    );
+    assert!(matches!(
+        &error,
+        MergeError::PoolViewOverlap {
+            core: 0,
+            first,
+            second,
+            ..
+        } if first == "p01" && second == "p02"
+    ));
+}
+
+#[test]
+fn allows_adjacent_pool_views() {
+    // Adjacent, non-overlapping views of core 0 are fine.
+    let mut m7 = manifest("app-m7", "m7", &[0], &[]);
+    m7.capabilities = vec![capability(
+        0,
+        0,
+        vec![
+            pool("p01", 1, 0x3000_0000, BUDGET),
+            pool("p02", 2, 0x3000_1000, BUDGET),
+        ],
+    )];
+    let mut m4 = manifest("app-m4", "m4", &[1], &[]);
+    m4.capabilities = vec![capability(0, 1, vec![pool("p01", 0, 0x3000_0000, BUDGET)])];
+    let mut m5 = manifest("app-m5", "m5", &[2], &[]);
+    m5.capabilities = vec![capability(0, 2, vec![pool("p02", 0, 0x3000_1000, BUDGET)])];
+
+    let merged = merge(THREE_APPS, &[m7, m4, m5]).expect("adjacent views do not overlap");
+    assert_eq!(merged.pools().len(), 2);
+}
+
+#[test]
+fn ignores_pools_to_cores_outside_the_project() {
+    // `p02` peers physical core 2, which the two-application project does not
+    // contain: the pool is not part of the graph.
+    let merged = merge(TWO_APPS, &[m7_manifest(), m4_manifest()]).expect("unused pool");
+    assert_eq!(
+        merged
+            .pools()
+            .iter()
+            .map(|pool| pool.id.as_str())
+            .collect::<Vec<_>>(),
+        ["p01"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Shared pool budget
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shares_one_budget_between_both_directions() {
+    // `BackTask` (1 -> 0, OtherReq, capacity 1) is 72 bytes; `EncryptTask`
+    // (0 -> 1, EncryptReq, capacity 2) is 100. Both use the one `p01` budget,
+    // allocated in name order.
+    let mut m7 = m7_with_budget(200);
+    m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
+
+    let merged = merge(TWO_APPS, &[m7, m4_with_budget(200)]).expect("both fit the shared budget");
+    assert_eq!(merged.pools().len(), 1);
+    assert_eq!(merged.pools()[0].used, 172);
+    assert_eq!(merged.task("BackTask").expect("task").fifo_offset(), 0);
+    assert_eq!(
+        merged.task("EncryptTask").expect("task").fifo_offset(),
+        72,
+        "the second direction continues after the first in the shared budget"
+    );
+}
+
+#[test]
+fn rejects_pool_budget_overflow() {
+    // Each direction fits in 100 bytes alone, but the shared budget is 150.
+    let mut m7 = m7_with_budget(150);
+    m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
+
+    let error = error(TWO_APPS, &[m7, m4_with_budget(150)]);
+    assert_eq!(
+        error.to_string(),
+        "the FIFOs of the `0<->1` pool `p01` need 172 bytes, but the distribution reserves 150"
+    );
+    assert!(matches!(
+        &error,
+        MergeError::PoolBudgetExceeded {
+            pool,
+            core_a: 0,
+            core_b: 1,
+            needed: 172,
+            budget: 150
+        } if pool == "p01"
+    ));
+}
+
+#[test]
 fn allows_an_exact_fit() {
-    let merged =
-        merge(TWO_APPS, &[m7_manifest_with_budget(100), m4_manifest()]).expect("exact fit");
+    // `EncryptReq` (12 bytes, capacity 2) needs 64 + 3 * 12 = 100 bytes.
+    let merged = merge(TWO_APPS, &[m7_with_budget(100), m4_with_budget(100)]).expect("exact fit");
+    assert_eq!(merged.pools()[0].used, 100);
     assert_eq!(merged.tasks()[0].fifo_bytes(), 100);
 }
 
 #[test]
-fn region_fit_accounts_for_fifo_alignment() {
-    let mut m4 = m4_manifest();
+fn pool_fit_accounts_for_fifo_alignment() {
+    let mut m4 = m4_with_budget(203);
     m4.receivers = vec![
         receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
         receiver("Beta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
     ];
 
     // 100 bytes each; the second FIFO starts at the next 8-byte boundary (104).
-    let error = error(TWO_APPS, &[m7_manifest_with_budget(203), m4.clone()]);
+    let error = error(TWO_APPS, &[m7_with_budget(203), m4.clone()]);
     assert_eq!(
         error.to_string(),
-        "task `Beta` does not fit the `0->1` pool: 204 bytes needed, 203 available"
+        "the FIFOs of the `0<->1` pool `p01` need 204 bytes, but the distribution reserves 203"
     );
     assert!(
         matches!(
             &error,
-            MergeError::RegionOverflow {
-                task,
+            MergeError::PoolBudgetExceeded {
                 needed: 204,
-                available: 203,
+                budget: 203,
                 ..
-            } if task == "Beta"
+            }
         ),
         "{error}"
     );
 
-    let merged =
-        merge(TWO_APPS, &[m7_manifest_with_budget(204), m4]).expect("204 bytes fit exactly");
+    let mut m4 = m4_with_budget(204);
+    m4.receivers = vec![
+        receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
+        receiver("Beta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
+    ];
+    let merged = merge(TWO_APPS, &[m7_with_budget(204), m4]).expect("204 bytes fit exactly");
     assert_eq!(merged.tasks().len(), 2);
     assert_eq!(merged.task("Alpha").expect("task").fifo_offset(), 0);
     assert_eq!(
         merged.task("Beta").expect("task").fifo_offset(),
         104,
         "the second FIFO is aligned to 8 bytes"
-    );
-}
-
-#[test]
-fn allows_pools_without_tasks() {
-    let merged = merge(TWO_APPS, &[m7_manifest(), m4_manifest()]).expect("extra pool");
-    assert_eq!(
-        merged.regions().len(),
-        2,
-        "unused pool directions are still emitted"
     );
 }

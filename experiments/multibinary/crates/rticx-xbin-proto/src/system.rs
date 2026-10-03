@@ -335,6 +335,10 @@ pub struct FifoEntry {
 }
 
 /// A distro-declared shared-memory region for one direction.
+///
+/// Since M6.9-T4 the merge model is pool-based ([`PoolEntry`]); this
+/// per-direction shape is the schema-1 `system.json` rendering emitted until
+/// M6.9-T5 replaces `regions[]` with `pools[]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegionEntry {
     /// Producer global core id.
@@ -349,6 +353,33 @@ pub struct RegionEntry {
     pub base_from_target: u32,
     /// Region size in bytes.
     pub size: u32,
+}
+
+/// A distro IPC pool shared by the two directions of a dual (M6.9-T4).
+///
+/// The two directions `A -> B` and `B -> A` allocate their FIFOs inside the
+/// same physical block, so the pool carries one `budget` shared by both and
+/// the `used` byte count after allocation. `core_a`/`core_b` are the two
+/// global core ids in ascending order; `base_from_a`/`base_from_b` are each
+/// core's view of the same memory (aliases are allowed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoolEntry {
+    /// Symbolic, distro-defined pool id.
+    pub id: String,
+    /// Lower global core id of the dual.
+    pub core_a: u32,
+    /// Higher global core id of the dual.
+    pub core_b: u32,
+    /// Pool base address as seen by `core_a` (hex in JSON).
+    #[serde(with = "hex_u32")]
+    pub base_from_a: u32,
+    /// Pool base address as seen by `core_b` (hex in JSON).
+    #[serde(with = "hex_u32")]
+    pub base_from_b: u32,
+    /// Bytes the distribution reserves for both directions of the dual.
+    pub budget: u32,
+    /// Bytes used by the FIFOs of both directions.
+    pub used: u32,
 }
 
 /// A doorbell line pended when a `(source, target)` priority line has work.

@@ -144,7 +144,7 @@ pub enum LayoutError {
 /// Failure while merging and validating the application manifests (M1-T5).
 ///
 /// Every variant is a hard, deterministic error: the message names the
-/// offending package, task, core id or region, so it can be shown to the user
+/// offending package, task, core id or pool, so it can be shown to the user
 /// verbatim by `cargo xbin sync`.
 #[derive(Debug, Error)]
 pub enum MergeError {
@@ -367,12 +367,27 @@ pub enum MergeError {
         second_source: u32,
     },
 
-    /// A used `(source -> target)` direction has no IPC pool path.
+    /// The two endpoints of a dual do not report the same pool (M6.9-T4).
     #[error(
-        "task `{task}` needs a `{producer}->{target}` IPC pool, but the distribution's \
-         capability binding provides no pool between those cores"
+        "IPC pool `{id}` between cores {core_a} and {core_b} is not reported consistently by \
+         both endpoints; each must report the same pool id with the opposite physical core, \
+         the same budget and policy, and the two base views swapped"
     )]
-    MissingRegion {
+    IpcPoolMismatch {
+        /// The pool id the two endpoints disagree on.
+        id: String,
+        /// Lower global core id of the dual.
+        core_a: u32,
+        /// Higher global core id of the dual.
+        core_b: u32,
+    },
+
+    /// A used `(source -> target)` direction has no matched pool.
+    #[error(
+        "task `{task}` needs a `{producer}->{target}` IPC pool, but the distribution provides \
+         no pool between those cores"
+    )]
+    NoIpcPath {
         /// The task that needs the pool.
         task: String,
         /// The producer core id.
@@ -381,27 +396,50 @@ pub enum MergeError {
         target: u32,
     },
 
-    /// The per-task FIFOs do not fit their pool budget.
+    /// The two directions' FIFOs do not fit the pool's shared budget.
     #[error(
-        "task `{task}` does not fit the `{producer}->{target}` pool: \
-         {needed} bytes needed, {available} available"
+        "the FIFOs of the `{core_a}<->{core_b}` pool `{pool}` need {needed} bytes, but the \
+         distribution reserves {budget}"
     )]
-    RegionOverflow {
-        /// The task whose FIFO did not fit.
-        task: String,
-        /// The producer core id.
-        producer: u32,
-        /// The consumer core id.
-        target: u32,
-        /// Bytes required up to and including this FIFO (including alignment).
+    PoolBudgetExceeded {
+        /// The pool id.
+        pool: String,
+        /// Lower global core id of the dual.
+        core_a: u32,
+        /// Higher global core id of the dual.
+        core_b: u32,
+        /// Bytes required by both directions' FIFOs (including alignment).
         needed: u64,
-        /// Pool budget reported by the distribution.
-        available: u32,
+        /// Bytes the distribution reserves for the dual.
+        budget: u32,
+    },
+
+    /// Two pool views overlap in one core's address space (M6.9-T4).
+    #[error(
+        "the `{first}` and `{second}` pool views overlap on core {core}: \
+         0x{first_base:08x}..0x{first_end:08x} and 0x{second_base:08x}..0x{second_end:08x}; \
+         a core's pool views must be disjoint"
+    )]
+    PoolViewOverlap {
+        /// The core whose views overlap.
+        core: u32,
+        /// First pool id (in address order).
+        first: String,
+        /// Second pool id.
+        second: String,
+        /// First pool's base address on `core`.
+        first_base: u32,
+        /// End of the first pool's view (`base + budget`).
+        first_end: u64,
+        /// Second pool's base address on `core`.
+        second_base: u32,
+        /// End of the second pool's view (`base + budget`).
+        second_end: u64,
     },
 
     /// A capacity is too large for the FIFO size arithmetic.
     #[error(
-        "task `{task}` declares `capacity = {capacity}`, which is too large for the region arithmetic"
+        "task `{task}` declares `capacity = {capacity}`, which is too large for the pool arithmetic"
     )]
     TaskTooLarge {
         /// The task name.

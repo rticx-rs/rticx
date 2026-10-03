@@ -132,9 +132,9 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(task.fifo_depth(), 3);
     assert_eq!(task.fifo_bytes(), 100);
     assert!(
-        merged.regions().is_empty(),
+        merged.pools().is_empty(),
         "the metadata fixture binds no distro capability table yet, so no pool \
-         direction is emitted (M6.9-T9 supplies the mock one)"
+         is emitted (M6.9-T9 supplies the mock one)"
     );
 
     // -- M1-T6: the allocated system view is emitted ------------------------

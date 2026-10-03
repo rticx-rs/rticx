@@ -2,12 +2,13 @@
 
 **Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
 native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, ready/epoch, docs), **M6.9-T1..T3** (distro capability
-binding, manifest schema 2, `[ipc.regions]` removal) complete. Remaining work:
-**M6.9-T4..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
+routing, multi-source, ready/epoch, docs), **M6.9-T1..T4** (distro capability
+binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
+budget) complete. Remaining work:
+**M6.9-T5..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
 acceptance + extraction) and **M8-T1** (advisory CI), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-03 (M6.9-T3; compacted: completed milestone task lists
+**Last updated:** 2026-10-03 (M6.9-T4; compacted: completed milestone task lists
 removed).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
@@ -185,7 +186,7 @@ the root generation.
 | | `codegen.rs` | Generate the `ipc-types` crate (types, marker impls, consts, asserts, `LAYOUT_HASH`) with change-detecting writes |
 | | `project.rs` | Parse `rticx.toml` (`[[application]]`, `core_ids`; rejects the removed `[ipc.regions]`) |
 | | `manifest.rs` | `<app>.xbin.json` schema (written by the pass in metadata mode: receivers + per-core distro capability binding) |
-| | `merge.rs` | Merge manifests, validate topology/priority/type/pool/core-id rules, derive pool views, allocate FIFOs |
+| | `merge.rs` | Merge manifests, validate topology/priority/type/core-id rules, match the distro pool graph, reject impossible links, allocate FIFOs in the shared pool budgets |
 | | `alloc.rs` | Emit the sealed system view (FIFO offsets, doorbell lines, hashes) |
 | | `system.rs` | `system.json` schema (`seal`, `canonical_topology_text`, `verify_topology_hash`) |
 | | `fifo.rs` | Canonical in-region FIFO image and sizing (shared with the runtime) |
@@ -810,7 +811,7 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   until T9 supplies the mock table) allocates unbounded and emits no region.
   T4 replaces this per-direction view with the matched pool model and shared
   budget.
-- [ ] **M6.9-T4 — Merge: capability graph, adjacency and shared budget.**
+- [x] **M6.9-T4 — Merge: capability graph, adjacency and shared budget.**
   `merge_project` builds pools by matching the two endpoints' capability entries
   (same `PoolId`, opposite physical ids; a one-sided or inconsistent entry is
   `IpcPoolMismatch`), resolves the global adjacency, and rejects a used direction
@@ -821,7 +822,14 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   `rticx.toml` to the distro-reported pool views (`PoolViewOverlap`).
   `MergedProject.regions` becomes `MergedProject.pools`. Unit tests: two
   directions fitting together but not separately (and vice versa), budget
-  overflow, asymmetric/mismatched capabilities, impossible link.
+  overflow, asymmetric/mismatched capabilities, impossible link. `PoolEntry`
+  (`{ id, core_a, core_b, base_from_a, base_from_b, budget, used }`) is defined
+  now; until T5 the emitted `system.json` still expands each pool into its two
+  schema-1 `regions[]` entries (and `alloc.rs` sorts them by `(source, target)`),
+  so the field only changes in the merge model here. A project whose manifests
+  carry no capability table at all (the minimal `metadata-macro` fixture, until
+  T9) has an empty pool graph and allocates sequentially per direction, exactly
+  as in T3.
 - [ ] **M6.9-T5 — `system.json` schema 2.** `cores[]` gains `physical_core`;
   `regions[]` is replaced by `pools[]`
   (`{ id, core_a, core_b, base_from_a, base_from_b, budget, used }`); `FifoEntry`
