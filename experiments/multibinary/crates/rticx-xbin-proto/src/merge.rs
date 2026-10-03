@@ -19,15 +19,25 @@
 //! - **priority disjointness**: on one target core, tasks from different
 //!   source cores never share a priority line (local tasks are checked by the
 //!   core pass in phase 2);
-//! - **region fit**: every used `(source -> target)` direction has a region
-//!   and the per-task FIFOs fit it, using the canonical [`crate::fifo`] image.
+//! - **pool fit**: the distribution's capability binding (M6.9-T2) reports,
+//!   per physical core, which IPC pools it can reach; the FIFOs of every used
+//!   `(source -> target)` direction allocate inside the source core's pool
+//!   view of the target and must fit its budget, using the canonical
+//!   [`crate::fifo`] image.
 //!
-//! Region fit and FIFO allocation are one deterministic pass: within each
-//! region, tasks are placed in `(source, target, task name)` order, each FIFO
-//! aligned to [`crate::FIFO_ALIGN`], with ring depth `capacity + 1`. The
-//! first FIFO that does not fit fails with the task and the region named
-//! ([`MergeError::RegionOverflow`]). The `system.json` emit of M1-T6
+//! Pool fit and FIFO allocation are one deterministic pass: within each
+//! direction, tasks are placed in `(source, target, task name)` order, each
+//! FIFO aligned to [`crate::FIFO_ALIGN`], with ring depth `capacity + 1`. The
+//! first FIFO that does not fit fails with the task and the direction named
+//! ([`MergeError::RegionOverflow`]); a used direction with no pool path in a
+//! project that bound a distribution capability table is rejected
+//! ([`MergeError::MissingRegion`]). The `system.json` emit
 //! ([`crate::system_view`]) then copies the resolved offsets.
+//!
+//! M6.9-T4 replaces the per-direction region view with a matched pool model:
+//! both directions of a dual allocate inside one shared budget and a
+//! one-sided or inconsistent capability entry becomes a hard error. This
+//! module keeps the per-direction shape until then.
 //!
 //! v1 supports exactly one producer core per task, so the producer of every
 //! task is its receiver's singular `spawn_by` (M5.5); multi-producer tasks
@@ -44,7 +54,7 @@ use crate::fifo::{align_up, fifo_depth, fifo_size};
 use crate::idl::IpcTypes;
 use crate::layout::{Layout, Layouts};
 use crate::manifest::{AppManifest, ReceiverDecl, simple_type_name};
-use crate::project::ProjectConfig;
+use crate::project::{Application, ProjectConfig};
 use crate::system::{
     AppEntry, CoreEntry, FieldEntry, FifoEntry, RegionEntry, TypeEntry, TypeKind, VariantEntry,
 };
@@ -83,7 +93,7 @@ impl MergedProject {
         &self.tasks
     }
 
-    /// Returns every declared region, sorted by `(source, target)`.
+    /// Returns every capability pool direction, sorted by `(source, target)`.
     pub fn regions(&self) -> &[RegionEntry] {
         &self.regions
     }
@@ -403,11 +413,18 @@ pub fn merge_project(
         }
     }
 
-    // -- FIFO allocation and region fit --------------------------------------
-    // Deterministic layout: within each region, tasks are placed in
+    // -- distro capability pools ---------------------------------------------
+    // Since M6.9 the distribution owns IPC memory: each application manifest
+    // reports, per local core, its physical core and the pools that physical
+    // core can reach. Each pool becomes the region view of the
+    // `source -> target` direction it enables.
+    let (capability_views, capabilities_present) = capability_regions(applications, &manifest_of);
+
+    // -- FIFO allocation and pool fit ----------------------------------------
+    // Deterministic layout: within each direction, tasks are placed in
     // `(source, target, task name)` order, each FIFO aligned to
     // `FIFO_ALIGN`. The first FIFO that does not fit names its task and
-    // region in the error. The `(source, target, name)` order restricted to
+    // direction in the error. The `(source, target, name)` order restricted to
     // one direction is the name order of the (name-sorted) task vector, but
     // the explicit key keeps the allocation independent of the vector order.
     let mut order: Vec<usize> = (0..tasks.len()).collect();
@@ -425,14 +442,14 @@ pub fn merge_project(
     for &index in &order {
         let task = &tasks[index];
         let direction = (task.spawner_core, task.receiver_core);
-        let region =
-            config
-                .region(direction.0, direction.1)
-                .ok_or_else(|| MergeError::MissingRegion {
-                    task: task.name.clone(),
-                    producer: direction.0,
-                    target: direction.1,
-                })?;
+        let region = capability_views.get(&direction);
+        if region.is_none() && capabilities_present {
+            return Err(MergeError::MissingRegion {
+                task: task.name.clone(),
+                producer: direction.0,
+                target: direction.1,
+            });
+        }
         let bytes =
             fifo_size(task.elem_size, task.capacity).ok_or_else(|| MergeError::TaskTooLarge {
                 task: task.name.clone(),
@@ -450,13 +467,15 @@ pub fn merge_project(
                 task: task.name.clone(),
                 capacity: task.capacity,
             })?;
-        if end > u64::from(region.size()) {
+        if let Some(region) = region
+            && end > u64::from(region.size)
+        {
             return Err(MergeError::RegionOverflow {
                 task: task.name.clone(),
                 producer: direction.0,
                 target: direction.1,
                 needed: end,
-                available: region.size(),
+                available: region.size,
             });
         }
         offsets[index] = u32::try_from(start).map_err(|_| MergeError::TaskTooLarge {
@@ -484,15 +503,14 @@ pub fn merge_project(
         })
         .collect();
 
-    let regions = config
-        .regions()
+    let regions = capability_views
         .iter()
-        .map(|(key, region)| RegionEntry {
-            source: key.source(),
-            target: key.target(),
-            base_from_source: region.base_from_source(),
-            base_from_target: region.base_from_target(),
-            size: region.size(),
+        .map(|(&(source, target), region)| RegionEntry {
+            source,
+            target,
+            base_from_source: region.base_from_source,
+            base_from_target: region.base_from_target,
+            size: region.size,
         })
         .collect();
 
@@ -503,6 +521,88 @@ pub fn merge_project(
         tasks,
         regions,
     })
+}
+
+/// A `(source -> target)` region view derived from the distro capability
+/// binding.
+#[derive(Debug, Clone, Copy)]
+struct RegionView {
+    base_from_source: u32,
+    base_from_target: u32,
+    size: u32,
+}
+
+/// Builds the per-direction region views from the manifests' capability
+/// bindings (M6.9-T3).
+///
+/// The distribution reports, per physical core, the IPC pools it can reach. A
+/// pool of the source core whose `peer` names the target core's physical id
+/// becomes the region of the `source -> target` direction: the source's view
+/// is `base_local`, the target's is `base_peer`, and the FIFOs of the
+/// direction must fit the pool [`budget`](crate::PoolDecl::budget).
+///
+/// The returned flag reports whether any application bound a distribution
+/// capability table at all. Without one (the minimal `metadata-macro` fixture,
+/// until M6.9-T9 supplies the mock capability table) no direction is bounded
+/// and no region is emitted.
+///
+/// M6.9-T4 replaces this per-direction lookup with a matched pool model: the
+/// two endpoints' entries are cross-checked, both directions share one budget,
+/// and a one-sided or inconsistent entry is a hard error.
+fn capability_regions(
+    applications: &[Application],
+    manifest_of: &BTreeMap<&str, &AppManifest>,
+) -> (BTreeMap<(u32, u32), RegionView>, bool) {
+    // Global core id -> distro physical core id, from every application's
+    // capability entries, plus whether any capability table exists at all.
+    let mut physical_of: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut present = false;
+    for application in applications {
+        let manifest = manifest_of[application.package()];
+        if manifest.capabilities.is_empty() {
+            continue;
+        }
+        present = true;
+        for capability in &manifest.capabilities {
+            if let Some(&global) = application.core_ids().get(capability.local_core as usize) {
+                physical_of.insert(global, capability.physical_core);
+            }
+        }
+    }
+
+    // Physical core id -> global core id, so a pool's `peer` resolves to the
+    // application that runs on that physical core. The lowest global id wins
+    // when several cores report the same physical id, keeping the mapping
+    // deterministic.
+    let mut global_of_physical: BTreeMap<u32, u32> = BTreeMap::new();
+    for (global, physical) in &physical_of {
+        global_of_physical.entry(*physical).or_insert(*global);
+    }
+
+    let mut views: BTreeMap<(u32, u32), RegionView> = BTreeMap::new();
+    for application in applications {
+        let manifest = manifest_of[application.package()];
+        for capability in &manifest.capabilities {
+            let Some(&source) = application.core_ids().get(capability.local_core as usize) else {
+                continue;
+            };
+            for pool in &capability.pools {
+                let Some(&target) = global_of_physical.get(&pool.peer) else {
+                    continue;
+                };
+                if target == source {
+                    continue;
+                }
+                views.entry((source, target)).or_insert(RegionView {
+                    base_from_source: pool.base_local,
+                    base_from_target: pool.base_peer,
+                    size: pool.budget,
+                });
+            }
+        }
+    }
+
+    (views, present)
 }
 
 /// Checks that `input` names a type declared in the IDL.

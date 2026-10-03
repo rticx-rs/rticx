@@ -57,7 +57,6 @@ fn sync_without_manifest_is_a_noop_that_creates_the_layout() {
     assert!(outcome.system.is_none());
     assert!(outcome.ipc_types.is_none());
     assert!(outcome.applications().is_empty());
-    assert_eq!(outcome.region_count(), 0);
     assert!(outcome.manifests.is_empty());
     assert!(
         !dir.path()
@@ -87,7 +86,6 @@ fn sync_reads_the_project_manifest() {
     let merged = outcome.merged.as_ref().expect("an empty project merges");
     assert!(merged.tasks().is_empty());
     assert!(outcome.applications().is_empty());
-    assert_eq!(outcome.region_count(), 0);
     assert!(outcome.manifests.is_empty());
     assert!(dir.path().join("target/rticx-xbin").is_dir());
 

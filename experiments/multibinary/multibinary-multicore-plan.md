@@ -2,12 +2,12 @@
 
 **Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
 native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, ready/epoch, docs), **M6.9-T1** (distro capability
-binding) and **M6.9-T2** (manifest schema 2) complete. Remaining work:
-**M6.9-T3..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
+routing, multi-source, ready/epoch, docs), **M6.9-T1..T3** (distro capability
+binding, manifest schema 2, `[ipc.regions]` removal) complete. Remaining work:
+**M6.9-T4..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
 acceptance + extraction) and **M8-T1** (advisory CI), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-03 (M6.9-T2; compacted: completed milestone task lists
+**Last updated:** 2026-10-03 (M6.9-T3; compacted: completed milestone task lists
 removed).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
@@ -183,9 +183,9 @@ the root generation.
 | `rticx-xbin-proto` | `idl.rs` | Parse `ipc-types.toml`; validate the 32-bit-safe type subset |
 | | `layout.rs` | Canonical little-endian layout (natural alignment capped at 4) |
 | | `codegen.rs` | Generate the `ipc-types` crate (types, marker impls, consts, asserts, `LAYOUT_HASH`) with change-detecting writes |
-| | `project.rs` | Parse `rticx.toml` (`[[application]]`, `[ipc.regions]`) |
+| | `project.rs` | Parse `rticx.toml` (`[[application]]`, `core_ids`; rejects the removed `[ipc.regions]`) |
 | | `manifest.rs` | `<app>.xbin.json` schema (written by the pass in metadata mode: receivers + per-core distro capability binding) |
-| | `merge.rs` | Merge manifests, validate topology/priority/type/region/core-id rules, allocate FIFOs |
+| | `merge.rs` | Merge manifests, validate topology/priority/type/pool/core-id rules, derive pool views, allocate FIFOs |
 | | `alloc.rs` | Emit the sealed system view (FIFO offsets, doorbell lines, hashes) |
 | | `system.rs` | `system.json` schema (`seal`, `canonical_topology_text`, `verify_topology_hash`) |
 | | `fifo.rs` | Canonical in-region FIFO image and sizing (shared with the runtime) |
@@ -262,37 +262,19 @@ core_ids = [0]                  # local core index i -> global core id core_ids[
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
-
-[ipc.regions]                   # distro-documented addresses
-# Shorthand: both cores see the region at the same absolute address.
-# "0->1" = { base = 0x30040000, size = 4096 }
-# Granular: per-core base views when the two cores use different addresses
-# (aliases allowed); cannot be combined with `base`.
-# "1->0" = { base_from_source = 0x30041000, base_from_target = 0x10041000, size = 4096 }
 ```
 
-> **Planned change (M6.9, [§13](#13-remaining-milestones)):** the whole
-> `[ipc.regions]` table is **removed**. IPC memory becomes distro-owned: the
-> distribution exposes a capability binding (reachable core pairs, pool id,
-> per-core base views, shared per-dual budget) and ships the linker
-> reservations, so `rticx.toml` carries only `[[application]]`/`core_ids`. A
-> leftover `[ipc.regions]` becomes a hard `sync` error naming the removal.
+> **Since M6.9-T3:** the manifest declares **no** IPC memory. The distribution
+> owns the IPC pools and exposes a capability binding (reachable core pairs,
+> pool id, per-core base views, shared per-dual budget) that each application
+> records in its metadata manifest, so `rticx.toml` carries only
+> `[[application]]`/`core_ids`. A leftover `[ipc.regions]` table is a hard
+> `sync` error naming the removal.
 
 Notes:
 
 - `core_ids` maps local core indices to globally unique ids used in task attributes
   and the JSON view.
-- IPC regions are per `(source → target)` direction, with per-core base-address
-  views (aliases allowed). Use `base` when both cores see the region at the same
-  absolute address, otherwise the explicit `base_from_source`/`base_from_target`
-  pair; mixing `base` with either explicit key is an error. Canonical rendering
-  and `system.json` always carry the explicit pair. The distro documents the
-  values; the user or distro template fills them in.
-- Parsing (`sync`) rejects a project in which one core would see two regions at
-  overlapping addresses: each region adds its source view to its source core and
-  its target view to its target core, and a single core's ranges must be pairwise
-  disjoint on `[base, base + size)`. A range contained in another on the same
-  core is an error too.
 - `target` may include an optional target triple; otherwise it comes from
   `.cargo/config.toml`.
 
@@ -816,12 +798,18 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   local core, its physical id and its pool entries (id, peer physical id, both
   views, budget, policy) into `<app>.xbin.json`; `MANIFEST_SCHEMA_VERSION` bumps
   to 2. Extraction tests cover the identity default and multi-core applications.
-- [ ] **M6.9-T3 — Remove `[ipc.regions]` from `rticx.toml`.** `project.rs` drops
+- [x] **M6.9-T3 — Remove `[ipc.regions]` from `rticx.toml`.** `project.rs` drops
   `Region`, `RegionKey`, `parse_ipc`/`parse_regions`, `validate_region_views`
   and the `ipc` top-level key; `ProjectConfig::to_toml_string` renders only
   applications; `SyncOutcome::region_count` goes away. A leftover
   `[ipc.regions]` is a hard error naming the removal. Project/golden/negative
-  tests and every fixture `rticx.toml` updated.
+  tests and every fixture `rticx.toml` updated. To keep the driver green,
+  `merge_project` now derives each used direction's region view from the source
+  core's capability pool (`base_local`/`base_peer`/`budget`); a project whose
+  manifests carry no capability table (the minimal `metadata-macro` fixture,
+  until T9 supplies the mock table) allocates unbounded and emits no region.
+  T4 replaces this per-direction view with the matched pool model and shared
+  budget.
 - [ ] **M6.9-T4 — Merge: capability graph, adjacency and shared budget.**
   `merge_project` builds pools by matching the two endpoints' capability entries
   (same `PoolId`, opposite physical ids; a one-sided or inconsistent entry is

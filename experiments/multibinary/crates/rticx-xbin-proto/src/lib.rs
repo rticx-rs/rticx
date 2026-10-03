@@ -9,7 +9,7 @@
 //! - [`manifest`]: the per-application `<target>.xbin.json` metadata written
 //!   by the compilation pass in phase 1;
 //! - [`merge`]: merge the manifests into a validated whole-project view
-//!   (receiver topology, priority disjointness, type existence, region fit,
+//!   (receiver topology, priority disjointness, type existence, pool fit,
 //!   core-id consistency);
 //! - [`system`]: the driver-generated `system.json` system view;
 //! - [`alloc`]: the M1-T6 emission of that view (FIFOs, doorbell lines,
@@ -59,8 +59,8 @@ pub use manifest::{
 };
 pub use merge::{MergedProject, MergedTask, merge_project};
 pub use project::{
-    Application, PROJECT_SCHEMA_VERSION, ProjectConfig, Region, RegionKey, Target, TargetKind,
-    parse_project_file, parse_project_str,
+    Application, PROJECT_SCHEMA_VERSION, ProjectConfig, Target, TargetKind, parse_project_file,
+    parse_project_str,
 };
 pub use system::{
     AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, RTICX_GENERATION, RegionEntry,

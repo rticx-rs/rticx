@@ -4,7 +4,8 @@
 //! `fixtures/three-app` is a standalone workspace with three binaries in a
 //! fully connected cross-binary topology: `app-m7` owns global core 0,
 //! `app-m4` global core 1 and `app-m5` global core 2, and every ordered pair
-//! has its own region. Each application is therefore both a producer (its
+//! is carried by the mock distribution's pool for that dual. Each application
+//! is therefore both a producer (its
 //! generated sender stubs spawn tasks on the other two cores) and a receiver
 //! (it declares `#[sw_task]` cross-binary receivers on priority lines that are
 //! disjoint between the two source cores). The fixture's own mock distribution
@@ -166,19 +167,23 @@ fn cargo_xbin_build_builds_the_three_applications() {
         ]
     );
 
-    // Both `0->1` and `2->1` pack two FIFOs; the four reverse/side directions
-    // fit one each.
+    // Every ordered pair is carried by the mock distribution's pool for that
+    // dual; each direction draws on the pool's 4096-byte budget (M6.9-T3; the
+    // two directions share the budget from M6.9-T4).
+    let directions: Vec<(u32, u32)> = system
+        .regions
+        .iter()
+        .map(|region| (region.source, region.target))
+        .collect();
+    assert_eq!(
+        directions,
+        [(0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1)],
+        "one region per pool direction"
+    );
     for region in &system.regions {
-        let expected = if (region.source, region.target) == (0, 1)
-            || (region.source, region.target) == (2, 1)
-        {
-            256
-        } else {
-            128
-        };
         assert_eq!(
-            region.size, expected,
-            "region `{} -> {}` has the wrong size",
+            region.size, 4096,
+            "region `{} -> {}` carries the pool budget",
             region.source, region.target
         );
     }

@@ -1,4 +1,4 @@
-//! `system.json` emission tests (M1-T6, M5.5).
+//! `system.json` emission tests.
 //!
 //! [`system_view`] converts a merged, allocated project into the view the
 //! driver writes to `target/rticx-xbin/system.json`: FIFO offsets, doorbell
@@ -8,9 +8,9 @@
 //! runs.
 
 use rticx_xbin_proto::{
-    AppManifest, DoorbellEntry, FifoEntry, Hash64, IpcTypes, ProjectConfig, ReceiverDecl,
-    SystemView, TargetRef, layout_hash, merge_project, parse_idl_str, parse_project_str,
-    system_view,
+    AppManifest, CoreCapability, DoorbellEntry, FifoEntry, Hash64, IpcTypes, PoolCachePolicy,
+    PoolDecl, ProjectConfig, ReceiverDecl, SystemView, TargetRef, layout_hash, merge_project,
+    parse_idl_str, parse_project_str, system_view,
 };
 
 const IDL: &str = r#"
@@ -39,10 +39,6 @@ core_ids = [0]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"1->0" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
 "#;
 
 /// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2).
@@ -63,13 +59,13 @@ core_ids = [1]
 package = "app-m5"
 target = { kind = "bin", name = "m5" }
 core_ids = [2]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"0->2" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
-"2->1" = { base_from_source = 0x30042000, base_from_target = 0x30042000, size = 4096 }
-"1->0" = { base_from_source = 0x30043000, base_from_target = 0x30043000, size = 4096 }
 "#;
+
+/// The mock fixture's pool bases (see `xbin-mock-distro::fixture_pools`).
+const BASE_01: u32 = 0x3004_0000;
+const BASE_02: u32 = 0x3004_2000;
+const BASE_12: u32 = 0x3004_1000;
+const BUDGET: u32 = 4096;
 
 fn config(source: &str) -> ProjectConfig {
     parse_project_str(source).expect("valid project manifest")
@@ -112,15 +108,56 @@ fn receiver(
     }
 }
 
-/// `app-m7`: the producer of global core 0, no declarations of its own.
-fn m7_manifest() -> AppManifest {
-    manifest("app-m7", "m7", &[0], &[1])
+fn pool(id: &str, peer: u32, base: u32) -> PoolDecl {
+    PoolDecl {
+        id: id.to_string(),
+        peer,
+        base_local: base,
+        base_peer: base,
+        budget: BUDGET,
+        policy: PoolCachePolicy::NormalNonCacheableShareable,
+    }
 }
 
-/// `app-m4`: executes `EncryptTask` for global core 0.
+fn capability(local_core: u32, physical_core: u32, pools: Vec<PoolDecl>) -> CoreCapability {
+    CoreCapability {
+        local_core,
+        physical_core,
+        pools,
+    }
+}
+
+/// `app-m7`: the producer of global core 0 (physical 0), no declarations.
+fn m7_manifest() -> AppManifest {
+    let mut manifest = manifest("app-m7", "m7", &[0], &[1]);
+    manifest.capabilities = vec![capability(
+        0,
+        0,
+        vec![pool("p01", 1, BASE_01), pool("p02", 2, BASE_02)],
+    )];
+    manifest
+}
+
+/// `app-m4`: executes `EncryptTask` for global core 0 (physical 1).
 fn m4_manifest() -> AppManifest {
     let mut manifest = manifest("app-m4", "m4", &[1], &[0]);
     manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, 0, "ipc_types::EncryptReq")];
+    manifest.capabilities = vec![capability(
+        0,
+        1,
+        vec![pool("p01", 0, BASE_01), pool("p12", 2, BASE_12)],
+    )];
+    manifest
+}
+
+/// `app-m5`: no declarations of its own (global core 2, physical 2).
+fn m5_manifest() -> AppManifest {
+    let mut manifest = manifest("app-m5", "m5", &[2], &[1]);
+    manifest.capabilities = vec![capability(
+        0,
+        2,
+        vec![pool("p02", 0, BASE_02), pool("p12", 1, BASE_12)],
+    )];
     manifest
 }
 
@@ -192,10 +229,14 @@ fn emits_the_reference_system_view() {
         }
     );
 
-    assert_eq!(view.regions.len(), 2, "all declared regions are emitted");
+    assert_eq!(
+        view.regions.len(),
+        2,
+        "both capability pool directions are emitted"
+    );
     assert_eq!(view.regions[0].source, 0);
     assert_eq!(view.regions[0].target, 1);
-    assert_eq!(view.regions[0].base_from_source, 0x3004_0000);
+    assert_eq!(view.regions[0].base_from_source, BASE_01);
 
     assert_eq!(
         view.doorbells,
@@ -242,7 +283,7 @@ fn system_json_is_byte_identical_across_runs() {
 #[test]
 fn allocates_offsets_in_name_order_within_a_direction() {
     // Declared Zeta first, but allocation (and ids) follow name order.
-    let mut m4 = manifest("app-m4", "m4", &[1], &[0]);
+    let mut m4 = m4_manifest();
     m4.receivers = vec![
         receiver("Zeta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
         receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
@@ -267,7 +308,7 @@ fn allocates_offsets_in_name_order_within_a_direction() {
 #[test]
 fn offsets_are_independent_per_direction() {
     // m7 -> m4 (`EncryptTask`) and m4 -> m7 (`BackTask`).
-    let mut m7 = manifest("app-m7", "m7", &[0], &[1]);
+    let mut m7 = m7_manifest();
     m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
     let m4 = m4_manifest();
 
@@ -286,7 +327,7 @@ fn offsets_are_independent_per_direction() {
     assert_eq!(
         (back.fifo.source, back.fifo.target, back.fifo.offset),
         (1, 0, 0),
-        "each direction allocates inside its own region"
+        "each direction allocates inside its own pool view"
     );
 }
 
@@ -296,9 +337,9 @@ fn offsets_are_independent_per_direction() {
 
 #[test]
 fn doorbell_lines_are_unique_per_target_and_shared_within_a_line() {
-    let mut m5 = manifest("app-m5", "m5", &[2], &[1]);
-    m5.receivers = Vec::new();
-    let mut m4 = manifest("app-m4", "m4", &[1], &[0, 2]);
+    let m5 = m5_manifest();
+    let mut m4 = m4_manifest();
+    m4.external_cores = vec![0, 2];
     m4.receivers = vec![
         receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq"),
         receiver("Beta", 3, 1, 0, 0, "ipc_types::EncryptReq"),
@@ -337,7 +378,7 @@ fn doorbell_lines_are_unique_per_target_and_shared_within_a_line() {
 
 #[test]
 fn doorbell_lines_are_independent_between_targets() {
-    let mut m7 = manifest("app-m7", "m7", &[0], &[1]);
+    let mut m7 = m7_manifest();
     m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
     let m4 = m4_manifest();
 

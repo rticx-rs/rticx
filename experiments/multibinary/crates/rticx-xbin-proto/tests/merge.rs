@@ -1,16 +1,19 @@
-//! Merge and validation tests (M1-T5, M5.5).
+//! Merge and validation tests.
 //!
 //! One positive and one negative test per validation rule: core-id
 //! consistency, receiver topology, priority disjointness, type existence and
-//! region fit. Negative cases assert the exact error variant (and, for the
+//! pool fit. Negative cases assert the exact error variant (and, for the
 //! central rules, the deterministic message).
 //!
 //! Since M5.5 the task topology comes exclusively from the receivers'
-//! singular `spawn_by`: there are no sender manifests to match.
+//! singular `spawn_by`: there are no sender manifests to match. Since M6.9-T3
+//! the per-direction pool views come from the distro capability binding each
+//! manifest records, not from `rticx.toml`.
 
 use rticx_xbin_proto::{
-    AppManifest, FIFO_HEADER, Hash64, IpcTypes, MergeError, ProjectConfig, ReceiverDecl, TargetRef,
-    TypeKind, merge_project, parse_idl_str, parse_project_str,
+    AppManifest, CoreCapability, FIFO_HEADER, Hash64, IpcTypes, MergeError, PoolCachePolicy,
+    PoolDecl, ProjectConfig, ReceiverDecl, TargetRef, TypeKind, merge_project, parse_idl_str,
+    parse_project_str,
 };
 
 const IDL: &str = r#"
@@ -39,10 +42,6 @@ core_ids = [0]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"1->0" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
 "#;
 
 /// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2).
@@ -63,12 +62,14 @@ core_ids = [1]
 package = "app-m5"
 target = { kind = "bin", name = "m5" }
 core_ids = [2]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"0->2" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
-"2->1" = { base_from_source = 0x30042000, base_from_target = 0x30042000, size = 4096 }
 "#;
+
+/// The mock fixture's pool bases (see `xbin-mock-distro::fixture_pools`).
+const BASE_01: u32 = 0x3004_0000;
+const BASE_02: u32 = 0x3004_2000;
+const BASE_12: u32 = 0x3004_1000;
+/// Default pool budget of the fixture.
+const BUDGET: u32 = 4096;
 
 fn config(source: &str) -> ProjectConfig {
     parse_project_str(source).expect("valid project manifest")
@@ -111,22 +112,74 @@ fn receiver(
     }
 }
 
-/// `app-m7`: the producer of global core 0, no declarations of its own.
-fn m7_manifest() -> AppManifest {
-    manifest("app-m7", "m7", &[0], &[1])
+/// One distro pool as seen from one endpoint (both views equal, like the mock).
+fn pool(id: &str, peer: u32, base: u32, budget: u32) -> PoolDecl {
+    PoolDecl {
+        id: id.to_string(),
+        peer,
+        base_local: base,
+        base_peer: base,
+        budget,
+        policy: PoolCachePolicy::NormalNonCacheableShareable,
+    }
 }
 
-/// `app-m4`: executes `EncryptTask` for global core 0.
+/// The capability entry of a single-core application.
+fn capability(local_core: u32, physical_core: u32, pools: Vec<PoolDecl>) -> CoreCapability {
+    CoreCapability {
+        local_core,
+        physical_core,
+        pools,
+    }
+}
+
+/// `app-m7`: the producer of global core 0 (physical 0), no declarations.
+fn m7_manifest() -> AppManifest {
+    m7_manifest_with_budget(BUDGET)
+}
+
+/// `app-m7` with the `{0, 1}` pool carved to `budget` bytes.
+fn m7_manifest_with_budget(budget: u32) -> AppManifest {
+    let mut manifest = manifest("app-m7", "m7", &[0], &[1]);
+    manifest.capabilities = vec![capability(
+        0,
+        0,
+        vec![
+            pool("p01", 1, BASE_01, budget),
+            pool("p02", 2, BASE_02, BUDGET),
+        ],
+    )];
+    manifest
+}
+
+/// `app-m4`: executes `EncryptTask` for global core 0 (physical 1).
 fn m4_manifest() -> AppManifest {
     let mut manifest = manifest("app-m4", "m4", &[1], &[0]);
     manifest.types = vec!["ipc_types::EncryptReq".to_string()];
     manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, 0, "ipc_types::EncryptReq")];
+    manifest.capabilities = vec![capability(
+        0,
+        1,
+        vec![
+            pool("p01", 0, BASE_01, BUDGET),
+            pool("p12", 2, BASE_12, BUDGET),
+        ],
+    )];
     manifest
 }
 
-/// `app-m5`: no declarations of its own (global core 2).
+/// `app-m5`: no declarations of its own (global core 2, physical 2).
 fn m5_manifest() -> AppManifest {
-    manifest("app-m5", "m5", &[2], &[])
+    let mut manifest = manifest("app-m5", "m5", &[2], &[]);
+    manifest.capabilities = vec![capability(
+        0,
+        2,
+        vec![
+            pool("p02", 0, BASE_02, BUDGET),
+            pool("p12", 1, BASE_12, BUDGET),
+        ],
+    )];
+    manifest
 }
 
 fn merge(
@@ -222,8 +275,8 @@ fn merges_the_producer_receiver_fixture() {
         .map(|region| (region.source, region.target))
         .collect();
     assert_eq!(regions, [(0, 1), (1, 0)]);
-    assert_eq!(merged.regions()[0].base_from_source, 0x3004_0000);
-    assert_eq!(merged.regions()[0].size, 4096);
+    assert_eq!(merged.regions()[0].base_from_source, BASE_01);
+    assert_eq!(merged.regions()[0].size, BUDGET);
 }
 
 #[test]
@@ -256,6 +309,23 @@ fn empty_project_merges_to_an_empty_view() {
     assert!(merged.cores().is_empty());
     assert!(merged.types().is_empty());
     assert!(merged.tasks().is_empty());
+    assert!(merged.regions().is_empty());
+}
+
+#[test]
+fn a_project_without_a_capability_binding_allocates_unbounded() {
+    // The minimal `metadata-macro` fixture binds no distribution backend, so
+    // its manifests carry no capability table: the merge still allocates the
+    // FIFOs deterministically and emits no region (M6.9-T3; T9 supplies the
+    // mock capability table to the fixtures).
+    let mut m7 = manifest("app-m7", "m7", &[0], &[1]);
+    m7.capabilities = Vec::new();
+    let mut m4 = m4_manifest();
+    m4.capabilities = Vec::new();
+
+    let merged = merge(TWO_APPS, &[m7, m4]).expect("no capability binding is not an error");
+    assert_eq!(merged.tasks().len(), 1);
+    assert_eq!(merged.tasks()[0].fifo_offset(), 0);
     assert!(merged.regions().is_empty());
 }
 
@@ -537,16 +607,21 @@ fn allows_the_same_priority_on_different_targets() {
 }
 
 // ---------------------------------------------------------------------------
-// Region fit
+// Pool fit
 // ---------------------------------------------------------------------------
 
 #[test]
-fn rejects_a_missing_region() {
-    let error = error(NO_REGIONS, &[m7_manifest(), m4_manifest()]);
+fn rejects_a_used_direction_without_a_pool_path() {
+    // The producer binds a capability table but reports no pool to physical
+    // core 1, so the `0->1` direction has no IPC path.
+    let mut m7 = m7_manifest();
+    m7.capabilities[0].pools.retain(|pool| pool.peer != 1);
+
+    let error = error(TWO_APPS, &[m7, m4_manifest()]);
     assert_eq!(
         error.to_string(),
-        "task `EncryptTask` needs a `0->1` region, but rticx.toml declares none under \
-         `[ipc.regions]`"
+        "task `EncryptTask` needs a `0->1` IPC pool, but the distribution's capability binding \
+         provides no pool between those cores"
     );
     assert!(matches!(
         &error,
@@ -558,27 +633,13 @@ fn rejects_a_missing_region() {
     ));
 }
 
-/// Two applications without any region declarations.
-const NO_REGIONS: &str = r#"
-schema = 1
-
-[[application]]
-package = "app-m7"
-target = { kind = "bin", name = "m7" }
-core_ids = [0]
-
-[[application]]
-package = "app-m4"
-target = { kind = "bin", name = "m4" }
-core_ids = [1]
-"#;
-
 #[test]
 fn rejects_region_overflow() {
-    let error = error(TINY_REGION, &[m7_manifest(), m4_manifest()]);
+    // `EncryptReq` (12 bytes, capacity 2) needs 64 + 3 * 12 = 100 bytes.
+    let error = error(TWO_APPS, &[m7_manifest_with_budget(99), m4_manifest()]);
     assert_eq!(
         error.to_string(),
-        "task `EncryptTask` does not fit the `0->1` region: 100 bytes needed, 99 available"
+        "task `EncryptTask` does not fit the `0->1` pool: 100 bytes needed, 99 available"
     );
     assert!(matches!(
         &error,
@@ -592,46 +653,12 @@ fn rejects_region_overflow() {
     ));
 }
 
-/// `EncryptReq` (12 bytes, capacity 2) needs 64 + 3 * 12 = 100 bytes.
-const TINY_REGION: &str = r#"
-schema = 1
-
-[[application]]
-package = "app-m7"
-target = { kind = "bin", name = "m7" }
-core_ids = [0]
-
-[[application]]
-package = "app-m4"
-target = { kind = "bin", name = "m4" }
-core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 99 }
-"#;
-
 #[test]
 fn allows_an_exact_fit() {
-    let merged = merge(EXACT_REGION, &[m7_manifest(), m4_manifest()]).expect("exact fit");
+    let merged =
+        merge(TWO_APPS, &[m7_manifest_with_budget(100), m4_manifest()]).expect("exact fit");
     assert_eq!(merged.tasks()[0].fifo_bytes(), 100);
 }
-
-const EXACT_REGION: &str = r#"
-schema = 1
-
-[[application]]
-package = "app-m7"
-target = { kind = "bin", name = "m7" }
-core_ids = [0]
-
-[[application]]
-package = "app-m4"
-target = { kind = "bin", name = "m4" }
-core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 100 }
-"#;
 
 #[test]
 fn region_fit_accounts_for_fifo_alignment() {
@@ -640,13 +667,12 @@ fn region_fit_accounts_for_fifo_alignment() {
         receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
         receiver("Beta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
     ];
-    let manifests = [m7_manifest(), m4];
 
     // 100 bytes each; the second FIFO starts at the next 8-byte boundary (104).
-    let error = error(ODD_REGION, &manifests);
+    let error = error(TWO_APPS, &[m7_manifest_with_budget(203), m4.clone()]);
     assert_eq!(
         error.to_string(),
-        "task `Beta` does not fit the `0->1` region: 204 bytes needed, 203 available"
+        "task `Beta` does not fit the `0->1` pool: 204 bytes needed, 203 available"
     );
     assert!(
         matches!(
@@ -661,7 +687,8 @@ fn region_fit_accounts_for_fifo_alignment() {
         "{error}"
     );
 
-    let merged = merge(ALIGNED_REGION, &manifests).expect("204 bytes fit exactly");
+    let merged =
+        merge(TWO_APPS, &[m7_manifest_with_budget(204), m4]).expect("204 bytes fit exactly");
     assert_eq!(merged.tasks().len(), 2);
     assert_eq!(merged.task("Alpha").expect("task").fifo_offset(), 0);
     assert_eq!(
@@ -671,46 +698,12 @@ fn region_fit_accounts_for_fifo_alignment() {
     );
 }
 
-const ODD_REGION: &str = r#"
-schema = 1
-
-[[application]]
-package = "app-m7"
-target = { kind = "bin", name = "m7" }
-core_ids = [0]
-
-[[application]]
-package = "app-m4"
-target = { kind = "bin", name = "m4" }
-core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 203 }
-"#;
-
-const ALIGNED_REGION: &str = r#"
-schema = 1
-
-[[application]]
-package = "app-m7"
-target = { kind = "bin", name = "m7" }
-core_ids = [0]
-
-[[application]]
-package = "app-m4"
-target = { kind = "bin", name = "m4" }
-core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 204 }
-"#;
-
 #[test]
-fn allows_regions_without_tasks() {
-    let merged = merge(TWO_APPS, &[m7_manifest(), m4_manifest()]).expect("extra region");
+fn allows_pools_without_tasks() {
+    let merged = merge(TWO_APPS, &[m7_manifest(), m4_manifest()]).expect("extra pool");
     assert_eq!(
         merged.regions().len(),
         2,
-        "unused regions are still emitted"
+        "unused pool directions are still emitted"
     );
 }

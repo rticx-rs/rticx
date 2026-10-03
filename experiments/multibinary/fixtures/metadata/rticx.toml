@@ -10,8 +10,7 @@ package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
 
-[ipc.regions]
-# Both cores see each region at the same absolute address, so the `base`
-# shorthand expands to `base_from_source` == `base_from_target`.
-"0->1" = { base = 0x30040000, size = 4096 }
-"1->0" = { base = 0x30041000, size = 4096 }
+# No `[ipc.regions]`: since M6.9 the distribution owns IPC memory. This fixture
+# binds no distro capability backend, so its manifests carry no capability
+# table and `sync` allocates the FIFOs without a pool bound (M6.9-T3). The mock
+# capability table reaches the fixtures in M6.9-T9.

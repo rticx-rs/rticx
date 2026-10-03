@@ -11,8 +11,8 @@
 //!   pass in isolation;
 //! - **merge/validation** through `cargo xbin sync` over generated metadata
 //!   projects: a priority line shared by two source cores, an input type
-//!   missing from the IDL, a region too small for its task FIFOs and
-//!   overlapping per-core region views in `rticx.toml`.
+//!   missing from the IDL and a leftover `[ipc.regions]` table (removed in
+//!   M6.9-T3).
 //!
 //! Every assertion checks the exact documented message, so a wording change
 //! in the user guide or the error enum fails here.
@@ -307,37 +307,6 @@ mod app {
 fn main() {}
 "#;
 
-/// `app-m4` receives `EncryptTask` with the canonical fixture shape.
-const RECEIVER_ENCRYPT: &str = r#"
-use metadata_macro::app;
-
-#[app(
-    device = fixture,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0],
-    ipc_dispatchers = [IRQ0]
-)]
-mod app {
-    trait RticSwTask {
-        type SpawnInput;
-        fn exec(&mut self, input: Self::SpawnInput);
-    }
-
-    struct EncryptReq;
-
-    #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
-    struct EncryptTask;
-
-    impl RticSwTask for EncryptTask {
-        type SpawnInput = EncryptReq;
-        fn exec(&mut self, _input: Self::SpawnInput) {}
-    }
-}
-
-fn main() {}
-"#;
-
 /// Writes a metadata-only project: one Cargo package per `(package, bin,
 /// source)` triple, all depending on the checked-in `metadata-macro` stand-in,
 /// plus `rticx.toml` and `ipc-types.toml`.
@@ -388,10 +357,7 @@ fn sync_rejects_a_priority_conflict_between_sources() {
          [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
          core_ids = [1]\n\n\
          [[application]]\npackage = \"app-m5\"\ntarget = { kind = \"bin\", name = \"m5\" }\n\
-         core_ids = [2]\n\n\
-         [ipc.regions]\n\
-         \"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }\n\
-         \"2->1\" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }\n";
+         core_ids = [2]\n";
     write_metadata_project(
         dir.path(),
         config,
@@ -420,9 +386,7 @@ fn sync_rejects_an_unknown_input_type() {
          [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
          core_ids = [0]\n\n\
          [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
-         core_ids = [1]\n\n\
-         [ipc.regions]\n\
-         \"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }\n";
+         core_ids = [1]\n";
     write_metadata_project(
         dir.path(),
         config,
@@ -444,56 +408,24 @@ fn sync_rejects_an_unknown_input_type() {
 }
 
 #[test]
-fn sync_rejects_region_overflow() {
+fn sync_rejects_the_removed_ipc_regions_table() {
     let dir = tempdir().expect("tempdir");
-    // `EncryptReq` (12 bytes) at capacity 2 needs 64 + 3 * 12 = 100 bytes.
-    let config = "schema = 1\n\n\
-         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\n\n\
-         [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
-         core_ids = [1]\n\n\
-         [ipc.regions]\n\
-         \"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 99 }\n";
-    write_metadata_project(
-        dir.path(),
-        config,
-        ENCRYPT_IDL,
-        &[
-            ("app-m7", "m7", PRODUCER_ENCRYPT),
-            ("app-m4", "m4", RECEIVER_ENCRYPT),
-        ],
-    );
-
-    let error = sync(dir.path())
-        .expect_err("a task FIFO larger than its region must be rejected")
-        .to_string();
-    assert_eq!(
-        error,
-        "task `EncryptTask` does not fit the `0->1` region: 100 bytes needed, 99 available"
-    );
-}
-
-#[test]
-fn sync_rejects_overlapping_region_views() {
-    let dir = tempdir().expect("tempdir");
-    // Core 1 is the source of `1->0` and the target of `2->1`, both at
-    // 0x30040000: the same range in one core's address space.
     std::fs::write(
         dir.path().join("rticx.toml"),
         "schema = 1\n\n\
+         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
+         core_ids = [0]\n\n\
          [ipc.regions]\n\
-         \"1->0\" = { base_from_source = 0x30040000, base_from_target = 0x10040000, size = 4096 }\n\
-         \"2->1\" = { base_from_source = 0x10000000, base_from_target = 0x30040000, size = 4096 }\n",
+         \"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }\n",
     )
     .expect("rticx.toml");
 
     let error = sync(dir.path())
-        .expect_err("overlapping per-core region views must be rejected")
+        .expect_err("the removed `[ipc.regions]` table must be rejected")
         .to_string();
     assert_eq!(
         error,
-        "`ipc.regions` overlap on core 1: `1->0` (source view 0x30040000..0x30041000) \
-         and `2->1` (target view 0x30040000..0x30041000); \
-         a core's source and target views must map to non-overlapping addresses"
+        "`[ipc.regions]` was removed: IPC memory is owned by the distribution's capability \
+         binding (M6.9), not declared in rticx.toml. Remove the `[ipc.regions]` table"
     );
 }

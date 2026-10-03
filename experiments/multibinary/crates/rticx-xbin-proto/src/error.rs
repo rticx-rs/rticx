@@ -367,12 +367,13 @@ pub enum MergeError {
         second_source: u32,
     },
 
-    /// A used `(source -> target)` direction has no declared region.
+    /// A used `(source -> target)` direction has no IPC pool path.
     #[error(
-        "task `{task}` needs a `{producer}->{target}` region, but rticx.toml declares none under `[ipc.regions]`"
+        "task `{task}` needs a `{producer}->{target}` IPC pool, but the distribution's \
+         capability binding provides no pool between those cores"
     )]
     MissingRegion {
-        /// The task that needs the region.
+        /// The task that needs the pool.
         task: String,
         /// The producer core id.
         producer: u32,
@@ -380,9 +381,9 @@ pub enum MergeError {
         target: u32,
     },
 
-    /// The per-task FIFOs do not fit their region.
+    /// The per-task FIFOs do not fit their pool budget.
     #[error(
-        "task `{task}` does not fit the `{producer}->{target}` region: \
+        "task `{task}` does not fit the `{producer}->{target}` pool: \
          {needed} bytes needed, {available} available"
     )]
     RegionOverflow {
@@ -394,7 +395,7 @@ pub enum MergeError {
         target: u32,
         /// Bytes required up to and including this FIFO (including alignment).
         needed: u64,
-        /// Region size declared in `rticx.toml`.
+        /// Pool budget reported by the distribution.
         available: u32,
     },
 

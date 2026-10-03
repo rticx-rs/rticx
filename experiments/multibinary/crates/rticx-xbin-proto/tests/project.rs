@@ -1,13 +1,14 @@
-//! Golden, round-trip and error tests for `rticx.toml` parsing (M0-T5).
+//! Golden, round-trip and error tests for `rticx.toml` parsing.
 //!
 //! Accepted manifests are asserted structurally and round-tripped through the
 //! canonical rendering; rejected manifests assert the exact, deterministic
-//! error message.
+//! error message. Since M6.9 the manifest declares no IPC memory: the
+//! `[ipc.regions]` table is rejected with an error naming the removal.
 
 use std::io::Write;
 
 use rticx_xbin_proto::project::{
-    PROJECT_SCHEMA_VERSION, RegionKey, TargetKind, parse_project_file, parse_project_str,
+    PROJECT_SCHEMA_VERSION, TargetKind, parse_project_file, parse_project_str,
 };
 
 const FULL_PROJECT: &str = r#"
@@ -22,10 +23,6 @@ core_ids = [0]
 package = "app-m4"
 target = { kind = "bin", name = "m4", triple = "thumbv7em-none-eabihf" }
 core_ids = [1]
-
-[ipc.regions]
-"0->1" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-"1->0" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
 "#;
 
 const CANONICAL: &str = "\
@@ -40,10 +37,6 @@ core_ids = [0]
 package = \"app-m4\"
 target = { kind = \"bin\", name = \"m4\", triple = \"thumbv7em-none-eabihf\" }
 core_ids = [1]
-
-[ipc.regions]
-\"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }
-\"1->0\" = { base_from_source = 0x30041000, base_from_target = 0x30041000, size = 4096 }
 ";
 
 fn err(source: &str) -> String {
@@ -72,7 +65,6 @@ fn parses_minimal_project() {
 
     assert_eq!(config.schema(), PROJECT_SCHEMA_VERSION);
     assert_eq!(config.applications().len(), 1);
-    assert!(config.regions().is_empty());
 
     let application = config.application("app-m7").expect("application exists");
     assert_eq!(application.package(), "app-m7");
@@ -83,7 +75,7 @@ fn parses_minimal_project() {
 }
 
 #[test]
-fn parses_multi_application_project_with_regions() {
+fn parses_multi_application_project() {
     let config = parse_project_str(FULL_PROJECT).expect("valid manifest");
 
     let packages: Vec<&str> = config
@@ -101,85 +93,6 @@ fn parses_multi_application_project_with_regions() {
         Some("thumbv7em-none-eabihf")
     );
     assert_eq!(config.core_ids().collect::<Vec<_>>(), vec![0, 1]);
-
-    let region = config.region(0, 1).expect("region exists");
-    assert_eq!(region.base_from_source(), 0x3004_0000);
-    assert_eq!(region.base_from_target(), 0x3004_0000);
-    assert_eq!(region.size(), 4096);
-    assert_eq!(
-        RegionKey::new(0, 1).to_string(),
-        "0->1",
-        "region keys render as source->target"
-    );
-    assert!(config.region(1, 0).is_some());
-    assert!(config.region(1, 1).is_none());
-}
-
-#[test]
-fn parses_base_shorthand_for_equal_views() {
-    let config = parse_project_str(
-        r#"
-        schema = 1
-
-        [[application]]
-        package = "app-m7"
-        target = { kind = "bin", name = "m7" }
-        core_ids = [0]
-
-        [[application]]
-        package = "app-m4"
-        target = { kind = "bin", name = "m4" }
-        core_ids = [1]
-
-        [ipc.regions]
-        "0->1" = { base = 0x30040000, size = 128 }
-        "#,
-    )
-    .expect("valid manifest");
-
-    let region = config.region(0, 1).expect("region exists");
-    assert_eq!(region.base_from_source(), 0x3004_0000);
-    assert_eq!(
-        region.base_from_target(),
-        0x3004_0000,
-        "`base` sets both core views to the same absolute address"
-    );
-    assert_eq!(region.size(), 128);
-
-    assert_eq!(
-        config.to_toml_string(),
-        "schema = 1\n\
-         \n\
-         [[application]]\n\
-         package = \"app-m7\"\n\
-         target = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\n\
-         \n\
-         [[application]]\n\
-         package = \"app-m4\"\n\
-         target = { kind = \"bin\", name = \"m4\" }\n\
-         core_ids = [1]\n\
-         \n\
-         [ipc.regions]\n\
-         \"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 128 }\n",
-        "canonical rendering expands the `base` shorthand to both explicit views"
-    );
-}
-
-#[test]
-fn base_shorthand_equals_explicit_equal_views() {
-    let shorthand = parse_project_str(
-        "schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0x30040000, size = 128 }\n",
-    )
-    .expect("valid manifest");
-    let explicit = parse_project_str(
-        "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 128 }\n",
-    )
-    .expect("valid manifest");
-    assert_eq!(
-        shorthand, explicit,
-        "`base` must expand to equal explicit source/target views"
-    );
 }
 
 #[test]
@@ -218,27 +131,6 @@ fn preserves_application_and_core_id_order() {
             .core_ids(),
         &[4, 2],
         "local index order is kept"
-    );
-}
-
-#[test]
-fn regions_are_ordered_regardless_of_declaration_order() {
-    let config = parse_project_str(
-        r#"
-        schema = 1
-
-        [ipc.regions]
-        "1->0" = { base_from_source = 50335744, base_from_target = 50335744, size = 4096 }
-        "0->1" = { base_from_source = 50331648, base_from_target = 50331648, size = 4096 }
-        "#,
-    )
-    .expect("valid manifest");
-
-    let keys: Vec<String> = config.regions().keys().map(RegionKey::to_string).collect();
-    assert_eq!(
-        keys,
-        vec!["0->1", "1->0"],
-        "regions sort by (source, target)"
     );
 }
 
@@ -327,7 +219,7 @@ fn rejects_non_integer_schema() {
 fn rejects_unknown_top_level_key() {
     assert_eq!(
         err("schema = 1\napplications = []\n"),
-        "unknown top-level key `applications`; expected `schema`, `application` or `ipc`"
+        "unknown top-level key `applications`; expected `schema` or `application`"
     );
 }
 
@@ -338,6 +230,30 @@ fn rejects_malformed_toml() {
         message.starts_with("failed to parse rticx.toml:"),
         "unexpected error: {message}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Rejected manifests: the removed `[ipc.regions]` table (M6.9-T3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rejects_the_removed_ipc_regions_table() {
+    // Both the fully explicit and the shorthand forms name the removal.
+    let expected = "`[ipc.regions]` was removed: IPC memory is owned by the distribution's \
+                    capability binding (M6.9), not declared in rticx.toml. \
+                    Remove the `[ipc.regions]` table";
+    assert_eq!(
+        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0x30040000, size = 4096 }\n"),
+        expected
+    );
+    assert_eq!(
+        err(
+            "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }\n"
+        ),
+        expected
+    );
+    // An `[ipc]` table with any content is the same removed section.
+    assert_eq!(err("schema = 1\n[ipc]\nregions = {}\n"), expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,182 +435,5 @@ fn rejects_duplicate_global_core_id_across_applications() {
              [[application]]\npackage = \"app-b\"\ntarget = { kind = \"bin\", name = \"b\" }\ncore_ids = [1, 0]\n"),
         "global core id 0 is declared by both `app-a` and `app-b`; \
          core ids must be unique across applications"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Rejected manifests: ipc regions
-// ---------------------------------------------------------------------------
-
-#[test]
-fn rejects_invalid_ipc_section() {
-    assert_eq!(
-        err("schema = 1\nipc = 3\n"),
-        "`ipc` must be a table, found an integer"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc]\nregion = {}\n"),
-        "`ipc` has unknown key `region`; expected `regions`"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc]\n"),
-        "`ipc` is missing the required `regions` key"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc]\nregions = 3\n"),
-        "`ipc.regions` must be a table, found an integer"
-    );
-}
-
-#[test]
-fn rejects_malformed_region_keys() {
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0-1\" = { base_from_source = 0, base_from_target = 0, size = 1 }\n"
-        ),
-        "`ipc.regions` key `0-1` is not of the form `<source>-><target>` (for example `\"0->1\"`)"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"a->1\" = { base_from_source = 0, base_from_target = 0, size = 1 }\n"
-        ),
-        "`ipc.regions` key `a->1` has a non-integer source core id `a`"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0->b\" = { base_from_source = 0, base_from_target = 0, size = 1 }\n"
-        ),
-        "`ipc.regions` key `0->b` has a non-integer target core id `b`"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"1->1\" = { base_from_source = 0, base_from_target = 0, size = 1 }\n"
-        ),
-        "`ipc.regions` key `1->1` connects core 1 to itself; \
-         a region carries one `source -> target` direction"
-    );
-}
-
-#[test]
-fn rejects_invalid_region_body() {
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = 3\n"),
-        "`ipc.regions.\"0->1\"` must be a table, found an integer"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { bases = 0 }\n"),
-        "`ipc.regions.\"0->1\"` has unknown key `bases`; \
-         expected `base`, `base_from_source`, `base_from_target` or `size`"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_target = 0, size = 1 }\n"),
-        "`ipc.regions.\"0->1\"` is missing the required `base_from_source` key \
-         (or the `base` shorthand for equal source/target addresses)"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0, size = 1 }\n"),
-        "`ipc.regions.\"0->1\"` is missing the required `base_from_target` key \
-         (or the `base` shorthand for equal source/target addresses)"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0, base_from_target = 0 }\n"
-        ),
-        "`ipc.regions.\"0->1\"` is missing the required `size` key"
-    );
-}
-
-#[test]
-fn rejects_base_shorthand_mixed_with_explicit_views() {
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0, base_from_source = 1, size = 1 }\n"),
-        "`ipc.regions.\"0->1\"` combines the `base` shorthand with `base_from_source`; \
-         set `base` for equal source/target addresses, or the two explicit keys"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0, base_from_target = 1, size = 1 }\n"),
-        "`ipc.regions.\"0->1\"` combines the `base` shorthand with `base_from_target`; \
-         set `base` for equal source/target addresses, or the two explicit keys"
-    );
-}
-
-#[test]
-fn rejects_overlapping_views_on_the_same_core() {
-    // Core 1 is the source of `1->0` (0x30040000) and the target of `2->1`
-    // (0x30040000): the same range in one core's address space.
-    assert_eq!(
-        err("schema = 1\n\
-             [ipc.regions]\n\
-             \"1->0\" = { base_from_source = 0x30040000, base_from_target = 0x10040000, size = 4096 }\n\
-             \"2->1\" = { base_from_source = 0x10000000, base_from_target = 0x30040000, size = 4096 }\n"),
-        "`ipc.regions` overlap on core 1: `1->0` (source view 0x30040000..0x30041000) \
-         and `2->1` (target view 0x30040000..0x30041000); \
-         a core's source and target views must map to non-overlapping addresses"
-    );
-}
-
-#[test]
-fn rejects_contained_view_on_the_same_core() {
-    // A smaller region fully contained in another region on the same core.
-    assert_eq!(
-        err("schema = 1\n\
-             [ipc.regions]\n\
-             \"0->1\" = { base = 0x30040000, size = 4096 }\n\
-             \"0->2\" = { base = 0x30040080, size = 128 }\n"),
-        "`ipc.regions` overlap on core 0: `0->1` (source view 0x30040000..0x30041000) \
-         and `0->2` (source view 0x30040080..0x30040100); \
-         a core's source and target views must map to non-overlapping addresses"
-    );
-}
-
-#[test]
-fn accepts_adjacent_and_cross_core_views() {
-    // `0->1` and `0->2` are adjacent on core 0 (`end == next base`), and the
-    // four cores' single views share the same absolute address but belong to
-    // different cores, so they are independent address spaces.
-    let config = parse_project_str(
-        r#"
-        schema = 1
-
-        [ipc.regions]
-        "0->1" = { base = 0x30040000, size = 4096 }
-        "0->2" = { base = 0x30041000, size = 4096 }
-        "2->3" = { base = 0x30040000, size = 4096 }
-        "#,
-    )
-    .expect("adjacent ranges and cross-core aliases are fine");
-
-    assert_eq!(config.regions().len(), 3);
-}
-
-#[test]
-fn rejects_region_fields_of_the_wrong_type_or_range() {
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = \"0x30040000\", base_from_target = 0, size = 1 }\n"
-        ),
-        "`ipc.regions.\"0->1\".base_from_source` must be an integer, found a string"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = -1, base_from_target = 0, size = 1 }\n"
-        ),
-        "`ipc.regions.\"0->1\".base_from_source` = -1 is out of range 0..=4294967295"
-    );
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = \"0x30040000\", size = 1 }\n"),
-        "`ipc.regions.\"0->1\".base` must be an integer, found a string"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0, base_from_target = 0, size = 0 }\n"
-        ),
-        "`ipc.regions.\"0->1\".size` = 0 is out of range 1..=4294967295"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0, base_from_target = 0, size = 4294967296 }\n"
-        ),
-        "`ipc.regions.\"0->1\".size` = 4294967296 is out of range 1..=4294967295"
     );
 }

@@ -62,14 +62,6 @@ impl SyncOutcome {
             .unwrap_or(&[])
     }
 
-    /// Returns the number of declared IPC regions.
-    pub fn region_count(&self) -> usize {
-        self.config
-            .as_ref()
-            .map(|config| config.regions().len())
-            .unwrap_or(0)
-    }
-
     /// Returns the collected manifest of the Cargo target `target`, if any.
     pub fn manifest(&self, target: &str) -> Option<&AppManifest> {
         self.manifests

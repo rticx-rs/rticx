@@ -4,18 +4,18 @@
 # topology:
 #
 # - `app-m7` owns global core 0, `app-m4` global core 1, `app-m5` global core 2;
-# - every ordered pair has its own `(source -> target)` region, so both
-#   directions of each pair are independent: `0<->1`, `1<->2` and `0<->2`;
+# - the mock distribution's capability binding maps every pair of physical
+#   cores through its own pool (`mock-0-1`, `mock-1-2`, `mock-0-2`), so both
+#   directions of each pair allocate inside that pool's shared 4096-byte budget
+#   (per direction, until M6.9-T4 shares it);
 # - every application is therefore both a producer (it spawns tasks on the two
 #   other cores through generated stubs) and a receiver (it declares its own
 #   `#[sw_task]` cross-binary receivers, each on a priority line disjoint from
 #   the other source core's lines).
 #
-# The `0->1` and `2->1` regions carry two FIFOs each (`EncryptTask`/`DigestTask`
-# and `SensorTask`/`TelemetryTask`), so they are 256 bytes; the four
-# single-FIFO directions fit in 128. The fixture's mock runtime places the
-# regions in process memory and ignores the addresses; they are still declared
-# because the driver validates and sizes every used direction from `rticx.toml`.
+# The `0->1` and `2->1` directions carry two FIFOs each
+# (`EncryptTask`/`DigestTask` and `SensorTask`/`TelemetryTask`). The mock
+# runtime places the pools in process memory and ignores the addresses.
 schema = 1
 
 [[application]]
@@ -32,15 +32,3 @@ core_ids = [2]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
-
-[ipc.regions]
-# Both cores see each region at the same absolute address, so the `base`
-# shorthand expands to `base_from_source` == `base_from_target`. Every range is
-# disjoint from every other so a single core never maps two regions to the same
-# addresses.
-"0->1" = { base = 0x30040000, size = 256 }
-"1->0" = { base = 0x30040100, size = 128 }
-"0->2" = { base = 0x30040200, size = 128 }
-"2->0" = { base = 0x30040300, size = 128 }
-"2->1" = { base = 0x30041000, size = 256 }
-"1->2" = { base = 0x30041100, size = 128 }
