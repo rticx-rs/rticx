@@ -1,7 +1,7 @@
 //! Shared ready bitmap and epoch word for cross-binary boot and reset.
 //!
 //! [`SharedState`] is a small `#[repr(C)]` header placed in shared memory
-//! (declared by the distribution, alongside the IPC regions) so that every
+//! (declared by the distribution, alongside the IPC pools) so that every
 //! core of the project can observe which cores are ready and whether the
 //! shared state has been (re)initialized since it last looked:
 //!

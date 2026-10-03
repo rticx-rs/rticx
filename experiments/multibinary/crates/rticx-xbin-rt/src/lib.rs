@@ -10,7 +10,7 @@
 //! - [`CrossCoreMessage`] — marker trait implemented only by the generated
 //!   `ipc-types`;
 //! - [`Fifo`] — the atomic SPSC ring placed at fixed addresses inside the
-//!   IPC regions, with its [`Producer`]/[`Consumer`] endpoints. See
+//!   IPC pools, with its [`Producer`]/[`Consumer`] endpoints. See
 //!   [`fifo`] for the in-region image and the memory/ordering rules;
 //! - [`SharedState`] — the shared ready bitmap and epoch word used for boot
 //!   coordination and peer-reset detection, plus [`ReadyCache`], the
@@ -22,7 +22,7 @@
 //!   software pass uses, re-exported so generated code reaches it through one
 //!   path;
 //! - [`backend`] — the [`CrossBinBackend`] contract a distribution
-//!   implements for its IPC regions, core identity and cache/MPU policy; the
+//!   implements for its IPC pools, core identity and cache/MPU policy; the
 //!   in-tree `rticx-xbin-mock` implements it for host tests. The doorbell
 //!   transport itself lives in the generated ring/read functions (M6.5), so
 //!   the trait carries no per-line doorbell methods.

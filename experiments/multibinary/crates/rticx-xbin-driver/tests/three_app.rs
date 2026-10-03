@@ -76,7 +76,7 @@ fn cargo_xbin_build_builds_the_three_applications() {
     }
 
     // Phase 2 really ran in every producer direction: each binary carries the
-    // generated FIFO view diagnostics of the regions it spawns into.
+    // generated FIFO view diagnostics of the pools it spawns into.
     for (bin, direction) in [
         ("m7", "0 -> 1"),
         ("m7", "0 -> 2"),
@@ -88,7 +88,7 @@ fn cargo_xbin_build_builds_the_three_applications() {
         assert!(
             binary_contains(
                 &binaries.join(bin),
-                &format!("`cargo xbin sync` allocated the `({direction})` IPC region"),
+                &format!("`cargo xbin sync` allocated the `({direction})` IPC pool"),
             ),
             "the {bin} binary does not contain the generated FIFO view for `{direction}`"
         );

@@ -14,7 +14,7 @@
 //!     (M6.5-T2);
 //!   - a hidden **FIFO view** helper returning the fixed-address
 //!     `rticx_xbin_rt::Fifo` of the task at
-//!     `region.base_for(this_core, source, target) + offset`, where the region
+//!     `pool.base_for(this_core, source, target) + offset`, where the pool
 //!     comes from the distribution's runtime backend and the offset, depth and
 //!     element layout come from the system view (const addresses, no local input
 //!     queue, no forwarder);
@@ -31,7 +31,7 @@
 //! - for every native `#[sw_task]` cross-binary receiver of this application
 //!   (M3-T2, M5.5, M6.5-T3):
 //!   - a hidden **FIFO view** helper like the sender's, but resolving the
-//!     consumer view of the region (`base_from_target`);
+//!     consumer view of the pool (`base_from_target`);
 //!   - a const assertion that the receiver's `<Task as
 //!     RticSwTask>::SpawnInput` implements `rticx_xbin_rt::CrossCoreMessage`,
 //!     so the guarantee lives in generated code instead of the trait
@@ -66,7 +66,7 @@
 //!   - `__rticx_xbin_configure_shared_memory` runs on every core at the start
 //!     of its entry (`MainInjectionPoint::BeforeInit`, before the user
 //!     `init`): MPU/MMU attributes are per-core, so each core maps its own
-//!     view of the IPC regions Normal, Non-cacheable, Shareable;
+//!     view of the IPC pools Normal, Non-cacheable, Shareable;
 //!   - `__rticx_xbin_init_shared` is generated for the application owning the
 //!     project's **owner core** (the lowest global core id, i.e. the boot
 //!     core) and runs `init_shared()` at `BeforePostInit`, before the owner's
@@ -74,8 +74,8 @@
 //!   - `__rticx_xbin_init_fifos_core<N>` is generated for every local core
 //!     that produces cross-binary tasks and runs at `BeforePostInit`: it
 //!     zeroes the ring indices of the core's own FIFOs, so a topology whose
-//!     owner core is not an endpoint of a region initializes correctly
-//!     (M6-T1). The producer is always an endpoint of its region;
+//!     owner core is not an endpoint of a pool initializes correctly
+//!     (M6-T1). The producer is always an endpoint of its pool;
 //!   - `__rticx_xbin_mark_ready_core<N>` runs on every core at the end of its
 //!     `post_init` (`MainInjectionPoint::BeforeIdle`): it calls
 //!     `mark_ready(core)`. The router IRQs are enabled and prioritized by the
@@ -107,7 +107,9 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use rticx_core::parser::ast::uppercase_ident;
 use rticx_core::rticx_traits::HWT_TRAIT_TY;
-use rticx_xbin_proto::{AppEntry, Hash64, ReceiverDecl, SystemView, TaskEntry, simple_type_name};
+use rticx_xbin_proto::{
+    AppEntry, Hash64, PoolEntry, ReceiverDecl, SystemView, TaskEntry, fifo_size, simple_type_name,
+};
 use syn::{Item, ItemMod, LitInt, LitStr, Type};
 
 use crate::binding::{IpcPool, PhysicalCore};
@@ -901,8 +903,8 @@ pub(crate) fn generate_init_hooks(
     });
 
     // MPU/MMU attributes are per-core: every core configures its own view of
-    // the regions before any shared access (before the user `init` runs).
-    let configure_doc = "Configures this core's view of the IPC regions as Normal, Non-cacheable, \
+    // the pools before any shared access (before the user `init` runs).
+    let configure_doc = "Configures this core's view of the IPC pools as Normal, Non-cacheable, \
          Shareable before any shared access (M3-T3).";
     let mut items = Vec::with_capacity(application.core_ids.len() + 2);
     items.push(syn::parse_quote! {
@@ -990,11 +992,73 @@ pub(crate) fn generate_init_hooks(
     })
 }
 
+/// The distro pool a task FIFO was allocated in, or `None` for a project
+/// without a capability table (M6.9-T6).
+///
+/// Fails when the view names a pool that has no `pools[]` entry: the FIFO view
+/// would then point into memory the distribution never reserved.
+fn pool_of<'a>(view: &'a SystemView, task: &TaskEntry) -> syn::Result<Option<&'a PoolEntry>> {
+    let Some(id) = task.fifo.pool.as_deref() else {
+        return Ok(None);
+    };
+    view.pools
+        .iter()
+        .find(|pool| pool.id == id)
+        .map(Some)
+        .ok_or_else(|| {
+            error(format!(
+                "the synced system view places task `{}` in pool `{id}`, which has no `pools[]` \
+                 entry; run `cargo xbin sync`",
+                task.name
+            ))
+        })
+}
+
+/// Pins a task FIFO to its distro pool (M6.9-T6).
+///
+/// Emits the pool id and shared budget beside the FIFO offset and asserts, at
+/// compile time, that the FIFO still fits the pool. A `system.json` whose pools
+/// moved or shrank since the source was compiled then fails the build instead
+/// of letting the FIFO overlap its neighbour. A project without a capability
+/// table emits nothing.
+fn pool_consts(pool: Option<&PoolEntry>, task: &TaskEntry) -> syn::Result<TokenStream> {
+    let Some(pool) = pool else {
+        return Ok(TokenStream::new());
+    };
+    let id = &pool.id;
+    let budget = pool.budget as usize;
+    let fifo_bytes = usize::try_from(fifo_size(task.fifo.elem_size, task.capacity).ok_or_else(
+        || {
+            error(format!(
+                "the FIFO of task `{}` does not fit the address space; run `cargo xbin sync`",
+                task.name
+            ))
+        },
+    )?)
+    .map_err(|_| {
+        error(format!(
+            "the FIFO of task `{}` is too large; run `cargo xbin sync`",
+            task.name
+        ))
+    })?;
+    Ok(quote! {
+        // M6.9-T6: pin the distro pool this FIFO was allocated in.
+        #[allow(dead_code)]
+        const __RTICX_XBIN_POOL_ID: &str = #id;
+        #[allow(dead_code)]
+        const __RTICX_XBIN_POOL_BUDGET: usize = #budget;
+        const _: () = assert!(
+            __RTICX_XBIN_FIFO_OFFSET + #fifo_bytes <= __RTICX_XBIN_POOL_BUDGET,
+            "`cargo xbin sync` placed the FIFO outside its pool budget",
+        );
+    })
+}
+
 /// Generates the FIFO-zeroing blocks of the `producer` core's initializer.
 ///
-/// The producer of a FIFO is an endpoint of its `(source -> target)` region by
+/// The producer of a FIFO is an endpoint of its `(source -> target)` pool by
 /// construction, so [`rticx_xbin_rt::backend::IpcRegion::base_for`] always
-/// resolves; a topology whose owner core is not an endpoint of the region
+/// resolves; a topology whose owner core is not an endpoint of the pool
 /// initializes correctly (M6-T1).
 fn generate_fifo_inits(
     view: &SystemView,
@@ -1017,13 +1081,14 @@ fn generate_fifo_inits(
         let depth = task.fifo.depth as usize;
         let elem_size = task.fifo.elem_size as usize;
         let elem_align = input_align(view, task)? as usize;
+        let pool = pool_consts(pool_of(view, task)?, task)?;
 
-        let missing_region = format!(
-            "`cargo xbin sync` allocated the `({source} -> {target})` IPC region; re-run it \
+        let missing_pool = format!(
+            "`cargo xbin sync` allocated the `({source} -> {target})` IPC pool; re-run it \
              after changing `rticx.toml`"
         );
         let wrong_core = format!(
-            "the producer core is not an endpoint of the `({source} -> {target})` IPC region"
+            "the producer core is not an endpoint of the `({source} -> {target})` IPC pool"
         );
         blocks.push(quote! {
             {
@@ -1043,10 +1108,11 @@ fn generate_fifo_inits(
                     core::mem::align_of::<#ipc_types::#type_ident>() == #elem_align,
                     "the IDL layout of the spawn input changed; run `cargo xbin sync`",
                 );
+                #pool
 
                 let __rticx_xbin_region = __rticx_xbin_backend
                     .ipc_region(__RTICX_XBIN_SOURCE_CORE, __RTICX_XBIN_TARGET_CORE)
-                    .expect(#missing_region);
+                    .expect(#missing_pool);
                 let __rticx_xbin_base = __rticx_xbin_region
                     .base_for(
                         __rticx_xbin_backend.current_global_core_id(),
@@ -1056,7 +1122,7 @@ fn generate_fifo_inits(
                     .expect(#wrong_core);
 
                 // SAFETY: `system.json` places the FIFO at `offset`, aligned,
-                // inside the region; the producer core runs this before its
+                // inside the pool; the producer core runs this before its
                 // `post_init` can spawn and no consumer acts before a
                 // notification, and `Fifo::init` documents why it must not
                 // race one.
@@ -1092,6 +1158,9 @@ struct ResolvedReceiver<'a> {
     input: Type,
     /// Canonical alignment of the input type (`system.json`).
     elem_align: u32,
+    /// Distro pool the task FIFO lives in (`system.json`; `None` without a
+    /// capability table).
+    pool: Option<&'a PoolEntry>,
 }
 
 /// Resolves `receiver` against the view, checking every field the synced
@@ -1203,11 +1272,12 @@ fn resolve_receiver<'a>(
         local_core: receiver.core,
         input,
         elem_align: input_align(view, task)?,
+        pool: pool_of(view, task)?,
     })
 }
 
 /// Generates the hidden FIFO view of one resolved receiver, mirroring the
-/// sender-side helper but resolving the `base_from_target` view of the region.
+/// sender-side helper but resolving the `base_from_target` view of the pool.
 fn generate_receiver_fifo_view(
     resolved: &ResolvedReceiver<'_>,
     backend: &dyn XbinPassBackend,
@@ -1222,19 +1292,20 @@ fn generate_receiver_fifo_view(
     let depth = task.fifo.depth as usize;
     let elem_size = task.fifo.elem_size as usize;
     let elem_align = resolved.elem_align as usize;
+    let pool = pool_consts(resolved.pool, task)?;
 
     let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
     let fifo_doc = format!(
         "Returns this application's consumer view of the `{}` FIFO, placed at its `({source} -> \
-         {target_core})` region offset from `system.json`.",
+         {target_core})` pool offset from `system.json`.",
         task.name
     );
-    let missing_region = format!(
-        "`cargo xbin sync` allocated the `({source} -> {target_core})` IPC region; re-run it \
+    let missing_pool = format!(
+        "`cargo xbin sync` allocated the `({source} -> {target_core})` IPC pool; re-run it \
          after changing `rticx.toml`"
     );
     let wrong_core = format!(
-        "the current core is not an endpoint of the `({source} -> {target_core})` IPC region"
+        "the current core is not an endpoint of the `({source} -> {target_core})` IPC pool"
     );
 
     Ok(syn::parse_quote! {
@@ -1260,10 +1331,11 @@ fn generate_receiver_fifo_view(
                 core::mem::align_of::<#input_ty>() == #elem_align,
                 "the IDL layout of the spawn input changed; run `cargo xbin sync`",
             );
+            #pool
 
             let __rticx_xbin_region = __rticx_xbin_backend
                 .ipc_region(__RTICX_XBIN_SOURCE_CORE, __RTICX_XBIN_TARGET_CORE)
-                .expect(#missing_region);
+                .expect(#missing_pool);
             let __rticx_xbin_base = __rticx_xbin_region
                 .base_for(
                     __rticx_xbin_backend.current_global_core_id(),
@@ -1273,7 +1345,7 @@ fn generate_receiver_fifo_view(
                 .expect(#wrong_core);
 
             // SAFETY: `system.json` places the FIFO at `offset`, 8-byte
-            // aligned, inside the region; `view_at` documents the remaining
+            // aligned, inside the pool; `view_at` documents the remaining
             // requirements (one producer, one consumer, initialized memory),
             // which the doorbell/dispatcher protocol upholds.
             unsafe {
@@ -1432,20 +1504,21 @@ fn generate_sender(
     let depth = task.fifo.depth as usize;
     let elem_size = task.fifo.elem_size as usize;
     let elem_align = input_align(view, task)? as usize;
+    let pool = pool_consts(pool_of(view, task)?, task)?;
 
     let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
     let ring_fn = format_ident!("__rticx_xbin_ring_{source}_{target_core}");
     let fifo_doc = format!(
         "Returns this application's view of the `{}` FIFO, placed at its `({source} -> \
-         {target_core})` region offset from `system.json`.",
+         {target_core})` pool offset from `system.json`.",
         task.name
     );
-    let missing_region = format!(
-        "`cargo xbin sync` allocated the `({source} -> {target_core})` IPC region; re-run it \
+    let missing_pool = format!(
+        "`cargo xbin sync` allocated the `({source} -> {target_core})` IPC pool; re-run it \
          after changing `rticx.toml`"
     );
     let wrong_core = format!(
-        "the current core is not an endpoint of the `({source} -> {target_core})` IPC region"
+        "the current core is not an endpoint of the `({source} -> {target_core})` IPC pool"
     );
 
     let spawn_doc = format!(
@@ -1486,10 +1559,11 @@ fn generate_sender(
                     __RTICX_XBIN_FIFO_OFFSET % #rt_path::FIFO_ALIGN == 0,
                     "`cargo xbin sync` allocated a misaligned FIFO offset",
                 );
+                #pool
 
                 let __rticx_xbin_region = __rticx_xbin_backend
                     .ipc_region(__RTICX_XBIN_SOURCE_CORE, __RTICX_XBIN_TARGET_CORE)
-                    .expect(#missing_region);
+                    .expect(#missing_pool);
                 let __rticx_xbin_base = __rticx_xbin_region
                     .base_for(
                         __rticx_xbin_backend.current_global_core_id(),
@@ -1499,7 +1573,7 @@ fn generate_sender(
                     .expect(#wrong_core);
 
                 // SAFETY: `system.json` places the FIFO at `offset`, 8-byte
-                // aligned, inside the region; `view_at` documents the remaining
+                // aligned, inside the pool; `view_at` documents the remaining
                 // requirements (one producer, one consumer, initialized memory),
                 // which the doorbell/dispatcher protocol upholds.
                 unsafe {

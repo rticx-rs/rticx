@@ -40,11 +40,11 @@
 //! nothing and receive their generated stubs, the receiver runs two line
 //! dispatchers from its `ipc_dispatchers` pool (one per `(source, priority)`
 //! line) behind two per-pair routers, each producer updates only its own
-//! FIFO, the non-owner producer initializes its own `(2 -> 1)` region before
+//! FIFO, the non-owner producer initializes its own `(2 -> 1)` FIFO before
 //! its `post_init`, and the two sources backpressure independently.
 //!
 //! All applications share one process-global [`MockSystem`] through
-//! `crate::backend_for`, so they see the same regions, doorbells and
+//! `crate::backend_for`, so they see the same pools, doorbells and
 //! ready/epoch state, exactly like three cores in one project.
 //!
 //! [`MockSystem`]: rticx_xbin_mock::MockSystem
@@ -575,7 +575,7 @@ fn three_app_receiver_module() -> syn::ItemMod {
 
                     // -- complete the mock boot. The owner core 0 publishes
                     // the shared state; the non-owner producer core 2
-                    // initializes its own `(2 -> 1)` region before its
+                    // initializes its own `(2 -> 1)` FIFO before its
                     // `post_init` would spawn (M6-T1).
                     crate::producer_0::test_configure();
                     crate::producer_0::test_init_shared();
@@ -585,13 +585,13 @@ fn three_app_receiver_module() -> syn::ItemMod {
 
                     // Dirty the `(2 -> 1)` FIFO through the receiver's view,
                     // then let its producer core initialize it: the topology
-                    // owner (core 0) is not an endpoint of that region.
-                    let region = backend
+                    // owner (core 0) is not an endpoint of that pool.
+                    let pool = backend
                         .ipc_region(2, 1)
-                        .expect("the fixture declares the `2->1` region");
+                        .expect("the fixture declares the `{1, 2}` pool");
                     let sensor_fifo = unsafe {
                         rticx_xbin_rt::Fifo::<ipc_types::EncryptReq, 2usize>::view_at(
-                            region.base_from_target(),
+                            pool.base_from_target(),
                         )
                     };
                     assert!(unsafe { (*sensor_fifo).enqueue(request(99)) }.is_ok());
@@ -602,7 +602,7 @@ fn three_app_receiver_module() -> syn::ItemMod {
                     assert_eq!(
                         unsafe { (*sensor_fifo).len() },
                         0,
-                        "the non-owner producer initializes its own region (M6-T1)"
+                        "the non-owner producer initializes its own pool (M6-T1)"
                     );
                     crate::producer_2::test_mark_ready();
 
@@ -752,7 +752,7 @@ fn two_app_system() -> String {
 
 /// Builds the three-application fixture view (M6-T1): `app-m7` (global core 0)
 /// and `app-m5` (global core 2) each spawn onto `app-m4` (global core 1)
-/// through their own `(source -> target)` region, priority line and doorbell.
+/// through their own `(source -> target)` pool, priority line and doorbell.
 fn three_app_system() -> String {
     let mut view = SystemView::empty("0.2");
     view.apps = vec![
@@ -953,8 +953,8 @@ fn cargo() -> PathBuf {
 }
 
 /// Writes the throwaway `#![no_main]` binary executing the expansions of
-/// `modules` (file name -> expansion) over the mock system holding `regions`.
-fn write_project(root: &Path, modules: &[(&str, &str)], regions: &[(u32, u32)]) {
+/// `modules` (file name -> expansion) over the mock system holding `pools`.
+fn write_project(root: &Path, modules: &[(&str, &str)], pools: &[(u32, u32)]) {
     let rt = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../rticx-xbin-rt")
         .canonicalize()
@@ -1005,11 +1005,11 @@ fn write_project(root: &Path, modules: &[(&str, &str)], regions: &[(u32, u32)]) 
              static SYSTEM: LazyLock<MockSystem> = LazyLock::new(|| {\n\
                  let mut system = MockSystem::new();\n",
     );
-    for (source, target) in regions {
+    for (core_a, core_b) in pools {
         main.push_str(&format!(
             "        system\n\
-             \x20           .add_region({source}, {target}, 4096)\n\
-             \x20           .expect(\"the fixture declares the `{source}->{target}` region\");\n"
+             \x20           .add_pool({core_a}, {core_b}, 4096)\n\
+             \x20           .expect(\"the fixture declares the `{{{core_a}, {core_b}}}` pool\");\n"
         ));
     }
     main.push_str(
@@ -1171,7 +1171,7 @@ fn three_applications_spawn_through_their_own_routers() {
     );
     assert!(
         second.contains("__rticx_xbin_init_fifos_core0"),
-        "the non-owner producer does not initialize its region: {second}"
+        "the non-owner producer does not initialize its pool: {second}"
     );
     assert!(
         !second.contains("__rticx_xbin_init_shared"),
@@ -1210,7 +1210,7 @@ fn three_applications_spawn_through_their_own_routers() {
             ("producer_2", &second),
             ("receiver", &receiver),
         ],
-        &[(0, 1), (2, 1)],
+        &[(0, 1), (1, 2)],
     );
     run_project(&project, "xbin: e2e three-app ok", "three-app");
 }

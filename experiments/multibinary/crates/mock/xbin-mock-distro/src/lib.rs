@@ -108,9 +108,9 @@ impl XbinPassBackend for MockDistroBackend {
 /// (M6.9-T1).
 ///
 /// This is the mock distribution's capability binding, the counterpart of the
-/// mock runtime's six directional regions. The mock has a single address
+/// mock runtime's three shared pools. The mock has a single address
 /// space, so both endpoints of a dual see its base at the same address; the
-/// budget matches the runtime's 4096-byte regions. The entries are ordered by
+/// budget matches the runtime's 4096-byte pools. The entries are ordered by
 /// ascending peer for determinism.
 fn fixture_pools(local: PhysicalCore) -> Vec<IpcPool> {
     /// Bytes reserved for both directions of one dual.

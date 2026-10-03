@@ -394,8 +394,23 @@ fn sender_codegen_snapshot() {
         "FIFO view constants",
     );
     assert!(
-        generated.contains("`cargo xbin sync` allocated the `(0 -> 1)` IPC region"),
+        generated.contains("`cargo xbin sync` allocated the `(0 -> 1)` IPC pool"),
         "{generated}"
+    );
+
+    // The FIFO is pinned to its distro pool: the id and shared budget are
+    // emitted as constants and the FIFO is asserted to fit (M6.9-T6).
+    assert!(
+        generated.contains("__RTICX_XBIN_POOL_ID : & str = \"p01\""),
+        "the pool id is not pinned: {generated}"
+    );
+    assert!(
+        generated.contains("__RTICX_XBIN_POOL_BUDGET : usize = 4096usize"),
+        "the pool budget is not pinned: {generated}"
+    );
+    assert!(
+        generated.contains("__RTICX_XBIN_FIFO_OFFSET + 100usize <= __RTICX_XBIN_POOL_BUDGET"),
+        "the FIFO is not asserted to fit its pool: {generated}"
     );
 
     // ---- sender API ----
@@ -1543,6 +1558,22 @@ fn a_view_task_without_receiver_declaration_is_rejected() {
             "has task `OtherTask` for application `app-m4`, but the source declares \
                         no cross-binary receiver for it"
         ),
+        "{error}"
+    );
+    assert!(error.contains("cargo xbin sync"), "{error}");
+}
+
+#[test]
+fn a_task_in_an_unknown_pool_is_rejected() {
+    let stale = system_with(|view| {
+        view["tasks"][0]["fifo"]["pool"] = serde_json::json!("missing");
+    });
+    let (_dir, path) = write_system(&stale);
+    let error = generate(&path)
+        .expect_err("a task in an unknown pool must be rejected")
+        .to_string();
+    assert!(
+        error.contains("places task `EncryptTask` in pool `missing`, which has no `pools[]` entry"),
         "{error}"
     );
     assert!(error.contains("cargo xbin sync"), "{error}");

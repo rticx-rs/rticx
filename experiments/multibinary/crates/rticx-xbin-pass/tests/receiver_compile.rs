@@ -261,8 +261,8 @@ fn receiver_app() -> syn::ItemMod {
                     std::sync::LazyLock::new(|| {
                         let mut system = rticx_xbin_mock::MockSystem::new();
                         system
-                            .add_region(0, 1, 4096)
-                            .expect("mock IPC region fits");
+                            .add_pool(0, 1, 4096)
+                            .expect("mock IPC pool fits");
                         system
                     });
                 SYSTEM.backend(1)

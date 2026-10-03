@@ -1,7 +1,7 @@
 //! Mock distribution/backend for the RTICX multi-binary extension host tests.
 //!
 //! [`MockSystem`] owns the in-process stand-in for a project's
-//! shared-memory regions, doorbells and [`SharedState`]. Hand one
+//! shared-memory pools, doorbells and [`SharedState`]. Hand one
 //! [`MockBackend`] per simulated core to the test threads:
 //!
 //! ```
@@ -9,7 +9,7 @@
 //! use rticx_xbin_rt::backend::CrossBinBackend;
 //!
 //! let mut system = MockSystem::new();
-//! system.add_region(0, 1, 4096).unwrap();
+//! system.add_pool(0, 1, 4096).unwrap();
 //!
 //! let sender = system.backend(0);
 //! let receiver = system.backend(1);
@@ -18,8 +18,10 @@
 //! assert_eq!(receiver.current_global_core_id(), 1);
 //! ```
 //!
-//! A region is backed by an 8-byte-aligned, zeroed in-process array (the
-//! "array" variant of the plan's `mmap`/array choice). The doorbell transport
+//! A pool is backed by an 8-byte-aligned, zeroed in-process array (the
+//! "array" variant of the plan's `mmap`/array choice) and carries the FIFOs of
+//! **both** directions of its dual: `ipc_region(a, b)` and `ipc_region(b, a)`
+//! return the same pool (M6.9-T6). The doorbell transport
 //! is the per-`(source -> target)` **pair message word** of the M6.5 router
 //! ([`MockBackend::doorbell_send`], [`MockBackend::take_message`],
 //! [`MockBackend::router_wait`]): it carries the task id a producer publishes
@@ -42,14 +44,14 @@ use rticx_xbin_rt::{FIFO_ALIGN, SharedState};
 
 const _: () = assert!(
     core::mem::align_of::<u64>() >= FIFO_ALIGN,
-    "the region backing array must be FIFO_ALIGN-aligned"
+    "the pool backing array must be FIFO_ALIGN-aligned"
 );
 
-/// A project-wide mock: the shared regions, doorbells and ready/epoch state
+/// A project-wide mock: the shared pools, doorbells and ready/epoch state
 /// that every simulated core of one project sees in common.
 ///
-/// Configure the regions with [`MockSystem::add_region`] *before* handing out
-/// any [`MockBackend`] ([`MockSystem::backend`]), because the region table is
+/// Configure the pools with [`MockSystem::add_pool`] *before* handing out
+/// any [`MockBackend`] ([`MockSystem::backend`]), because the pool table is
 /// then frozen and shared. `MockSystem` is cheap to clone; every clone refers
 /// to the same underlying memory.
 pub struct MockSystem {
@@ -57,63 +59,79 @@ pub struct MockSystem {
 }
 
 struct SystemInner {
-    regions: BTreeMap<(u32, u32), RegionBacking>,
+    /// One backing per unordered core pair, keyed by `(core_a, core_b)` with
+    /// `core_a < core_b`.
+    pools: BTreeMap<(u32, u32), PoolBacking>,
     /// Per-`(source -> target)` pair message words of the M6.5 doorbell
     /// routers, keyed by `(source, target)`.
     pair_doorbells: Mutex<BTreeMap<(u32, u32), Arc<PairDoorbell>>>,
     state: SharedState,
 }
 
-struct RegionBacking {
+struct PoolBacking {
     /// Backing allocation; `base` points at its start and keeps it alive.
     _storage: Vec<u64>,
     base: usize,
     size: usize,
 }
 
+/// Orders a dual's cores as `(core_a, core_b)` with `core_a < core_b`.
+fn ordered_pair(first: u32, second: u32) -> (u32, u32) {
+    if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
 impl MockSystem {
-    /// Creates an empty mock system: no regions, no doorbells, a fresh
+    /// Creates an empty mock system: no pools, no doorbells, a fresh
     /// (initialized, empty) [`SharedState`].
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(SystemInner {
-                regions: BTreeMap::new(),
+                pools: BTreeMap::new(),
                 pair_doorbells: Mutex::new(BTreeMap::new()),
                 state: SharedState::new(),
             }),
         }
     }
 
-    /// Declares the `source -> target` IPC region with `size` bytes of
-    /// zeroed, [`FIFO_ALIGN`]-aligned shared memory.
+    /// Declares the shared pool of the `{core_a, core_b}` dual with `size`
+    /// bytes of zeroed, [`FIFO_ALIGN`]-aligned shared memory.
     ///
-    /// Both cores see the region at the same base address (the mock has a
-    /// single address space); the region must be configured before any
-    /// backend handle is taken.
-    pub fn add_region(&mut self, source: u32, target: u32, size: usize) -> Result<(), MockError> {
-        if source == target {
-            return Err(MockError::SelfRegion { core: source });
+    /// Both directions of the dual share this one block (M6.9-T6); the order
+    /// of `core_a`/`core_b` is irrelevant. Both cores see the pool at the same
+    /// base address (the mock has a single address space); the pool must be
+    /// configured before any backend handle is taken.
+    pub fn add_pool(&mut self, core_a: u32, core_b: u32, size: usize) -> Result<(), MockError> {
+        if core_a == core_b {
+            return Err(MockError::SelfPool { core: core_a });
         }
         if size < FIFO_ALIGN {
-            return Err(MockError::RegionTooSmall {
+            return Err(MockError::PoolTooSmall {
                 size,
                 minimum: FIFO_ALIGN,
             });
         }
+        let pair = ordered_pair(core_a, core_b);
         let inner = Arc::get_mut(&mut self.inner)
-            .expect("MockSystem regions must be configured before any mock backend is handed out");
-        if inner.regions.contains_key(&(source, target)) {
-            return Err(MockError::DuplicateRegion { source, target });
+            .expect("MockSystem pools must be configured before any mock backend is handed out");
+        if inner.pools.contains_key(&pair) {
+            return Err(MockError::DuplicatePool {
+                core_a: pair.0,
+                core_b: pair.1,
+            });
         }
 
         let bytes = size.next_multiple_of(FIFO_ALIGN);
         let words = vec![0u64; bytes / core::mem::size_of::<u64>()];
         let base = words.as_ptr() as usize;
         debug_assert_eq!(base % FIFO_ALIGN, 0);
-        inner.regions.insert(
-            (source, target),
-            RegionBacking {
+        inner.pools.insert(
+            pair,
+            PoolBacking {
                 _storage: words,
                 base,
                 size,
@@ -225,9 +243,9 @@ impl CrossBinBackend for MockBackend {
     fn ipc_region(&self, source: u32, target: u32) -> Option<IpcRegion> {
         self.system
             .inner
-            .regions
-            .get(&(source, target))
-            .map(|region| IpcRegion::new(region.base, region.base, region.size))
+            .pools
+            .get(&ordered_pair(source, target))
+            .map(|pool| IpcRegion::new(pool.base, pool.base, pool.size))
     }
 
     fn shared_state(&self) -> &SharedState {
@@ -298,23 +316,23 @@ impl PairDoorbell {
     }
 }
 
-/// Error returned by [`MockSystem::add_region`].
+/// Error returned by [`MockSystem::add_pool`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MockError {
-    /// `source` and `target` are the same core.
-    SelfRegion {
+    /// `core_a` and `core_b` are the same core.
+    SelfPool {
         /// The offending core id.
         core: u32,
     },
-    /// The `(source, target)` region has already been declared.
-    DuplicateRegion {
-        /// The source (producer) core id.
-        source: u32,
-        /// The target (consumer) core id.
-        target: u32,
+    /// The dual's pool has already been declared.
+    DuplicatePool {
+        /// Lower core id of the dual.
+        core_a: u32,
+        /// Higher core id of the dual.
+        core_b: u32,
     },
-    /// The region is smaller than one aligned FIFO header.
-    RegionTooSmall {
+    /// The pool is smaller than one aligned FIFO header.
+    PoolTooSmall {
         /// The requested size in bytes.
         size: usize,
         /// The smallest accepted size in bytes.
@@ -325,15 +343,18 @@ pub enum MockError {
 impl fmt::Display for MockError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MockError::SelfRegion { core } => {
-                write!(f, "region connects core {core} to itself")
+            MockError::SelfPool { core } => {
+                write!(f, "pool connects core {core} to itself")
             }
-            MockError::DuplicateRegion { source, target } => {
-                write!(f, "region `{source}->{target}` is declared more than once")
+            MockError::DuplicatePool { core_a, core_b } => {
+                write!(
+                    f,
+                    "the pool of the `{core_a}<->{core_b}` dual is declared more than once"
+                )
             }
-            MockError::RegionTooSmall { size, minimum } => write!(
+            MockError::PoolTooSmall { size, minimum } => write!(
                 f,
-                "region size {size} is below the minimum of {minimum} bytes"
+                "pool size {size} is below the minimum of {minimum} bytes"
             ),
         }
     }

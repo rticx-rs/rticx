@@ -82,7 +82,7 @@ fn cargo_xbin_build_builds_the_fixture_applications() {
     assert!(
         binary_contains(
             &binaries.join("m7"),
-            "`cargo xbin sync` allocated the `(0 -> 1)` IPC region",
+            "`cargo xbin sync` allocated the `(0 -> 1)` IPC pool",
         ),
         "the sender binary does not contain the generated FIFO view"
     );

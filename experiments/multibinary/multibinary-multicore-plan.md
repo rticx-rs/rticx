@@ -2,13 +2,14 @@
 
 **Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
 native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, ready/epoch, docs), **M6.9-T1..T5** (distro capability
+routing, multi-source, ready/epoch, docs), **M6.9-T1..T6** (distro capability
 binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
-budget, `system.json` schema 2) complete. Remaining work:
-**M6.9-T6..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
+budget, `system.json` schema 2, pool-aware codegen/runtime) complete. Remaining
+work:
+**M6.9-T7..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
 acceptance + extraction) and **M8-T1** (advisory CI), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-03 (M6.9-T5; compacted: completed milestone task lists
+**Last updated:** 2026-10-03 (M6.9-T6; compacted: completed milestone task lists
 removed).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
@@ -197,12 +198,12 @@ the root generation.
 | | `priority.rs` | Build-phase priority-line validation over raw sw/async declarations + view receivers |
 | `rticx-xbin-rt` | `fifo.rs` | Atomic SPSC ring (`Fifo`), producer/consumer split, `view_at` placement |
 | | `state.rs` | `SharedState` (magic/ready bitmap/epoch) and spawn-side `ReadyCache` |
-| | `backend.rs` | `CrossBinBackend` + `IpcRegion` contract (regions, core id, cache/MPU) |
+| | `backend.rs` | `CrossBinBackend` + `IpcRegion` contract (pools, core id, cache/MPU) |
 | | `lib.rs` | `CrossCoreMessage` marker trait, `Queue` re-export for ready queues |
 | `rticx-xbin-driver` | `cli.rs` | `cargo xbin` CLI surface |
 | | `commands.rs` | `sync` (collect, merge, allocate, emit, generate) and `build` (= sync + per-app build) |
 | | `project.rs` | Project discovery (`rticx.toml` upward from the manifest dir) |
-| `rticx-xbin-mock` | `lib.rs` | `MockSystem`: in-process aligned IPC regions, per-pair doorbell message word, ready/epoch over one `SharedState`, per-handle `current_global_core_id` |
+| `rticx-xbin-mock` | `lib.rs` | `MockSystem`: in-process aligned IPC pools, per-pair doorbell message word, ready/epoch over one `SharedState`, per-handle `current_global_core_id` |
 
 Generated code reaches the runtime through the distribution's `rt_path` and a
 distribution-injected backend helper; no public API of the root workspace changes.
@@ -216,7 +217,7 @@ workspace crates and (for `e2e`/`three-app`) on the shared mock distribution.
 |---|---|---|
 | `fixtures/metadata/` | Two apps (`app-m7` producer core 0, `app-m4` receiver core 1) + a minimal `metadata-macro` `#[app]` stand-in that runs only the xbin metadata pass | `cargo xbin sync` end to end: metadata collection, merge/validation, `system.json` emission and `ipc-types/` generation. Driven by the driver's `tests/fixture.rs`; the generated `ipc-types/` crate is checked in like a real project |
 | `fixtures/e2e/` | Same two apps, with the mock **distribution** (`xbin-mock-distro` + `xbin-mock-runtime`) running the full core pass on `MockCoreBackend` and the xbin pass against an in-process backend | `cargo xbin build` over a real phase-1/phase-2 cycle (driver `tests/e2e.rs`); phase 2 generates the sender `cross_spawn`, the receiver dispatcher and the init hooks and links both host binaries. The pass crate's `tests/e2e_runtime.rs` expands both apps into one host binary and **runs** the generated chain: `cross_spawn` → ring function → router ISR → pended line dispatcher → `exec`, plus FIFO backpressure and coalesced/duplicate notifications |
-| `fixtures/three-app/` | Three apps: producers `app-m7` (global 0) and `app-m5` (global 2) spawn onto receiver `app-m4` (global 1) through two regions, two priority lines and two per-pair routers | Multi-source support: driver `tests/three_app.rs` builds it with `cargo xbin build`; `tests/e2e_runtime.rs` runs all three apps in one process (per-pair routers/dispatcher lines, per-source backpressure, and the non-owner producer initializing its own region); pass `tests/priority_lines.rs` covers build-phase priority-line validation |
+| `fixtures/three-app/` | Three apps: producers `app-m7` (global 0) and `app-m5` (global 2) spawn onto receiver `app-m4` (global 1) through two shared pools, two priority lines and two per-pair routers | Multi-source support: driver `tests/three_app.rs` builds it with `cargo xbin build`; `tests/e2e_runtime.rs` runs all three apps in one process (per-pair routers/dispatcher lines, per-source backpressure, and the non-owner producer initializing its own pool); pass `tests/priority_lines.rs` covers build-phase priority-line validation |
 
 Supporting negative/edge coverage lives next to the crates rather than in a fixture:
 driver `tests/negative.rs` (missing sync, stale view/source, priority conflicts,
@@ -446,14 +447,15 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
      the target application's own sw/async tasks are not visible here and are
      checked by the pass at `build` (see §8);
    - every referenced type exists in the IDL and is cross-core safe;
-   - total per-task FIFO bytes fit each `(source → target)` region;
+   - total per-task FIFO bytes fit each dual's shared pool budget (both
+     directions together, M6.9-T4);
    - global core ids consistent across applications and `rticx.toml`.
 5. Allocate per-task FIFO offsets deterministically:
-   - sort by `(source_global, target_global, task_name)`;
+   - pools keyed by `(core_a, core_b)`; within a pool, tasks in global task order;
    - align each FIFO to 8 bytes (indices cache-line padded in the runtime type);
    - depth = `capacity + 1` (ring buffer wastes one slot; effective capacity is
      exact because the dispatcher drains the FIFO directly);
-   - hard error if the region overflows.
+   - hard error if the pool overflows.
 6. Write `target/rticx-xbin/system.json`.
 7. Generate/update `ipc-types/` (types, marker impls, consts, asserts, `LAYOUT_HASH`);
    report if changed.
@@ -573,10 +575,10 @@ longer requires cross-task declarations:
     `Err(Some(input))` (not enqueued), matching existing `cross_spawn`.
 - **Init hooks** (through the backend):
   - `init_shared` on the owner core (set magic/epoch);
-  - every core zeroes the ring indices of the FIFOs it **produces** (the outbound
-    half of each region it is the source of) at `BeforePostInit`, before its
+  - every core zeroes the ring indices of the FIFOs it **produces** (its
+    outbound half of each dual's shared pool) at `BeforePostInit`, before its
     `post_init` can spawn; topologies whose owner core is not an endpoint of a
-    region initialize correctly;
+    pool initialize correctly;
   - `mark_ready(core)` at the end of each core's `post_init`; the router IRQs are
     already enabled and prioritized by the core pass's used-IRQ machinery, so no
     per-line doorbell arming step remains;
@@ -615,7 +617,9 @@ mock backend.
 
 **Runtime half — `rticx_xbin_rt::backend::CrossBinBackend`:**
 
-- `ipc_region()` — per `(source, target)`, per-core base views and size.
+- `ipc_region()` — the dual's shared pool as seen through `(source, target)`:
+  each endpoint's base view and the shared budget. Both directions of a dual
+  return the same pool (M6.9-T6).
 - `configure_shared_memory()` — configure Normal, Non-cacheable, Shareable (MPU).
   Device/Strongly-ordered is forbidden (`ldrex`/`strex` are invalid there).
 - optional `clean_range` / `invalidate_range` for cacheable-region fallback.
@@ -674,7 +678,7 @@ The router IRQ is enabled/prioritized by the core pass's used-IRQ machinery (no
   into one process over a shared `MockSystem`: two producer cores each spawning onto
   the receiver core through their own router and dispatcher line, auto-stub
   generation for an application with zero declarations, per-producer `BeforePostInit`
-  FIFO zeroing of a region whose owner is not an endpoint, ordered draining of both
+  FIFO zeroing of a pool whose owner is not an endpoint, ordered draining of both
   FIFOs and per-source backpressure. The single-pair harness additionally drives the
   full path `cross_spawn` → ring function → router ISR → pended line dispatcher →
   `exec`, including coalesced notifications.
@@ -848,15 +852,23 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   until T8 renders real pool panels. Golden/host fixtures and `alloc.rs` updated
   (`proto/tests/system.rs`, `proto/tests/alloc.rs`, the pass codegen/init-hooks/
   priority-line fixtures, the driver fixture/three-app assertions).
-- [ ] **M6.9-T6 — Codegen and runtime.** `CrossBinBackend::ipc_region(source,
-  target)` keeps its signature and documented semantics: it returns the dual's
-  pool views (`base_from_source`/`base_from_target` = each endpoint's view);
-  both directions return the same pool. Generated FIFO views/init hooks read the
-  pool-relative offsets and may pin the pool id/budget in const assertions. Mock
-  runtime exposes shared pools. The existing e2e/three-app runtime harnesses pass
-  with shared budgets.
+- [x] **M6.9-T6 — Codegen and runtime.** `CrossBinBackend::ipc_region(source,
+  target)` keeps its signature but now returns the dual's shared pool:
+  `base_from_source`/`base_from_target` are each endpoint's view and both
+  directions return the same pool with the same shared budget (documented on
+  `IpcRegion`). Generated FIFO views and init hooks keep reading the
+  pool-relative offsets and additionally pin the task's distro pool: they emit
+  `__RTICX_XBIN_POOL_ID` / `__RTICX_XBIN_POOL_BUDGET` and const-assert the FIFO
+  still fits the budget, and a task naming a pool absent from `pools[]` is a
+  hard `sync`-naming error. Stale-view panic messages now say "IPC pool". The
+  mock runtime exposes pools (`MockSystem::add_pool(core_a, core_b, size)`,
+  unordered duals; both directions resolve to the one backing) and the fixture
+  runtime declares the three `{0,1}`/`{1,2}`/`{0,2}` pools; the
+  codegen/init-hooks/e2e harnesses declare pools instead of per-direction
+  regions and pass with the shared budgets. Tests: mock pool-table/dual-sharing
+  unit tests, the pinned-const sender snapshot, and the unknown-pool rejection.
 - [ ] **M6.9-T7 — ELF verification.** Add `cargo xbin build --verify-elf`
-  (default **on**; `--no-verify-elf` opts out) and a standalone
+  (default **off**) and a standalone
   `cargo xbin verify` for the plain-`cargo build` workflow. The driver parses the
   linked ELF (the `object` crate) and asserts that no `SHF_ALLOC` section
   (`[addr, addr + size)`) intersects any pool view of that application's cores,

@@ -155,11 +155,8 @@ fn owner_app() -> syn::ItemMod {
                     std::sync::LazyLock::new(|| {
                         let mut system = MockSystem::new();
                         system
-                            .add_region(0, 1, 4096)
-                            .expect("the mock IPC region fits");
-                        system
-                            .add_region(1, 0, 4096)
-                            .expect("the mock reverse region fits");
+                            .add_pool(0, 1, 4096)
+                            .expect("the mock IPC pool fits");
                         system
                     });
                 &SYSTEM
@@ -278,18 +275,19 @@ fn write_project(root: &Path, expanded: &str) {
               let system = app::test_system();\n\
               assert_eq!(system.state().epoch(), 0, \"fresh mock state\");\n\
               app::test_configure_shared_memory();\n\n\
-              // Dirty both task FIFOs: each is produced by a different core,\n\
-              // so the owner's `init_shared` must leave both untouched and\n\
-              // `init_fifos_core0` must zero exactly the `0 -> 1` FIFO.\n\
-             let out_region = system.backend(0).ipc_region(0, 1).expect(\"region 0->1\");\n\
+              // Dirty both task FIFOs: they live in the same shared `p01`\n\
+              // pool but are produced by different cores, so the owner's\n\
+              // `init_shared` must leave both untouched and `init_fifos_core0`\n\
+              // must zero exactly the `0 -> 1` FIFO.\n\
+             let out_pool = system.backend(0).ipc_region(0, 1).expect(\"pool {0, 1}\");\n\
              // `EncryptTask` is the second task of the shared `p01` pool.\n\
              let out_fifo = unsafe {\n\
-                 Fifo::<ipc_types::EncryptReq, 3usize>::view_at(out_region.base_from_source() + 88)\n\
+                 Fifo::<ipc_types::EncryptReq, 3usize>::view_at(out_pool.base_from_source() + 88)\n\
              };\n\
-             let in_region = system.backend(0).ipc_region(1, 0).expect(\"region 1->0\");\n\
+             let in_pool = system.backend(0).ipc_region(1, 0).expect(\"pool {1, 0}\");\n\
              // `DecryptTask` is the first task of the shared `p01` pool.\n\
              let in_fifo = unsafe {\n\
-                 Fifo::<ipc_types::EncryptReq, 2usize>::view_at(in_region.base_from_target())\n\
+                 Fifo::<ipc_types::EncryptReq, 2usize>::view_at(in_pool.base_from_target())\n\
              };\n\
              assert!(unsafe { (*out_fifo).enqueue(msg(1)) }.is_ok());\n\
              assert!(unsafe { (*in_fifo).enqueue(msg(2)) }.is_ok());\n\

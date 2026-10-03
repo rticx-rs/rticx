@@ -5,8 +5,8 @@
 //! A distribution implements it to supply the target-specific pieces of a
 //! multi-binary project:
 //!
-//! - the shared-memory region of every `(source -> target)` direction
-//!   ([`CrossBinBackend::ipc_region`]);
+//! - the shared-memory pool of every unordered core dual, viewed through a
+//!   direction ([`CrossBinBackend::ipc_region`]);
 //! - the identity of the running core
 //!   ([`CrossBinBackend::current_global_core_id`]);
 //! - the shared ready/epoch state ([`CrossBinBackend::shared_state`], which
@@ -20,11 +20,11 @@
 //!
 //! # Shared-memory requirements
 //!
-//! Every IPC region must be mapped **Normal, Non-cacheable, Shareable**
+//! Every IPC pool must be mapped **Normal, Non-cacheable, Shareable**
 //! memory. Distributions configure that mapping themselves (MPU/MMU) in
 //! [`CrossBinBackend::configure_shared_memory`]; the method's default
 //! implementation is empty, which is correct only on hosts and targets
-//! without a data cache over the region.
+//! without a data cache over the pool.
 //!
 //! **Device and Strongly-ordered memory is forbidden.** Atomics provide
 //! ordering, not cache flushing: the `Release`/`Acquire` pairs of
@@ -69,13 +69,19 @@
 
 use crate::SharedState;
 
-/// A shared-memory region carrying every FIFO of one `(source -> target)`
+/// One dual's shared IPC pool, as seen through a `(source -> target)`
 /// direction.
 ///
-/// The two base addresses are the addresses through which each endpoint core
-/// sees the same physical memory; aliases are allowed. Use
-/// [`CrossBinBackend::ipc_region`] to obtain the region a distribution
-/// declared in `rticx.toml`.
+/// The pool is the memory block the distribution reserves for a pair of
+/// cores; its FIFOs, of **both** directions, share one budget (see
+/// `multibinary-multicore-plan.md` §7.1/M6.9-T4). The two base addresses are
+/// the addresses through which each endpoint core sees the same physical
+/// memory; aliases are allowed.
+///
+/// [`CrossBinBackend::ipc_region`] returns the same pool for both directions
+/// of a dual: `ipc_region(a, b)` and `ipc_region(b, a)` carry the same memory,
+/// with the base views swapped (`base_from_source` of one is
+/// `base_from_target` of the other) and the same [`Self::size`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IpcRegion {
     base_from_source: usize,
@@ -93,17 +99,17 @@ impl IpcRegion {
         }
     }
 
-    /// Returns the region base address as seen by the source (producer) core.
+    /// Returns the pool base address as seen by the source (producer) core.
     pub const fn base_from_source(&self) -> usize {
         self.base_from_source
     }
 
-    /// Returns the region base address as seen by the target (consumer) core.
+    /// Returns the pool base address as seen by the target (consumer) core.
     pub const fn base_from_target(&self) -> usize {
         self.base_from_target
     }
 
-    /// Returns the region size in bytes.
+    /// Returns the pool's shared budget in bytes (both directions together).
     pub const fn size(&self) -> usize {
         self.size
     }
@@ -131,12 +137,13 @@ pub trait CrossBinBackend {
     /// Returns the global core id of the core this backend instance runs on.
     fn current_global_core_id(&self) -> u32;
 
-    /// Returns the IPC region declared for the `source -> target` direction,
-    /// or `None` when the distribution provides none.
+    /// Returns the shared IPC pool of the `source -> target` direction, or
+    /// `None` when the distribution provides none.
     ///
-    /// The region is Normal, Non-cacheable, Shareable memory carrying the
-    /// per-task FIFOs of that direction (see the [module
-    /// documentation](self)).
+    /// Both directions of a dual return the same pool (same memory, swapped
+    /// base views and the same shared budget; see [`IpcRegion`]). The pool is
+    /// Normal, Non-cacheable, Shareable memory carrying the FIFOs of **both**
+    /// directions (see the [module documentation](self)).
     fn ipc_region(&self, source: u32, target: u32) -> Option<IpcRegion>;
 
     /// Returns the shared ready/epoch state.
@@ -181,16 +188,16 @@ pub trait CrossBinBackend {
         self.shared_state().epoch()
     }
 
-    /// Configures every IPC region as Normal, Non-cacheable, Shareable
+    /// Configures every IPC pool as Normal, Non-cacheable, Shareable
     /// memory.
     ///
     /// The default implementation is empty (no-op), which is correct on hosts
-    /// and on targets whose data cache does not cover the region, or when the
+    /// and on targets whose data cache does not cover the pool, or when the
     /// cache hooks below are overridden.
     ///
     /// **Device and Strongly-ordered memory is forbidden.** Exclusive
     /// accesses (`ldrex`/`strex` on Cortex-M) are not valid there, so the
-    /// region's atomics would fault or lose atomicity.
+    /// pool's atomics would fault or lose atomicity.
     fn configure_shared_memory(&self) {}
 
     /// Cleans the data cache for `[addr, addr + len)`: the fallback for a
