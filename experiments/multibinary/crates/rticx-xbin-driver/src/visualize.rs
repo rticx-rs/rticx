@@ -2,13 +2,18 @@
 //! view.
 //!
 //! The driver normalizes the emitted [`SystemView`] into a small presentation
-//! model (cores with the cross-binary tasks they execute and spawn, regions
-//! with their FIFO buffers, and the interaction pairs) and embeds it as JSON in
-//! a static HTML document. The inline script lays the page out and draws the
+//! model (cores with the cross-binary tasks they execute and spawn, pools with
+//! their FIFO buffers, and the interaction pairs) and embeds it as JSON in a
+//! static HTML document. The inline script lays the page out and draws the
 //! arrows; the driver itself never depends on a browser.
 //!
-//! Until M6.9-T8 replaces them with pool panels, the region panels are derived
-//! by expanding each `system.json` pool into its two per-direction views.
+//! Pools are rendered one panel per pool (M6.9-T8): both directions of a dual
+//! share a single distro pool, so a panel carries every FIFO of the dual at its
+//! pool-relative offset, colored by its producer core. The bar is scaled to the
+//! occupied extent rather than the whole budget, so the FIFOs stay readable
+//! instead of collapsing into a sliver. A FIFO that names no pool (a project
+//! whose manifests carry no capability table) falls back to a synthetic
+//! per-direction panel so it stays visible.
 //!
 //! Keeping the normalization in Rust is deliberate: `system.json` only carries
 //! cross-binary tasks today, but when it later also carries same-binary
@@ -55,7 +60,7 @@ struct ViewModel {
     topology_hash: String,
     layout_hash: String,
     cores: Vec<CoreCard>,
-    regions: Vec<RegionPanel>,
+    pools: Vec<PoolPanel>,
     pairs: Vec<PairFilter>,
     /// Every cross-binary task, flat and ordered; the script groups them by
     /// `pair` to build the filter tree.
@@ -67,7 +72,7 @@ struct ViewModel {
 struct Stats {
     cores: usize,
     tasks: usize,
-    regions: usize,
+    pools: usize,
     doorbells: usize,
 }
 
@@ -101,27 +106,38 @@ struct TaskCard {
     doorbell: Option<u32>,
 }
 
-/// One `(source -> target)` shared-memory region and its FIFO allocation.
+/// One distro IPC pool (a *dual*) and the FIFOs of both directions inside it.
 #[derive(Debug, Serialize)]
-struct RegionPanel {
-    source: u32,
-    target: u32,
+struct PoolPanel {
+    /// Distro pool id; `None` for a synthetic panel covering FIFOs whose
+    /// project bound no distro capability table (no `pool` in the view).
+    id: Option<String>,
+    core_a: u32,
+    core_b: u32,
     pair: String,
-    direction: String,
-    base_from_source: u32,
-    base_from_target: u32,
-    size: u32,
-    /// High-water mark of the allocated FIFOs, in bytes.
-    used_bytes: u64,
+    base_from_a: u32,
+    base_from_b: u32,
+    /// Bytes the distro reserves for both directions of the dual.
+    budget: u32,
+    /// Bytes occupied by both directions' FIFOs.
+    used: u32,
+    /// Scale the bar is drawn against: the occupied extent (at least `used`
+    /// and the end of the last buffer), so the FIFOs fill the bar instead of
+    /// collapsing into a sliver of the whole pool budget.
+    extent: u32,
     buffers: Vec<BufferCard>,
 }
 
-/// One task FIFO inside a region.
+/// One task FIFO inside a pool.
 #[derive(Debug, Serialize)]
 struct BufferCard {
     task_id: u32,
     task_name: String,
     input_type: String,
+    /// Producer (spawner) global core id.
+    source: u32,
+    /// Consumer (receiver) global core id.
+    target: u32,
     offset: u32,
     total_bytes: u64,
     elem_size: u32,
@@ -237,84 +253,109 @@ impl ViewModel {
             });
         }
 
-        // Transitional (M6.9-T5): `system.json` carries pools; until M6.9-T8
-        // renders pool panels, expand each pool into its two per-direction
-        // panels so the existing model and script stay unchanged.
-        struct Direction {
-            source: u32,
-            target: u32,
-            base_from_source: u32,
-            base_from_target: u32,
-            size: u32,
+        // One panel per distro pool (M6.9-T8): both directions of a dual share
+        // a single pool, so the panel carries every FIFO of the dual at its
+        // pool-relative offset. A FIFO naming no (or an unknown) pool falls
+        // back to a synthetic per-direction panel so it stays visible.
+        let mut pool_index: BTreeMap<&str, usize> = BTreeMap::new();
+        for (index, pool) in view.pools.iter().enumerate() {
+            pool_index.insert(pool.id.as_str(), index);
         }
 
-        let mut directions: Vec<Direction> = Vec::with_capacity(view.pools.len() * 2);
-        for pool in &view.pools {
-            directions.push(Direction {
-                source: pool.core_a,
-                target: pool.core_b,
-                base_from_source: pool.base_from_a,
-                base_from_target: pool.base_from_b,
-                size: pool.budget,
-            });
-            directions.push(Direction {
-                source: pool.core_b,
-                target: pool.core_a,
-                base_from_source: pool.base_from_b,
-                base_from_target: pool.base_from_a,
-                size: pool.budget,
-            });
-        }
-        directions.sort_by_key(|direction| (direction.source, direction.target));
-
-        let mut panels = Vec::with_capacity(directions.len());
-        let mut pairs: BTreeSet<(u32, u32)> = BTreeSet::new();
-        for region in &directions {
-            let mut buffers: Vec<&rticx_xbin_proto::TaskEntry> = view
-                .tasks
-                .iter()
-                .filter(|task| {
-                    task.fifo.source == region.source && task.fifo.target == region.target
-                })
-                .collect();
-            buffers.sort_by_key(|task| task.fifo.offset);
-
-            let mut used_bytes = 0u64;
-            let mut cards = Vec::with_capacity(buffers.len());
-            for task in buffers {
-                let total_bytes = fifo_size(task.fifo.elem_size, task.capacity).unwrap_or(u64::MAX);
-                used_bytes = used_bytes.max(u64::from(task.fifo.offset) + total_bytes);
-                cards.push(BufferCard {
-                    task_id: task.id,
-                    task_name: task.name.clone(),
-                    input_type: task.input_type.clone(),
-                    offset: task.fifo.offset,
-                    total_bytes,
-                    elem_size: task.fifo.elem_size,
-                    depth: task.fifo.depth,
-                    capacity: task.capacity,
-                    priority: task.priority,
-                    doorbell: doorbell_of(task),
-                    pair: pair_key(region.source, region.target),
-                    direction: direction_key(region.source, region.target),
-                });
+        let mut per_pool: BTreeMap<usize, Vec<&rticx_xbin_proto::TaskEntry>> = BTreeMap::new();
+        let mut unpooled: BTreeMap<(u32, u32), Vec<&rticx_xbin_proto::TaskEntry>> = BTreeMap::new();
+        for task in &view.tasks {
+            match task
+                .fifo
+                .pool
+                .as_deref()
+                .and_then(|id| pool_index.get(id).copied())
+            {
+                Some(index) => per_pool.entry(index).or_default().push(task),
+                None => unpooled
+                    .entry((task.fifo.source, task.fifo.target))
+                    .or_default()
+                    .push(task),
             }
-
-            pairs.insert(ordered_pair(region.source, region.target));
-            panels.push(RegionPanel {
-                source: region.source,
-                target: region.target,
-                pair: pair_key(region.source, region.target),
-                direction: direction_key(region.source, region.target),
-                base_from_source: region.base_from_source,
-                base_from_target: region.base_from_target,
-                size: region.size,
-                used_bytes,
-                buffers: cards,
-            });
         }
 
-        // A pair may also be implied by a task without a matching region in the
+        let buffer_of = |task: &rticx_xbin_proto::TaskEntry| -> BufferCard {
+            let total_bytes = fifo_size(task.fifo.elem_size, task.capacity).unwrap_or(u64::MAX);
+            BufferCard {
+                task_id: task.id,
+                task_name: task.name.clone(),
+                input_type: task.input_type.clone(),
+                source: task.fifo.source,
+                target: task.fifo.target,
+                offset: task.fifo.offset,
+                total_bytes,
+                elem_size: task.fifo.elem_size,
+                depth: task.fifo.depth,
+                capacity: task.capacity,
+                priority: task.priority,
+                doorbell: doorbell_of(task),
+                pair: pair_key(task.fifo.source, task.fifo.target),
+                direction: direction_key(task.fifo.source, task.fifo.target),
+            }
+        };
+
+        /// Sorts `buffers` by offset and returns the byte extent they occupy.
+        fn finalize(buffers: &mut [BufferCard]) -> u64 {
+            buffers.sort_by_key(|buffer| (buffer.offset, buffer.task_id));
+            buffers
+                .iter()
+                .map(|buffer| u64::from(buffer.offset) + buffer.total_bytes)
+                .max()
+                .unwrap_or(0)
+        }
+
+        let mut panels: Vec<PoolPanel> = Vec::with_capacity(view.pools.len() + unpooled.len());
+        let mut pairs: BTreeSet<(u32, u32)> = BTreeSet::new();
+
+        for (index, pool) in view.pools.iter().enumerate() {
+            let mut buffers: Vec<BufferCard> = per_pool
+                .remove(&index)
+                .unwrap_or_default()
+                .into_iter()
+                .map(buffer_of)
+                .collect();
+            let end = finalize(&mut buffers);
+            let used = u64::from(pool.used).max(end);
+            panels.push(PoolPanel {
+                id: Some(pool.id.clone()),
+                core_a: pool.core_a,
+                core_b: pool.core_b,
+                pair: pair_key(pool.core_a, pool.core_b),
+                base_from_a: pool.base_from_a,
+                base_from_b: pool.base_from_b,
+                budget: pool.budget,
+                used: u32::try_from(used).unwrap_or(u32::MAX),
+                extent: u32::try_from(used.max(1)).unwrap_or(u32::MAX),
+                buffers,
+            });
+            pairs.insert(ordered_pair(pool.core_a, pool.core_b));
+        }
+
+        for ((source, target), tasks) in unpooled {
+            let mut buffers: Vec<BufferCard> = tasks.into_iter().map(buffer_of).collect();
+            let end = finalize(&mut buffers);
+            let extent = u32::try_from(end.max(1)).unwrap_or(u32::MAX);
+            panels.push(PoolPanel {
+                id: None,
+                core_a: source,
+                core_b: target,
+                pair: pair_key(source, target),
+                base_from_a: 0,
+                base_from_b: 0,
+                budget: extent,
+                used: extent,
+                extent,
+                buffers,
+            });
+            pairs.insert(ordered_pair(source, target));
+        }
+
+        // A pair may also be implied by a task without a matching pool in the
         // view; keep the checkbox so the interaction can still be focused.
         for task in &view.tasks {
             pairs.insert(ordered_pair(task.spawner_core, task.receiver_core));
@@ -348,19 +389,19 @@ impl ViewModel {
             (left.source, left.target, &left.name).cmp(&(right.source, right.target, &right.name))
         });
 
-        let region_count = panels.len();
+        let pool_count = panels.len();
         ViewModel {
             generation: view.rticx_generation.clone(),
             topology_hash: hash_text(view.topology_hash),
             layout_hash: hash_text(view.layout_hash),
             cores,
-            regions: panels,
+            pools: panels,
             pairs: filters,
             tasks: task_filters,
             stats: Stats {
                 cores: ids.len(),
                 tasks: view.tasks.len(),
-                regions: region_count,
+                pools: pool_count,
                 doorbells: view.doorbells.len(),
             },
         }
@@ -438,9 +479,10 @@ mod tests {
         }
     }
 
-    /// The three-application topology: producers 0 and 2 spawn onto 1.
+    /// The three-application topology: producers 0 and 2 spawn onto 1, with
+    /// distro pools for the `{0,1}` and `{1,2}` duals.
     fn three_app_view() -> SystemView {
-        SystemView {
+        let mut view = SystemView {
             schema_version: 2,
             rticx_generation: "0.2".to_string(),
             topology_hash: Hash64::new(0x1234),
@@ -511,7 +553,10 @@ mod tests {
                     line: 1,
                 },
             ],
-        }
+        };
+        view.tasks[0].fifo.pool = Some("p01".to_string());
+        view.tasks[1].fifo.pool = Some("p12".to_string());
+        view
     }
 
     #[test]
@@ -532,17 +577,19 @@ mod tests {
         assert!(json.contains("\"topology_hash\":\"0x0000000000001234\""));
         assert!(json.contains("\"name\":\"EncryptTask\""));
         assert!(json.contains("\"name\":\"SensorTask\""));
-        assert!(json.contains("\"base_from_source\":805568512"));
+        assert!(json.contains("\"id\":\"p01\""));
+        assert!(json.contains("\"base_from_a\":805568512"));
+        assert!(json.contains("\"budget\":128"));
     }
 
     #[test]
-    fn normalizes_cores_tasks_and_regions() {
+    fn normalizes_cores_tasks_and_pools() {
         let view = three_app_view();
         let model = ViewModel::from_view(&view);
 
         assert_eq!(model.stats.cores, 3);
         assert_eq!(model.stats.tasks, 2);
-        assert_eq!(model.stats.regions, 4, "two pools, two directions each");
+        assert_eq!(model.stats.pools, 2, "one panel per distro pool");
         assert_eq!(model.stats.doorbells, 2);
 
         // Cores are ordered by global id.
@@ -582,23 +629,28 @@ mod tests {
             "a producer stub does not carry the consumer's doorbell"
         );
 
-        // Each pool expands into its two per-direction panels; they keep both
-        // base views and place the FIFO at its offset.
-        let region = &model.regions[0];
-        assert_eq!((region.source, region.target), (0, 1));
-        assert_eq!(region.buffers[0].total_bytes, 64 + 3 * 12);
-        assert_eq!(region.used_bytes, 100);
-        assert_eq!(region.buffers[0].task_name, "EncryptTask");
-        assert_eq!(region.buffers[0].input_type, "EncryptReq");
-        assert_eq!(region.buffers[0].depth, 3);
-        assert_eq!(region.buffers[0].capacity, 2);
+        // One panel per pool; the `p01` panel carries the `0 -> 1` FIFO at its
+        // pool-relative offset and keeps both cores' views.
+        let p01 = &model.pools[0];
+        assert_eq!(
+            (p01.core_a, p01.core_b, p01.id.as_deref()),
+            (0, 1, Some("p01"))
+        );
+        assert_eq!(p01.buffers.len(), 1);
+        assert_eq!(p01.buffers[0].task_name, "EncryptTask");
+        assert_eq!(p01.buffers[0].input_type, "EncryptReq");
+        assert_eq!((p01.buffers[0].source, p01.buffers[0].target), (0, 1));
+        assert_eq!(p01.buffers[0].total_bytes, 64 + 3 * 12);
+        assert_eq!(p01.buffers[0].depth, 3);
+        assert_eq!(p01.buffers[0].capacity, 2);
+        assert_eq!(p01.extent, 100, "the bar scales to the occupied extent");
 
-        let aliased = model
-            .regions
-            .iter()
-            .find(|region| (region.source, region.target) == (2, 1))
-            .expect("the 2 -> 1 direction is present");
-        assert_ne!(aliased.base_from_source, aliased.base_from_target);
+        // The `p12` panel aliases the two cores' views and carries the
+        // `2 -> 1` FIFO.
+        let p12 = &model.pools[1];
+        assert_eq!((p12.core_a, p12.core_b), (1, 2));
+        assert_ne!(p12.base_from_a, p12.base_from_b);
+        assert_eq!((p12.buffers[0].source, p12.buffers[0].target), (2, 1));
 
         // Two unordered interaction pairs.
         assert_eq!(
@@ -641,12 +693,14 @@ mod tests {
     }
 
     #[test]
-    fn a_bidirectional_pair_yields_one_checkbox_and_two_regions() {
+    fn a_bidirectional_pair_yields_one_panel_with_both_buffers() {
         let mut view = three_app_view();
         view.tasks = vec![
             task(1, "Forward", 1, 0, 3, 2, 0),
             task(2, "Back", 0, 1, 3, 1, 0),
         ];
+        view.tasks[0].fifo.pool = Some("p01".to_string());
+        view.tasks[1].fifo.pool = Some("p01".to_string());
         view.pools = vec![PoolEntry {
             id: "p01".to_string(),
             core_a: 0,
@@ -681,37 +735,53 @@ mod tests {
             ["0-1"],
             "both directions of one unordered pair share a checkbox"
         );
-        assert_eq!(model.regions.len(), 2);
-        assert_eq!(model.regions[0].direction, "0-1");
-        assert_eq!(model.regions[1].direction, "1-0");
-
-        // Each direction puts the task on the correct side.
-        assert_eq!(model.regions[0].buffers[0].task_name, "Forward");
-        assert_eq!(model.regions[1].buffers[0].task_name, "Back");
+        assert_eq!(
+            model.pools.len(),
+            1,
+            "both directions share the dual's single panel"
+        );
+        let pool = &model.pools[0];
+        assert_eq!(pool.buffers.len(), 2);
+        assert_eq!(pool.buffers[0].task_name, "Forward");
+        assert_eq!(pool.buffers[0].direction, "0-1");
+        assert_eq!(pool.buffers[1].task_name, "Back");
+        assert_eq!(pool.buffers[1].direction, "1-0");
     }
 
     #[test]
     fn a_declared_but_empty_pool_is_rendered_without_buffers() {
         let mut view = three_app_view();
         view.tasks = vec![task(1, "EncryptTask", 1, 0, 3, 2, 0)];
-        view.pools.push(PoolEntry {
-            id: "p12".to_string(),
-            core_a: 1,
-            core_b: 2,
-            base_from_a: 0x3004_2000,
-            base_from_b: 0x3004_2000,
-            budget: 64,
-            used: 0,
-        });
+        view.tasks[0].fifo.pool = Some("p01".to_string());
+        view.pools[1].used = 0; // `p12` is declared but unused.
 
         let model = ViewModel::from_view(&view);
         let empty = model
-            .regions
+            .pools
             .iter()
-            .find(|region| region.direction == "1-2")
-            .expect("the declared pool's 1 -> 2 direction is present");
+            .find(|pool| pool.id.as_deref() == Some("p12"))
+            .expect("the declared `p12` panel is present");
         assert!(empty.buffers.is_empty());
-        assert_eq!(empty.used_bytes, 0);
+        assert_eq!(empty.used, 0);
+        assert_eq!(empty.extent, 1, "a non-zero scale avoids a divide-by-zero");
+    }
+
+    #[test]
+    fn unpooled_fifos_fall_back_to_a_direction_panel() {
+        let mut view = three_app_view();
+        // The task keeps `fifo.pool == None` while no capability table is
+        // bound, exactly like a project without distro pools.
+        view.tasks = vec![task(1, "EncryptTask", 1, 0, 3, 2, 0)];
+        view.pools = Vec::new();
+
+        let model = ViewModel::from_view(&view);
+        assert_eq!(model.pools.len(), 1);
+        let panel = &model.pools[0];
+        assert!(panel.id.is_none(), "unpooled FIFOs get a synthetic panel");
+        assert_eq!((panel.core_a, panel.core_b), (0, 1));
+        assert_eq!(panel.buffers.len(), 1);
+        assert_eq!(panel.buffers[0].task_name, "EncryptTask");
+        assert_eq!(panel.extent, 100);
     }
 
     #[test]

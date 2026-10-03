@@ -2,15 +2,14 @@
 
 **Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
 native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, ready/epoch, docs), **M6.9-T1..T7** (distro capability
+routing, multi-source, ready/epoch, docs), **M6.9-T1..T8** (distro capability
 binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
 budget, `system.json` schema 2, pool-aware codegen/runtime, linked-ELF
-verification) complete. Remaining work:
-**M6.9-T8..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
+verification, pool-panel visualization) complete. Remaining work:
+**M6.9-T9** (docs and fixtures), **M7** (STM32H7
 acceptance + extraction) and **M8-T1** (advisory CI), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-03 (M6.9-T7; compacted: completed milestone task lists
-removed).
+**Last updated:** 2026-10-04 (M6.9-T8; pool-panel visualization).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
@@ -896,7 +895,22 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   `driver/tests/verify.rs` over the built `fixtures/e2e` (clean pass, an
   injected overlap naming the section and pool, the standalone `verify`, and
   `build` without `--verify-elf` reporting no verifications).
-  
+
+- [x] **M6.9-T8 — Pool-panel visualization.** `visualize.rs` renders one panel
+  per distro pool (the *dual*) instead of expanding each pool into its two
+  per-direction region panels. A panel carries both directions' FIFOs at their
+  pool-relative offsets, colored by producer core, and shows the pool id, both
+  cores' base views, the shared `budget` and the `used` bytes. The bar is scaled
+  to the occupied extent (`used`, at least the end of the last FIFO) rather than
+  the whole budget, so the FIFOs stay readable instead of collapsing into a
+  sliver (the pre-T8 panels rendered only ~2–7 % of the bar). A FIFO naming no
+  (or an unknown) pool — a project whose manifests carry no capability table —
+  falls back to a synthetic per-direction panel so it stays visible. Sender and
+  receiver arrows are wired through each FIFO's own `source`/`target`
+  (`app.js`, `template.html`, `style.css`). Tests: the `visualize` module unit
+  tests (one pool panel per dual, both directions in one panel, occupied-extent
+  scaling, empty pool, unpooled fallback, JSON embedding/determinism/escaping).
+
 - [ ] **M6.9-T9 — Docs and fixtures.** Remove every fixture `[ipc.regions]`; the
   mock distro supplies the capability table. User guide: drop the user-facing
   region and linker-carving sections and add distro-author guidance (pools,

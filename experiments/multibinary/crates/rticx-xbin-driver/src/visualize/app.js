@@ -1,7 +1,7 @@
 /* RTICX multi-binary system view.
  *
  * Consumes the JSON payload embedded in #xbin-view (produced by the Rust
- * `visualize` module) and renders the core boxes, the shared-memory regions
+ * `visualize` module) and renders the core boxes, the shared-memory pools
  * with their per-task FIFO buffers, and the interaction arrows. The payload is
  * generic: adding a task category later only changes how the Rust side fills
  * `executes`/`spawns`, not this file.
@@ -10,10 +10,10 @@
   "use strict";
 
   var SVG_NS = "http://www.w3.org/2000/svg";
-  // Gap, in pixels, between neighbouring FIFO boxes of the same region. The
-  // region's own left/right padding comes from `.region-slots`, so this is only
+  // Gap, in pixels, between neighbouring FIFO boxes of the same pool. The
+  // pool's own left/right padding comes from `.pool-slots`, so this is only
   // subtracted from the right edge of each FIFO: the first FIFO keeps a single
-  // (region) margin, and every later FIFO is separated from the previous one.
+  // (pool) margin, and every later FIFO is separated from the previous one.
   var BUFFER_GAP = 6;
   var COLORS = [
     "#4f8cff", "#ff8c4f", "#3fbf7f", "#b06cff",
@@ -23,7 +23,7 @@
   var model = JSON.parse(document.getElementById("xbin-view").textContent);
   var stage = document.getElementById("stage");
   var rail = document.getElementById("rail");
-  var regionsEl = document.getElementById("regions");
+  var poolsEl = document.getElementById("pools");
   var filtersEl = document.getElementById("filters");
   var metaEl = document.getElementById("meta");
   var legendEl = document.getElementById("legend");
@@ -60,7 +60,7 @@
     "  ·  layout " + model.layout_hash +
     "  ·  " + model.stats.cores + " cores, " +
     model.stats.tasks + " cross-binary tasks, " +
-    model.stats.regions + " regions, " +
+    model.stats.pools + " pools, " +
     model.stats.doorbells + " doorbell lines";
 
   // -- core boxes ------------------------------------------------------------
@@ -119,27 +119,30 @@
     rail.appendChild(coreCard(model.cores[c]));
   }
 
-  // -- regions ---------------------------------------------------------------
+  // -- pools -----------------------------------------------------------------
 
-  function bufferNode(region, buffer) {
+  function bufferNode(pool, buffer) {
     var node = make("div", "buffer");
     node.dataset.taskId = String(buffer.task_id);
     node.dataset.pair = buffer.pair;
-    // The FIFO starts exactly at its allocated offset: the region's left padding
-    // (`.region-slots`) already keeps the first FIFO off the edge. Only the right
-    // edge is trimmed by `BUFFER_GAP`, which spaces neighbouring FIFOs apart.
-    var leftPct = (buffer.offset / region.size) * 100;
-    var widthPct = Math.max((buffer.total_bytes / region.size) * 100, 4);
+    // The FIFO starts exactly at its pool-relative offset: the pool's left
+    // padding (`.pool-slots`) keeps the first FIFO off the edge. The bar is
+    // scaled to the occupied extent, so only the right edge of each FIFO is
+    // trimmed by `BUFFER_GAP` to space neighbours apart.
+    var leftPct = (buffer.offset / pool.extent) * 100;
+    var widthPct = Math.max((buffer.total_bytes / pool.extent) * 100, 4);
     node.style.left = leftPct + "%";
     node.style.width = "max(4px, calc(" + widthPct + "% - " + BUFFER_GAP + "px))";
-    node.style.setProperty("--core-color", colorOf(region.source));
+    node.style.setProperty("--core-color", colorOf(buffer.source));
 
     node.appendChild(make("span", "buffer-name",
       buffer.task_name + "/" + buffer.input_type));
     node.appendChild(make("span", "buffer-meta",
-      "@" + buffer.offset + " · " + buffer.total_bytes + " B · cap " + buffer.capacity));
+      "@" + buffer.offset + " · " + buffer.total_bytes + " B · cap " + buffer.capacity +
+      " · " + buffer.direction));
     node.title =
       buffer.task_name + "/" + buffer.input_type + "\n" +
+      "core " + buffer.source + " → core " + buffer.target + "\n" +
       "depth " + buffer.depth + " (capacity " + buffer.capacity + ")\n" +
       "offset " + buffer.offset + " B, " + buffer.total_bytes + " B = 64 B header + " +
       buffer.elem_size + " × " + buffer.depth + "\n" +
@@ -148,23 +151,32 @@
     return node;
   }
 
-  function regionPanel(region) {
-    var panel = make("div", "region");
-    panel.dataset.region = region.direction;
-    panel.dataset.pair = region.pair;
-    // Let a selected task light up the region that carries its FIFO, without
+  function poolLabel(pool) {
+    if (pool.id !== null && pool.id !== undefined) {
+      return "Pool " + pool.id + "  ·  core " + pool.core_a + " ↔ core " + pool.core_b;
+    }
+    return "Unpooled  ·  core " + pool.core_a + " → core " + pool.core_b;
+  }
+
+  function poolPanel(pool) {
+    var panel = make("div", "pool");
+    panel.dataset.pool = pool.id !== null && pool.id !== undefined
+      ? pool.id
+      : pool.core_a + "-" + pool.core_b;
+    panel.dataset.pair = pool.pair;
+    // Let a selected task light up the pool that carries its FIFO, without
     // requiring the whole core pair to be checked.
-    panel.dataset.taskIds = region.buffers.map(function (buffer) {
+    panel.dataset.taskIds = pool.buffers.map(function (buffer) {
       return buffer.task_id;
     }).join(" ");
-    panel.style.setProperty("--core-color", colorOf(region.source));
+    panel.style.setProperty("--core-color", colorOf(pool.core_a));
 
-    var head = make("div", "region-head");
-    var toggle = make("button", "region-toggle", "+");
+    var head = make("div", "pool-head");
+    var toggle = make("button", "pool-toggle", "+");
     toggle.type = "button";
     toggle.setAttribute("aria-expanded", "false");
-    toggle.title = "Show or hide the region details";
-    // Region information starts collapsed; the FIFO bar stays visible.
+    toggle.title = "Show or hide the pool details";
+    // Pool information starts collapsed; the FIFO bar stays visible.
     panel.classList.add("collapsed");
     toggle.addEventListener("click", function () {
       var collapsed = panel.classList.toggle("collapsed");
@@ -173,24 +185,30 @@
       scheduleDraw();
     });
     head.appendChild(toggle);
-    head.appendChild(make("span", "region-title", "Region " + region.source + " → " + region.target));
+    head.appendChild(make("span", "pool-title", poolLabel(pool)));
     panel.appendChild(head);
 
-    var details = make("div", "region-details");
-    details.appendChild(make("div", "region-detail", "base(src): " + hex(region.base_from_source)));
-    details.appendChild(make("div", "region-detail", "base(tgt): " + hex(region.base_from_target)));
-    details.appendChild(make("div", "region-detail", "size: " + region.size + " B"));
-    details.appendChild(make("div", "region-detail",
-      "allocated: " + region.used_bytes + " / " + region.size + " B"));
+    var details = make("div", "pool-details");
+    if (pool.id !== null && pool.id !== undefined) {
+      details.appendChild(make("div", "pool-detail", "base(core " + pool.core_a + "): " + hex(pool.base_from_a)));
+      details.appendChild(make("div", "pool-detail", "base(core " + pool.core_b + "): " + hex(pool.base_from_b)));
+      details.appendChild(make("div", "pool-detail", "budget: " + pool.budget + " B"));
+      details.appendChild(make("div", "pool-detail",
+        "allocated: " + pool.used + " / " + pool.budget + " B"));
+    } else {
+      details.appendChild(make("div", "pool-detail",
+        "no distro pool bound · FIFOs at project-relative offsets"));
+      details.appendChild(make("div", "pool-detail", "allocated: " + pool.used + " B"));
+    }
     panel.appendChild(details);
 
-    var bar = make("div", "region-bar");
-    var slots = make("div", "region-slots");
-    if (region.buffers.length === 0) {
-      slots.appendChild(make("span", "region-empty", "no cross-binary FIFOs allocated"));
+    var bar = make("div", "pool-bar");
+    var slots = make("div", "pool-slots");
+    if (pool.buffers.length === 0) {
+      slots.appendChild(make("span", "pool-empty", "no cross-binary FIFOs allocated"));
     } else {
-      for (var i = 0; i < region.buffers.length; i++) {
-        slots.appendChild(bufferNode(region, region.buffers[i]));
+      for (var i = 0; i < pool.buffers.length; i++) {
+        slots.appendChild(bufferNode(pool, pool.buffers[i]));
       }
     }
     bar.appendChild(slots);
@@ -199,8 +217,8 @@
     return panel;
   }
 
-  for (var r = 0; r < model.regions.length; r++) {
-    regionsEl.appendChild(regionPanel(model.regions[r]));
+  for (var r = 0; r < model.pools.length; r++) {
+    poolsEl.appendChild(poolPanel(model.pools[r]));
   }
 
   // -- interaction filters (pair -> task tree) -------------------------------
@@ -254,7 +272,7 @@
     var list = make("div", "filter-tasks");
     var tasks = tasksByPair[pair.key] || [];
     if (tasks.length === 0) {
-      list.appendChild(make("div", "filter-empty", "no cross-binary tasks (region only)"));
+      list.appendChild(make("div", "filter-empty", "no cross-binary tasks (pool only)"));
     }
     for (var i = 0; i < tasks.length; i++) {
       var task = tasks[i];
@@ -363,7 +381,7 @@
       wrap.appendChild(item);
     }
     wrap.appendChild(make("span", "legend-note",
-      "Arrow path: spawner stub → FIFO buffer in the shared region → receiver task. " +
+      "Arrow path: spawner stub → FIFO buffer in the shared pool → receiver task. " +
       "Check a core pair, or a single task, to draw its arrows and isolate its interactions."));
     legendEl.appendChild(wrap);
   })();
@@ -444,10 +462,10 @@
 
     var stageRect = stage.getBoundingClientRect();
 
-    for (var r = 0; r < model.regions.length; r++) {
-      var region = model.regions[r];
-      for (var b = 0; b < region.buffers.length; b++) {
-        var buffer = region.buffers[b];
+    for (var r = 0; r < model.pools.length; r++) {
+      var pool = model.pools[r];
+      for (var b = 0; b < pool.buffers.length; b++) {
+        var buffer = pool.buffers[b];
         if (!sel.tasks[buffer.task_id]) {
           continue;
         }
@@ -458,10 +476,10 @@
         var box = rectOf(bufferNode, stageRect);
 
         var sourceNode = rail.querySelector(
-          '.core-card[data-core="' + region.source + '"] .task[data-task-id="' +
+          '.core-card[data-core="' + buffer.source + '"] .task[data-task-id="' +
           buffer.task_id + '"].spawn');
         var targetNode = rail.querySelector(
-          '.core-card[data-core="' + region.target + '"] .task[data-task-id="' +
+          '.core-card[data-core="' + buffer.target + '"] .task[data-task-id="' +
           buffer.task_id + '"].exec');
 
         if (sourceNode) {
@@ -469,16 +487,16 @@
           svg.appendChild(arrow(
             source.cx, source.bottom,
             box.left + box.w * 0.3, box.top,
-            region.source, region.pair, buffer.task_id,
-            buffer.task_name + "::cross_spawn  (core " + region.source + " → region)"));
+            buffer.source, pool.pair, buffer.task_id,
+            buffer.task_name + "::cross_spawn  (core " + buffer.source + " → pool)"));
         }
         if (targetNode) {
           var target = rectOf(targetNode, stageRect);
           svg.appendChild(arrow(
             box.left + box.w * 0.7, box.top,
             target.cx, target.bottom,
-            region.source, region.pair, buffer.task_id,
-            buffer.task_name + "  (region → core " + region.target +
+            buffer.source, pool.pair, buffer.task_id,
+            buffer.task_name + "  (pool → core " + buffer.target +
             ", priority " + buffer.priority +
             (buffer.doorbell !== null && buffer.doorbell !== undefined ? ", doorbell " + buffer.doorbell : "") + ")"));
         }
