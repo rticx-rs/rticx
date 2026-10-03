@@ -8,7 +8,11 @@
 //!   addresses and emit `target/rticx-xbin/system.json` (M1-T6), and
 //!   generate/update the `ipc-types` crate (M1-T7);
 //! - `cargo xbin build`: `sync`, then build every application against the
-//!   emitted system view (M4-T1).
+//!   emitted system view (M4-T1); `--verify-elf` additionally checks every
+//!   linked binary against the distro IPC pools (M6.9-T7);
+//! - `cargo xbin verify`: check the already-built applications' linked
+//!   binaries against the synced pools, for the plain-`cargo build` workflow
+//!   (M6.9-T7).
 //!
 //! `cargo xbin sync --html` additionally renders a self-contained HTML
 //! visualization of the system view to `target/rticx-xbin/system.html`
@@ -16,6 +20,7 @@
 
 mod cli;
 mod commands;
+mod elf;
 mod error;
 mod project;
 mod visualize;
@@ -28,10 +33,14 @@ use std::process::Command as ProcessCommand;
 use clap::Parser;
 use rticx_xbin_proto::FileChange;
 
-pub use cli::{Cli, Command, SyncArgs};
-pub use commands::{AppBuild, BuildOutcome, IpcTypesOutcome, SyncOutcome, build, sync};
-use commands::{CargoOutput, build_with_output, sync_with_output};
-pub use error::DriverError;
+pub use cli::{BuildArgs, Cli, Command, SyncArgs, VerifyArgs};
+pub use commands::{
+    AppBuild, BuildOutcome, IpcTypesOutcome, SyncOutcome, VerifyOutcome, build, build_and_verify,
+    sync, verify,
+};
+use commands::{CargoOutput, build_with_output, sync_with_output, verify_with_output};
+pub use elf::{ElfVerification, verify_binary};
+pub use error::{DriverError, VerifyError};
 pub use project::{
     HTML_FILE, IDL_MANIFEST, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE, find_project_root,
     output_dir,
@@ -94,9 +103,15 @@ fn run(cli: Cli) -> Result<(), DriverError> {
             }
             Ok(())
         }
-        Command::Build => {
-            let outcome = build_with_output(&project_root, CargoOutput::Streamed)?;
+        Command::Build(args) => {
+            let outcome = build_with_output(&project_root, CargoOutput::Streamed, args.verify_elf)?;
             report_ipc_types(&outcome.sync);
+            report_verifications(&outcome.verifications);
+            Ok(())
+        }
+        Command::Verify(args) => {
+            let outcome = verify_with_output(&project_root, CargoOutput::Streamed, args.release)?;
+            report_verifications(&outcome.verifications);
             Ok(())
         }
     }
@@ -171,6 +186,21 @@ fn report_ipc_types(outcome: &SyncOutcome) {
     }
     if ipc_types.status.is_noop() {
         eprintln!("[cargo-xbin] {} is up to date", dir.display());
+    }
+}
+
+/// Reports each successful ELF verification (M6.9-T7) on standard error, like
+/// [`report_ipc_types`].
+///
+/// Library callers inspect the `verifications` field of the outcome instead;
+/// this is pure presentation. A failed verification is an error, so only
+/// successes are reported here.
+fn report_verifications(verifications: &[ElfVerification]) {
+    for verification in verifications {
+        eprintln!(
+            "[cargo-xbin] verified `{}` ({} allocated sections, {} pool views)",
+            verification.application, verification.sections, verification.pool_views
+        );
     }
 }
 

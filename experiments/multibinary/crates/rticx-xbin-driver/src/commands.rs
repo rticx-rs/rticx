@@ -12,6 +12,7 @@ use rticx_xbin_proto::{
     merge_project, parse_idl_file, parse_project_file, system_view,
 };
 
+use crate::elf::{ElfVerification, verify_binary};
 use crate::error::DriverError;
 use crate::project::{IDL_MANIFEST, PROJECT_MANIFEST, SYSTEM_FILE, output_dir};
 
@@ -440,6 +441,114 @@ fn forward<R: Read, W: Write>(reader: R, mut sink: W) -> String {
     String::from_utf8_lossy(&captured).into_owned()
 }
 
+/// Runs `cargo <args> --message-format json-render-diagnostics` and returns the
+/// machine-readable messages Cargo wrote to standard output.
+///
+/// The diagnostics are rendered to standard error, so the user-visible output
+/// is the same as a plain build, while the driver can still learn the linked
+/// executable path from the `compiler-artifact` messages ([`build`],
+/// [`verify`]). In [`CargoOutput::Streamed`] mode standard error is forwarded;
+/// standard output is always captured (never forwarded) so it stays parseable.
+fn run_cargo_json(
+    project_root: &Path,
+    args: &[String],
+    envs: &[(&str, &OsStr)],
+    unset: &[&str],
+    output: CargoOutput,
+) -> Result<String, DriverError> {
+    let mut args = args.to_vec();
+    args.extend(argv(&["--message-format", "json-render-diagnostics"]));
+    let command_line = format!("cargo {}", args.join(" "));
+
+    let mut command = Command::new(cargo_binary());
+    command.args(&args).current_dir(project_root);
+    for name in unset {
+        command.env_remove(name);
+    }
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+
+    match output {
+        CargoOutput::Captured => {
+            let output = command.output().map_err(|source| DriverError::CargoSpawn {
+                command: command_line.clone(),
+                dir: project_root.to_path_buf(),
+                source,
+            })?;
+            if !output.status.success() {
+                return Err(DriverError::CargoFailed {
+                    command: command_line,
+                    dir: project_root.to_path_buf(),
+                    status: output.status,
+                    stderr: String::from_utf8_lossy(&output.stderr)
+                        .trim_end()
+                        .to_string(),
+                });
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+        CargoOutput::Streamed => {
+            if io::stderr().is_terminal()
+                && std::env::var_os("CARGO_TERM_COLOR").is_none()
+                && std::env::var_os("NO_COLOR").is_none()
+            {
+                command.env("CARGO_TERM_COLOR", "always");
+            }
+            eprintln!("[cargo-xbin] running `{command_line}`");
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            let mut child = command.spawn().map_err(|source| DriverError::CargoSpawn {
+                command: command_line.clone(),
+                dir: project_root.to_path_buf(),
+                source,
+            })?;
+
+            let child_stdout = child.stdout.take().expect("piped standard output");
+            let child_stderr = child.stderr.take().expect("piped standard error");
+            // Capture the JSON on standard output while forwarding the
+            // rendered diagnostics on standard error.
+            let stdout = std::thread::spawn(move || forward(child_stdout, io::sink()));
+            let stderr = std::thread::spawn(move || forward(child_stderr, io::stderr()));
+
+            let status = child.wait().map_err(|source| DriverError::CargoSpawn {
+                command: command_line.clone(),
+                dir: project_root.to_path_buf(),
+                source,
+            })?;
+            let stdout = stdout.join().unwrap_or_default();
+            let stderr = stderr.join().unwrap_or_default();
+
+            if !status.success() {
+                return Err(DriverError::CargoFailed {
+                    command: command_line,
+                    dir: project_root.to_path_buf(),
+                    status,
+                    stderr: stderr.trim_end().to_string(),
+                });
+            }
+            Ok(stdout)
+        }
+    }
+}
+
+/// Returns the linked executable path of the last `compiler-artifact` message
+/// Cargo reported, or `None` when it reported none (a library target).
+fn executable_from_messages(messages: &str) -> Option<PathBuf> {
+    messages
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| {
+            message.get("reason").and_then(serde_json::Value::as_str) == Some("compiler-artifact")
+        })
+        .filter_map(|message| {
+            message
+                .get("executable")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+        })
+        .next_back()
+}
+
 /// Owns a static argument list for [`run_cargo`].
 fn argv(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_string()).collect()
@@ -458,6 +567,8 @@ pub struct AppBuild {
     pub package: String,
     /// Cargo binary target that was built.
     pub target: String,
+    /// Linked executable Cargo reported for the target.
+    pub binary: PathBuf,
 }
 
 /// Result of a `cargo xbin build` run.
@@ -468,6 +579,9 @@ pub struct BuildOutcome {
     /// The applications built after `sync`, in `rticx.toml` order (empty
     /// without a project manifest).
     pub builds: Vec<AppBuild>,
+    /// ELF verifications of the built binaries, in build order (empty unless
+    /// `--verify-elf` was requested).
+    pub verifications: Vec<ElfVerification>,
 }
 
 /// Phase 2 entry point: `sync`, then build every application of the project
@@ -484,13 +598,20 @@ pub struct BuildOutcome {
 /// Cargo output is captured, keeping library callers quiet; the CLI uses
 /// [`build_with_output`] to stream it.
 pub fn build(project_root: &Path) -> Result<BuildOutcome, DriverError> {
-    build_with_output(project_root, CargoOutput::default())
+    build_with_output(project_root, CargoOutput::default(), false)
 }
 
-/// [`build`] with an explicit cargo-output mode.
+/// [`build`] with `--verify-elf` (M6.9-T7): after linking, every application's
+/// binary is parsed as an ELF and checked against the synced pools.
+pub fn build_and_verify(project_root: &Path) -> Result<BuildOutcome, DriverError> {
+    build_with_output(project_root, CargoOutput::default(), true)
+}
+
+/// [`build`] with an explicit cargo-output mode and optional ELF verification.
 pub(crate) fn build_with_output(
     project_root: &Path,
     output: CargoOutput,
+    verify_elf: bool,
 ) -> Result<BuildOutcome, DriverError> {
     let sync = sync_with_output(project_root, output)?;
 
@@ -502,26 +623,150 @@ pub(crate) fn build_with_output(
 
     let mut builds = Vec::with_capacity(sync.applications().len());
     for application in sync.applications() {
-        let package = application.package();
-        let target = application.target().name();
-        let mut args = argv(&["build", "--package", package, "--bin", target]);
+        let mut args = argv(&[
+            "build",
+            "--package",
+            application.package(),
+            "--bin",
+            application.target().name(),
+        ]);
         if let Some(triple) = application.target().triple() {
             args.extend(argv(&["--target", triple]));
         }
-        run_cargo(
+        let messages = run_cargo_json(
             project_root,
             &args,
             &[(SYSTEM_ENV, system.as_os_str())],
             &[META_OUT_ENV],
             output,
         )?;
+        let binary =
+            executable_from_messages(&messages).ok_or_else(|| DriverError::MissingExecutable {
+                package: application.package().to_string(),
+                target: application.target().name().to_string(),
+            })?;
         builds.push(AppBuild {
-            package: package.to_string(),
-            target: target.to_string(),
+            package: application.package().to_string(),
+            target: application.target().name().to_string(),
+            binary,
         });
     }
 
-    Ok(BuildOutcome { sync, builds })
+    let mut verifications = Vec::new();
+    if verify_elf && let Some(view) = &sync.system {
+        for build in &builds {
+            verifications.push(verify_binary(&build.binary, &build.package, view)?);
+        }
+    }
+
+    Ok(BuildOutcome {
+        sync,
+        builds,
+        verifications,
+    })
+}
+
+/// Result of a `cargo xbin verify` run (M6.9-T7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyOutcome {
+    /// Resolved project root.
+    pub project_root: PathBuf,
+    /// `target/rticx-xbin/system.json` the check used.
+    pub system_path: PathBuf,
+    /// One verification per application, in `rticx.toml` order.
+    pub verifications: Vec<ElfVerification>,
+}
+
+/// Phase 3 entry point: check the already-built applications' linked binaries
+/// against the synced pools (M6.9-T7).
+///
+/// This is the check for the plain-`cargo build` workflow: run `cargo xbin
+/// sync` once, build with plain Cargo, then `cargo xbin verify`. Unlike
+/// [`build_and_verify`] it does not run `sync`, so it never cleans the
+/// applications; it reads `target/rticx-xbin/system.json` (a missing or stale
+/// view is an error naming `cargo xbin sync`) and locates each application's
+/// linked binary with a cached `cargo build --message-format json`, which
+/// relinks nothing when the project is already built.
+pub fn verify(project_root: &Path) -> Result<VerifyOutcome, DriverError> {
+    verify_with_output(project_root, CargoOutput::default(), false)
+}
+
+/// [`verify`] with an explicit cargo-output mode and profile.
+pub(crate) fn verify_with_output(
+    project_root: &Path,
+    output: CargoOutput,
+    release: bool,
+) -> Result<VerifyOutcome, DriverError> {
+    let manifest_path = project_root.join(PROJECT_MANIFEST);
+    if !manifest_path.is_file() {
+        return Err(DriverError::NoProjectManifest {
+            root: project_root.to_path_buf(),
+        });
+    }
+    let config = parse_project_file(&manifest_path)?;
+
+    let system_path = output_dir(project_root).join(SYSTEM_FILE);
+    let source = std::fs::read_to_string(&system_path).map_err(|source| {
+        DriverError::MissingVerificationView {
+            path: system_path.clone(),
+            source,
+        }
+    })?;
+    let view = SystemView::from_json(&source)?;
+    if !view.verify_topology_hash() {
+        return Err(DriverError::StaleVerificationView { path: system_path });
+    }
+
+    let mut verifications = Vec::with_capacity(config.applications().len());
+    for application in config.applications() {
+        let binary = locate_binary(project_root, application, output, release)?;
+        verifications.push(verify_binary(&binary, application.package(), &view)?);
+    }
+
+    Ok(VerifyOutcome {
+        project_root: project_root.to_path_buf(),
+        system_path,
+        verifications,
+    })
+}
+
+/// Runs a (cached) `cargo build` for `application` and returns the linked
+/// executable path Cargo reports.
+///
+/// Used by [`verify`], which needs the path of a binary the user built with
+/// plain Cargo; the `build` phase already has it from its own invocation.
+fn locate_binary(
+    project_root: &Path,
+    application: &Application,
+    output: CargoOutput,
+    release: bool,
+) -> Result<PathBuf, DriverError> {
+    let mut args = argv(&[
+        "build",
+        "--package",
+        application.package(),
+        "--bin",
+        application.target().name(),
+    ]);
+    if release {
+        args.extend(argv(&["--release"]));
+    }
+    if let Some(triple) = application.target().triple() {
+        args.extend(argv(&["--target", triple]));
+    }
+    // The plain workflow does not select a pass mode: the `#[app]` macro
+    // discovers `system.json` from the project root itself.
+    let messages = run_cargo_json(
+        project_root,
+        &args,
+        &[],
+        &[META_OUT_ENV, SYSTEM_ENV],
+        output,
+    )?;
+    executable_from_messages(&messages).ok_or_else(|| DriverError::MissingExecutable {
+        package: application.package().to_string(),
+        target: application.target().name().to_string(),
+    })
 }
 
 #[cfg(test)]

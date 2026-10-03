@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
+object = { workspace = true }
 rticx-xbin-pass = { workspace = true }
 rticx-xbin-proto = { workspace = true }
 serde = { workspace = true }

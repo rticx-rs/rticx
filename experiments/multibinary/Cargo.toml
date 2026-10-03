@@ -32,6 +32,9 @@ homepage = "https://github.com/rticx-rs/rticx/wiki"
 # --- external ---
 clap = { version = "4.5", features = ["derive"] }
 heck = "0.5.0"
+# `read` + `std` parse the linked ELF for `cargo xbin build --verify-elf`
+# (M6.9-T7); the compression/default features are not needed.
+object = { version = "0.39", default-features = false, features = ["read", "std"] }
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
 serde = { version = "1", features = ["derive"] }

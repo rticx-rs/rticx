@@ -15,7 +15,9 @@ use clap::{Args, Parser, Subcommand};
         cargo xbin sync               # phase 1: collect metadata, merge, validate and allocate\n  \
         cargo xbin sync --html        # ... and render target/rticx-xbin/system.html\n  \
         cargo xbin sync --html-open   # ... render the HTML and open it in a browser\n  \
-        cargo xbin build              # sync, then build every application of the project"
+        cargo xbin build              # sync, then build every application of the project\n  \
+        cargo xbin build --verify-elf # ... and check every linked binary against the pools\n  \
+        cargo xbin verify             # check already-built binaries (plain cargo build workflow)"
 )]
 pub struct Cli {
     /// Subcommand to run.
@@ -31,7 +33,11 @@ pub enum Command {
     /// FIFO addresses and write `target/rticx-xbin/system.json`.
     Sync(SyncArgs),
     /// Run `sync`, then build every application of the project.
-    Build,
+    Build(BuildArgs),
+    /// Check the already-built applications' linked binaries against the
+    /// synced pools (M6.9-T7): run `cargo xbin sync`, build with plain Cargo,
+    /// then this.
+    Verify(VerifyArgs),
 }
 
 /// Arguments of `cargo xbin sync`.
@@ -46,4 +52,21 @@ pub struct SyncArgs {
     /// default browser. Set `RTICX_XBIN_OPENER` to override the opener.
     #[arg(long)]
     pub html_open: bool,
+}
+
+/// Arguments of `cargo xbin build`.
+#[derive(Debug, Args)]
+pub struct BuildArgs {
+    /// Verify every linked binary against the distro pools after building
+    /// (M6.9-T7). Off by default so the check is opt-in.
+    #[arg(long)]
+    pub verify_elf: bool,
+}
+
+/// Arguments of `cargo xbin verify`.
+#[derive(Debug, Args)]
+pub struct VerifyArgs {
+    /// Check the release binaries instead of the debug ones.
+    #[arg(long)]
+    pub release: bool,
 }
