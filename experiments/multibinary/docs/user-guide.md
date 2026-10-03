@@ -149,6 +149,12 @@ Canonical rendering (`ProjectConfig::to_toml_string`) always expands `base` to
 the explicit `base_from_source`/`base_from_target` pair, so tooling that
 round-trips a manifest normalizes the shorthand.
 
+The addresses declared here are raw fixed addresses: the generated code accesses
+them through `Fifo::view_at(base + offset)` and the linker does not know the
+region exists. You must reserve each region in the linker script of every binary
+whose address map covers it — see
+[§7.5](#75-reserving-the-ipc-regions-in-the-linker-script).
+
 `core_ids` is the only place global core ids are declared: the `#[app]` macro
 uses them in the runtime core checks, `external_cores`/`spawn_by` refer to
 them, and the system view records them. 
@@ -706,7 +712,7 @@ its own core. Heterogeneous targets may need per-application settings (a
 different triple, linker script or MPU configuration); Cargo supports a
 `.cargo/config.toml` per package for that. The in-tree fixtures use the host
 mock instead: `.cargo/config.toml` is absent, the apps build for the host, and
-the runtime harnesses exercise the generated code (section 7.5). The
+the runtime harnesses exercise the generated code (section 7.6). The
 out-of-tree STM32H7 acceptance demo (M7) is the reference for a real
 M7+M4/Renode setup.
 
@@ -743,7 +749,8 @@ source of runtime-only failures:
   before the user `init` and before any generated code touches the region, so
   configure it there (the distribution implements the backend method).
 - **Linker/MPU consistency:** reserve the region outside every binary's
-  `.data`/`.bss`; keep `base_from_source`/`base_from_target` in `rticx.toml`
+  `.data`/`.bss` ([§7.5](#75-reserving-the-ipc-regions-in-the-linker-script));
+  keep `base_from_source`/`base_from_target` in `rticx.toml`
   consistent with the MPU region (base and limit alignment/size follow your
   device's MPU rules, e.g. power-of-two regions on Cortex-M).
 - **Aliases:** if the two cores see the region at different addresses, declare
@@ -761,7 +768,120 @@ source of runtime-only failures:
   the core pass's used-IRQ machinery does this from the generated
   `#[task(binds = …)]` items, but the distribution must map the IRQ numbers.
 
-### 7.5 Verifying your setup
+### 7.5 Reserving the IPC regions in the linker script
+
+`[ipc.regions]` addresses are accessed through raw fixed-address pointers
+(`Fifo::view_at(base + offset)`); the region is **not** a Rust `static`, so the
+linker does not know about it and will not avoid it. `cargo xbin sync` checks
+only what it can see from `rticx.toml`:
+
+- two regions handed to the **same core** must not overlap on
+  `[base, base + size)`;
+- the per-task FIFOs must fit the region `size`.
+
+It cannot see any binary's linker script, so it cannot tell whether `.data`,
+`.bss` or other allocated sections land on the same bytes. If they do, the
+application and the FIFOs share physical memory silently: no fault, just
+corrupted ring indices/messages and corrupted application variables. You must
+reserve the range in **every** binary whose address map covers it.
+
+**The rule.** For each application, take the region views that core can see —
+for every region the core is an endpoint of, its `base_from_source` (as source)
+or `base_from_target` (as target) — and make sure its linker scripts never place
+allocated data there. Two practical ways:
+
+1. *Preferred:* put IPC regions in a dedicated shared SRAM block the firmware
+   uses for nothing else, and keep that block out of the `RAM` `MEMORY` regions
+   that back `.data`/`.bss`.
+2. If the IPC block sits inside a RAM block, split the `MEMORY` declaration
+   around it so the RAM region stops before the IPC range (or resumes after
+   it), and give the IPC range its own region.
+
+Example: the H7's SRAM3 is `0x3004_0000` as seen by the CM7 and `0x1004_0000`
+through the D2 alias as seen by the CM4 — the *same physical bytes* at two
+addresses. Each core needs its own reservation at its own address:
+
+```ld
+/* CM7 (app-m7) memory.x */
+MEMORY {
+  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 2M
+  RAM   (rwx) : ORIGIN = 0x24000000, LENGTH = 0x80000  /* AXI SRAM; stops before SRAM3 */
+  IPC   (rw)  : ORIGIN = 0x30040000, LENGTH = 4K       /* "0->1" region, CM7 view */
+}
+```
+
+```ld
+/* CM4 (app-m4) memory.x */
+MEMORY {
+  FLASH (rx)  : ORIGIN = 0x08100000, LENGTH = 2M
+  RAM   (rwx) : ORIGIN = 0x10000000, LENGTH = 0x40000  /* D2 SRAM; stops before 0x10040000 */
+  IPC   (rw)  : ORIGIN = 0x10040000, LENGTH = 4K       /* "0->1" region, CM4 view */
+}
+```
+
+Both binaries declare an `IPC` region at their own view of the same physical
+block. Keep `LENGTH(IPC)` **>=** the `size` declared for that direction in
+`rticx.toml`: the driver's fit check uses the declared `size`, so a reservation
+smaller than the declared region defeats the check.
+
+To make the linker actually reserve and check the range — so an overflow is a
+link error rather than a silent wrap — place a `NOLOAD` output section in the
+`IPC` region, usually in the wrapper linker script that includes your `memory.x`
+and the runtime's `link.x`:
+
+```ld
+SECTIONS {
+  .rticx_xbin_ipc (NOLOAD) : {
+    KEEP(*(.rticx_xbin_ipc))
+  } > IPC
+}
+```
+
+If nothing is tagged into `.rticx_xbin_ipc`, give the output section an explicit
+extent so the linker accounts for the whole region instead of collapsing an
+empty section, and export bounds you can compare against `system.json` when
+auditing:
+
+```ld
+SECTIONS {
+  .rticx_xbin_ipc (NOLOAD) : {
+    KEEP(*(.rticx_xbin_ipc))
+    . = ORIGIN(IPC) + LENGTH(IPC);   /* force the reservation extent */
+  } > IPC
+
+  IPC_0_1_start = ORIGIN(IPC);
+  IPC_0_1_end   = ORIGIN(IPC) + LENGTH(IPC);
+}
+```
+
+**Aliasing checklist**
+
+- Compute each core's own view of every region and reserve that view on that
+  core only. Do not assume a region reserved in the CM7 script is reserved in
+  the CM4 script: the two linker scripts are independent.
+- On aliased targets the same physical bytes appear at different addresses
+  (`base_from_source != base_from_target`); both views must be reserved, and
+  both must describe the **same physical block**. Reserving different SRAM
+  blocks on the two cores is a silent aliasing bug — confirm against the
+  reference manual's memory map.
+- The reservation is per *direction*. A `0->1` and a `1->0` region need distinct
+  physical ranges (the parser already rejects overlapping per-core views, but it
+  is your job to give them distinct memory).
+- The region must still be mapped Normal, Non-cacheable, Shareable by the MPU
+  ([§7.4](#74-cache-and-mpu-checklist)) and its base/size must satisfy the MPU's
+  alignment rules (e.g. power-of-two regions on Cortex-M). Choose addresses that
+  satisfy the linker and the MPU at once.
+- Re-check the reservation whenever the memory map, the MPU configuration or the
+  `rticx.toml` regions change.
+
+> **Not yet checked automatically.** The driver cannot read linker scripts, and
+> the generated code does not (yet) emit a placeholder into the reserved section
+> or assert the reserved bounds against `system.json`. A mismatch between
+> `rticx.toml` and the linker scripts is therefore not diagnosed at build time;
+> treat the reservation as a required manual step. The H7 acceptance
+> distribution (M7-T1) is where the reference linker scripts are written.
+
+### 7.6 Verifying your setup
 
 - `cargo xbin sync` alone validates the whole topology (cores, visibility,
   priorities, types, region fit) and re-renders `ipc-types/`.
@@ -841,7 +961,7 @@ source of runtime-only failures:
 | ``application `x` changed since the last `cargo xbin sync` (the system view records source hash …, the source hashes to …)`` | the source changed after the last `sync`; run `cargo xbin sync` before a plain `cargo build` |
 
 *Runtime, cache and IRQ symptoms (M6-T3):* these appear only on hardware; the
-host fixtures in section 7.5 cannot reproduce them.
+host fixtures in section 7.6 cannot reproduce them.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
