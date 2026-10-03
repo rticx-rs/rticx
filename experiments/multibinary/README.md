@@ -50,9 +50,12 @@ backpressure and dispatcher execution; the driver's `tests/negative.rs`
 (M4-T3) asserts the documented errors for a missing sync, a stale view or
 source, priority conflicts, unknown types and region overflow.
 
-`fixtures/three-app/` is the M6-T1 project: two producers (`app-m7` on global
-core 0, `app-m5` on global core 2) spawn onto one receiver (`app-m4` on global
-core 1) through two regions, two priority lines and two per-pair routers. The
+`fixtures/three-app/` is the M6-T1 project, in a fully connected cross-binary
+topology: `app-m7` (global core 0), `app-m5` (global core 2) and `app-m4`
+(global core 1) each own one binary, every ordered pair has its own region
+(`0<->1`, `1<->2`, `0<->2`), and every application is both a producer and a
+receiver (eight cross-binary tasks over six regions, with `0->1` and `2->1`
+packing two FIFOs each). The
 driver's `tests/three_app.rs` builds it with `cargo xbin build`, and the pass
 crate's `tests/e2e_runtime.rs` expands all three applications into one host
 binary and runs the multi-source scenario: per-pair routers and dispatcher

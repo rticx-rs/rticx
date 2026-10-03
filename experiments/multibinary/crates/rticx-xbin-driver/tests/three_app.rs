@@ -1,15 +1,15 @@
 //! M6-T1 acceptance: the three-application fixture builds with
 //! `cargo xbin build`.
 //!
-//! `fixtures/three-app` is a standalone workspace with two producer binaries
-//! (`app-m7` on global core 0, `app-m5` on global core 2) and one receiver
-//! binary (`app-m4` on global core 1). The receiver declares two native
-//! `#[sw_task]` receivers on disjoint priority lines, so phase 2 generates two
-//! line dispatchers and two per-pair doorbell routers; both producers declare
-//! nothing and receive their generated sender stubs from the synced view. The
-//! fixture's own mock distribution runs the real core pass on
-//! `MockCoreBackend`, so the generated phase-2 code compiles and links on the
-//! host.
+//! `fixtures/three-app` is a standalone workspace with three binaries in a
+//! fully connected cross-binary topology: `app-m7` owns global core 0,
+//! `app-m4` global core 1 and `app-m5` global core 2, and every ordered pair
+//! has its own region. Each application is therefore both a producer (its
+//! generated sender stubs spawn tasks on the other two cores) and a receiver
+//! (it declares `#[sw_task]` cross-binary receivers on priority lines that are
+//! disjoint between the two source cores). The fixture's own mock distribution
+//! runs the real core pass on `MockCoreBackend`, so the generated phase-2 code
+//! compiles and links on the host.
 
 use std::path::{Path, PathBuf};
 
@@ -74,52 +74,116 @@ fn cargo_xbin_build_builds_the_three_applications() {
         );
     }
 
-    // Phase 2 really ran in both producer binaries: each contains the
-    // generated FIFO view diagnostic of its own `(source -> target)` region.
-    assert!(
-        binary_contains(
-            &binaries.join("m7"),
-            "`cargo xbin sync` allocated the `(0 -> 1)` IPC region",
-        ),
-        "the m7 binary does not contain the generated FIFO view"
-    );
-    assert!(
-        binary_contains(
-            &binaries.join("m5"),
-            "`cargo xbin sync` allocated the `(2 -> 1)` IPC region",
-        ),
-        "the m5 binary does not contain its generated FIFO view"
-    );
-
-    // The receiver binary carries two dispatcher lines and two per-pair
-    // routers, one per producer core (M6.5-T3/T4).
-    let m4 = binaries.join("m4");
-    for symbol in [
-        "RTICX_XBIN_ROUTER0_TO1",
-        "RTICX_XBIN_ROUTER2_TO1",
-        "RTICX_XBIN_DISPATCHER0_TO1_P3",
-        "RTICX_XBIN_DISPATCHER2_TO1_P4",
+    // Phase 2 really ran in every producer direction: each binary carries the
+    // generated FIFO view diagnostics of the regions it spawns into.
+    for (bin, direction) in [
+        ("m7", "0 -> 1"),
+        ("m7", "0 -> 2"),
+        ("m5", "2 -> 1"),
+        ("m5", "2 -> 0"),
+        ("m4", "1 -> 0"),
+        ("m4", "1 -> 2"),
     ] {
         assert!(
-            binary_contains(&m4, symbol),
-            "the receiver binary does not contain the generated `{symbol}` task"
+            binary_contains(
+                &binaries.join(bin),
+                &format!("`cargo xbin sync` allocated the `({direction})` IPC region"),
+            ),
+            "the {bin} binary does not contain the generated FIFO view for `{direction}`"
         );
     }
 
-    // The synced view places one task per producer direction, on disjoint
-    // priority lines.
+    // Each receiver binary carries one per-pair router and one line dispatcher
+    // per cross line (M6.5-T3/T4).
+    let receiver_symbols: [(&str, &[&str]); 3] = [
+        (
+            "m4",
+            &[
+                "RTICX_XBIN_ROUTER0_TO1",
+                "RTICX_XBIN_ROUTER2_TO1",
+                "RTICX_XBIN_DISPATCHER0_TO1_P3",
+                "RTICX_XBIN_DISPATCHER0_TO1_P5",
+                "RTICX_XBIN_DISPATCHER2_TO1_P4",
+                "RTICX_XBIN_DISPATCHER2_TO1_P6",
+            ],
+        ),
+        (
+            "m7",
+            &[
+                "RTICX_XBIN_ROUTER1_TO0",
+                "RTICX_XBIN_ROUTER2_TO0",
+                "RTICX_XBIN_DISPATCHER1_TO0_P3",
+                "RTICX_XBIN_DISPATCHER2_TO0_P6",
+            ],
+        ),
+        (
+            "m5",
+            &[
+                "RTICX_XBIN_ROUTER0_TO2",
+                "RTICX_XBIN_ROUTER1_TO2",
+                "RTICX_XBIN_DISPATCHER0_TO2_P5",
+                "RTICX_XBIN_DISPATCHER1_TO2_P3",
+            ],
+        ),
+    ];
+    for (bin, symbols) in receiver_symbols {
+        let binary = binaries.join(bin);
+        for symbol in symbols {
+            assert!(
+                binary_contains(&binary, symbol),
+                "the {bin} binary does not contain the generated `{symbol}` task"
+            );
+        }
+    }
+
+    // The synced view places one task per receiver, sorted by name, on the
+    // receiver's disjoint priority line.
     let system = outcome
         .sync
         .system
         .as_ref()
         .expect("sync emits the system view");
-    assert_eq!(system.tasks.len(), 2);
-    assert_eq!(system.tasks[0].name, "EncryptTask");
-    assert_eq!(system.tasks[0].fifo.source, 0);
-    assert_eq!(system.tasks[0].fifo.target, 1);
-    assert_eq!(system.tasks[1].name, "SensorTask");
-    assert_eq!(system.tasks[1].fifo.source, 2);
-    assert_eq!(system.tasks[1].fifo.target, 1);
+    assert_eq!(
+        system
+            .tasks
+            .iter()
+            .map(|task| (
+                task.name.as_str(),
+                task.spawner_core,
+                task.receiver_core,
+                task.priority,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("AckTask", 1, 0, 3),
+            ("ConfigTask", 0, 2, 5),
+            ("DigestTask", 0, 1, 5),
+            ("EncryptTask", 0, 1, 3),
+            ("HeartbeatTask", 2, 0, 6),
+            ("SensorTask", 2, 1, 4),
+            ("StatusTask", 1, 2, 3),
+            ("TelemetryTask", 2, 1, 6),
+        ]
+    );
+
+    // Both `0->1` and `2->1` pack two FIFOs; the four reverse/side directions
+    // fit one each.
+    for region in &system.regions {
+        let expected = if (region.source, region.target) == (0, 1)
+            || (region.source, region.target) == (2, 1)
+        {
+            256
+        } else {
+            128
+        };
+        assert_eq!(
+            region.size, expected,
+            "region `{} -> {}` has the wrong size",
+            region.source, region.target
+        );
+    }
+
+    // One doorbell per `(source, target, priority)` line.
     assert_eq!(
         system
             .doorbells
@@ -131,7 +195,16 @@ fn cargo_xbin_build_builds_the_three_applications() {
                 doorbell.line
             ))
             .collect::<Vec<_>>(),
-        [(0, 1, 3, 0), (2, 1, 4, 1)]
+        [
+            (0, 1, 3, 0),
+            (0, 1, 5, 1),
+            (0, 2, 5, 0),
+            (1, 0, 3, 0),
+            (1, 2, 3, 1),
+            (2, 0, 6, 1),
+            (2, 1, 4, 2),
+            (2, 1, 6, 3),
+        ]
     );
 
     // The checked-in generated crate is up to date with the IDL (M1-T7).

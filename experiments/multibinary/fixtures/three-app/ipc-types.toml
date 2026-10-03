@@ -1,6 +1,43 @@
-# Type-only IDL of the three-application fixture (M6-T1): one message, used as
-# the spawn input of both cross-binary tasks.
+# Type-only IDL of the three-application fixture (M6-T1).
+#
+# Every cross-binary task of the three applications draws its spawn input from
+# one of these messages. The sizes vary (4, 8 and 12 bytes) so the visualization
+# shows differently sized FIFO buffers, and the `(source, target)` allocator
+# packs several FIFOs into the same region.
 schema = 1
 
+# -- producer core 0 -> receiver core 1 ---------------------------------------
+
 [message.EncryptReq]
-fields = { addr = "u32", len = "u32", key = "u32" }
+fields = { addr = "u32", len = "u32", key = "u32" } # 12 bytes
+
+[message.DigestReq]
+fields = { algo = "u32", rounds = "u32", seed = "u32" } # 12 bytes
+
+# -- producer core 2 -> receiver core 1 ---------------------------------------
+
+[message.SensorSample]
+fields = { channel = "u32", value = "u32", seq = "u32" } # 12 bytes
+
+[message.Telemetry]
+fields = { kind = "u32", value = "u32", seq = "u32" } # 12 bytes
+
+# -- producer core 1 -> receiver core 0 ---------------------------------------
+
+[message.AckMsg]
+fields = { code = "u32", seq = "u32" } # 8 bytes
+
+# -- producer core 1 -> receiver core 2 ---------------------------------------
+
+[message.StatusMsg]
+fields = { state = "u32", uptime = "u32", errors = "u32" } # 12 bytes
+
+# -- producer core 0 -> receiver core 2 ---------------------------------------
+
+[message.ConfigMsg]
+fields = { base = "u32", mode = "u32" } # 8 bytes
+
+# -- producer core 2 -> receiver core 0 ---------------------------------------
+
+[message.HeartbeatMsg]
+fields = { seq = "u32" } # 4 bytes

@@ -2,16 +2,21 @@
 #
 # Standalone workspace, intentionally outside the experimental workspace: it
 # models a three-binary `cargo xbin` project that builds end to end on the
-# host. Two producer binaries spawn onto one receiver binary:
+# host. The three binaries are fully connected and each one is both a producer
+# and a receiver:
 #
-# - `app-m7` (bin `m7`, global core id 0) declares nothing: the cross-binary
-#   pass generates its `EncryptTask` sender stub from the synced view;
-# - `app-m5` (bin `m5`, global core id 2) declares nothing either; its
-#   `SensorTask` stub targets the same receiver application through its own
-#   `(2 -> 1)` region and doorbell router;
-# - `app-m4` (bin `m4`, global core id 1) declares the two native `#[sw_task]`
-#   receivers on distinct priority lines, each with its own `ipc_dispatchers`
-#   entry;
+# - `app-m7` (bin `m7`, global core id 0) declares the `AckTask`/`HeartbeatTask`
+#   receivers (spawned by cores 1 and 2) and receives generated stubs for its
+#   own `EncryptTask`/`DigestTask` (`0 -> 1`) and `ConfigTask` (`0 -> 2`)
+#   spawns;
+# - `app-m5` (bin `m5`, global core id 2) declares the `ConfigTask`/`StatusTask`
+#   receivers (spawned by cores 0 and 1) and receives generated stubs for its
+#   own `SensorTask`/`TelemetryTask` (`2 -> 1`) and `HeartbeatTask` (`2 -> 0`)
+#   spawns;
+# - `app-m4` (bin `m4`, global core id 1) declares four native `#[sw_task]`
+#   receivers on distinct priority lines (two per source core), each with its
+#   own `ipc_dispatchers` entry, and produces `AckTask` (`1 -> 0`) and
+#   `StatusTask` (`1 -> 2`);
 # - `xbin-mock-distro` is the `#[app]` macro of the shared mock
 #   distribution (under `crates/mock/` in the experimental workspace). It runs
 #   the full core pass on `MockCoreBackend` and binds the cross-binary pass

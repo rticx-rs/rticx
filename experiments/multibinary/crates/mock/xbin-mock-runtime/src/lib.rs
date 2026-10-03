@@ -22,10 +22,11 @@ pub use rticx_xbin_rt as xbin_rt;
 /// The regions are declared with the same `(source, target)` pairs as the
 /// fixtures' `rticx.toml`; the mock ignores the declared addresses and sizes
 /// and uses the backing array's own. The runtime is shared by every fixture,
-/// so it carries the union of the directions they use (`0->1` for the
-/// two-application end-to-end fixture and `2->1` for the three-application
-/// one). A fixture only ever looks up the directions it declared, so the
-/// extra region is inert.
+/// so it carries the union of the directions they use: `0->1` for the
+/// two-application end-to-end fixture, and all six directions of the
+/// three-application fixture's fully connected `0<->1`, `1<->2`, `0<->2`
+/// topology. A fixture only ever looks up the directions it declared, so the
+/// extra regions are inert.
 pub fn system() -> &'static MockSystem {
     static SYSTEM: LazyLock<MockSystem> = LazyLock::new(|| {
         let mut system = MockSystem::new();
@@ -33,8 +34,20 @@ pub fn system() -> &'static MockSystem {
             .add_region(0, 1, 4096)
             .expect("the fixtures declare the `0->1` region");
         system
+            .add_region(1, 0, 4096)
+            .expect("the three-application fixture declares the `1->0` region");
+        system
             .add_region(2, 1, 4096)
             .expect("the three-application fixture declares the `2->1` region");
+        system
+            .add_region(1, 2, 4096)
+            .expect("the three-application fixture declares the `1->2` region");
+        system
+            .add_region(0, 2, 4096)
+            .expect("the three-application fixture declares the `0->2` region");
+        system
+            .add_region(2, 0, 4096)
+            .expect("the three-application fixture declares the `2->0` region");
         system
     });
     &SYSTEM
