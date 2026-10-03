@@ -496,12 +496,25 @@ my-distro = "0.1"       # the fixture uses xbin-mock-distro
 cargo xbin build
 ```
 
-`build` runs phase 1 (`sync`) and then compiles every application. Expected
-output (checking the project the first time prints one `created`/`updated`
+`build` runs phase 1 (`sync`) and then compiles every application. It streams
+the output of each `cargo` step it drives, so the per-application progress is
+visible. Checking the project the first time also prints one `created`/`updated`
 line per changed file of `ipc-types/`; a checked-in, up-to-date crate prints
-nothing else):
+nothing else. Abridged:
 
 ```text
+[cargo-xbin] running `cargo clean --package app-m7`
+     Removed 34 files, 10.9MiB total
+[cargo-xbin] running `cargo check --package app-m7 --bin m7`
+    Checking app-m7 v0.1.0 (...)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+...
+[cargo-xbin] running `cargo build --package app-m7 --bin m7`
+   Compiling app-m7 v0.1.0 (...)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+[cargo-xbin] running `cargo build --package app-m4 --bin m4`
+   Compiling app-m4 v0.1.0 (...)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
 [cargo-xbin] ipc-types is up to date
 ```
 

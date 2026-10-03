@@ -1,8 +1,9 @@
 //! `sync` and `build` implementations.
 
 use std::ffi::{OsStr, OsString};
+use std::io::{self, BufReader, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use rticx_xbin_pass::{META_OUT_ENV, SYSTEM_ENV};
 use rticx_xbin_proto::{
@@ -77,6 +78,21 @@ impl SyncOutcome {
     }
 }
 
+/// How [`run_cargo`] treats the output of the `cargo` subprocesses it spawns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CargoOutput {
+    /// Capture the child's output and stay quiet on success; failures surface
+    /// the captured standard error in [`DriverError::CargoFailed`]. This is the
+    /// default for library callers (and the tests), which must not spew Cargo
+    /// progress.
+    #[default]
+    Captured,
+    /// Forward the child's output to the driver's own standard output/error as
+    /// Cargo produces it (and still capture it for failures). Used by the CLI
+    /// so `cargo xbin build` shows the per-application cargo steps.
+    Streamed,
+}
+
 /// Phase 1 entry point.
 ///
 /// Parses `rticx.toml` and `ipc-types.toml`, lays out `target/rticx-xbin/`
@@ -90,7 +106,18 @@ impl SyncOutcome {
 /// `target/rticx-xbin/system.json` (M1-T6). Finally, when the project has an
 /// `ipc-types.toml`, the `ipc-types/` crate is generated below the project
 /// root and only changed files are rewritten (M1-T7).
+///
+/// Cargo output is captured, keeping library callers quiet; the CLI uses
+/// [`sync_with_output`] to stream it.
 pub fn sync(project_root: &Path) -> Result<SyncOutcome, DriverError> {
+    sync_with_output(project_root, CargoOutput::default())
+}
+
+/// [`sync`] with an explicit cargo-output mode.
+pub(crate) fn sync_with_output(
+    project_root: &Path,
+    output: CargoOutput,
+) -> Result<SyncOutcome, DriverError> {
     let manifest_path = project_root.join(PROJECT_MANIFEST);
     let config = if manifest_path.is_file() {
         Some(parse_project_file(&manifest_path)?)
@@ -110,7 +137,7 @@ pub fn sync(project_root: &Path) -> Result<SyncOutcome, DriverError> {
     let (idl, merged, manifests) = match &config {
         Some(config) => {
             let idl = read_idl(&idl_path)?;
-            let manifests = collect_manifests(project_root, &output_dir, config)?;
+            let manifests = collect_manifests(project_root, &output_dir, config, output)?;
             let merged = merge_project(config, &manifests, &idl)?;
             (Some(idl), Some(merged), manifests)
         }
@@ -236,11 +263,12 @@ fn collect_manifests(
     project_root: &Path,
     output_dir: &Path,
     config: &ProjectConfig,
+    output: CargoOutput,
 ) -> Result<Vec<AppManifest>, DriverError> {
     config
         .applications()
         .iter()
-        .map(|application| collect_manifest(project_root, output_dir, application))
+        .map(|application| collect_manifest(project_root, output_dir, application, output))
         .collect()
 }
 
@@ -249,6 +277,7 @@ fn collect_manifest(
     project_root: &Path,
     output_dir: &Path,
     application: &Application,
+    output: CargoOutput,
 ) -> Result<AppManifest, DriverError> {
     let package = application.package();
     let target = application.target().name();
@@ -261,6 +290,7 @@ fn collect_manifest(
         &argv(&["clean", "--package", package]),
         &[],
         &[],
+        output,
     )?;
 
     // Never read a manifest left over from a previous run: the pass must
@@ -282,6 +312,7 @@ fn collect_manifest(
         &check,
         &[(META_OUT_ENV, output_dir.as_os_str())],
         &[SYSTEM_ENV],
+        output,
     )?;
 
     let source =
@@ -303,13 +334,19 @@ fn collect_manifest(
 /// inherited value (for example `RTICX_XBIN_META_OUT` exported in the user's
 /// shell) can never select the wrong mode.
 ///
-/// Output is captured so library users and tests stay quiet; on failure the
-/// captured standard error is part of [`DriverError::CargoFailed`].
+/// In [`CargoOutput::Captured`] mode the output is captured so library users
+/// and tests stay quiet; on failure the captured standard error is part of
+/// [`DriverError::CargoFailed`]. In [`CargoOutput::Streamed`] mode the
+/// subprocess is prefixed with a `[cargo-xbin]` banner and its output is
+/// forwarded to the driver's own streams as it is produced (while still being
+/// captured for failure reporting), so `cargo xbin build` shows the cargo
+/// steps of every application.
 fn run_cargo(
     project_root: &Path,
     args: &[String],
     envs: &[(&str, &OsStr)],
     unset: &[&str],
+    output: CargoOutput,
 ) -> Result<(), DriverError> {
     let command_line = format!("cargo {}", args.join(" "));
     let mut command = Command::new(cargo_binary());
@@ -321,22 +358,94 @@ fn run_cargo(
         command.env(name, value);
     }
 
-    let output = command.output().map_err(|source| DriverError::CargoSpawn {
-        command: command_line.clone(),
-        dir: project_root.to_path_buf(),
-        source,
-    })?;
-    if !output.status.success() {
-        return Err(DriverError::CargoFailed {
-            command: command_line,
-            dir: project_root.to_path_buf(),
-            status: output.status,
-            stderr: String::from_utf8_lossy(&output.stderr)
-                .trim_end()
-                .to_string(),
-        });
+    match output {
+        CargoOutput::Captured => {
+            let output = command.output().map_err(|source| DriverError::CargoSpawn {
+                command: command_line.clone(),
+                dir: project_root.to_path_buf(),
+                source,
+            })?;
+            if !output.status.success() {
+                return Err(DriverError::CargoFailed {
+                    command: command_line,
+                    dir: project_root.to_path_buf(),
+                    status: output.status,
+                    stderr: String::from_utf8_lossy(&output.stderr)
+                        .trim_end()
+                        .to_string(),
+                });
+            }
+            Ok(())
+        }
+        CargoOutput::Streamed => {
+            // Cargo decides whether to color its output from its own stderr
+            // being a terminal, but we pipe that stream to forward and capture
+            // it. When the driver's stderr is a terminal, ask Cargo to keep its
+            // colors (`always`) so `cargo xbin build` looks like a plain
+            // `cargo build`. An explicit `CARGO_TERM_COLOR` or `NO_COLOR` from
+            // the user wins.
+            if io::stderr().is_terminal()
+                && std::env::var_os("CARGO_TERM_COLOR").is_none()
+                && std::env::var_os("NO_COLOR").is_none()
+            {
+                command.env("CARGO_TERM_COLOR", "always");
+            }
+            eprintln!("[cargo-xbin] running `{command_line}`");
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            let mut child = command.spawn().map_err(|source| DriverError::CargoSpawn {
+                command: command_line.clone(),
+                dir: project_root.to_path_buf(),
+                source,
+            })?;
+
+            // Drain both pipes on separate threads so the child can never block
+            // on a full pipe, forwarding each chunk as Cargo writes it while
+            // accumulating standard error for [`DriverError::CargoFailed`].
+            let child_stdout = child.stdout.take().expect("piped standard output");
+            let child_stderr = child.stderr.take().expect("piped standard error");
+            let stdout = std::thread::spawn(move || forward(child_stdout, io::stdout()));
+            let stderr = std::thread::spawn(move || forward(child_stderr, io::stderr()));
+
+            let status = child.wait().map_err(|source| DriverError::CargoSpawn {
+                command: command_line.clone(),
+                dir: project_root.to_path_buf(),
+                source,
+            })?;
+            let _ = stdout.join();
+            let stderr = stderr.join().unwrap_or_default();
+
+            if !status.success() {
+                return Err(DriverError::CargoFailed {
+                    command: command_line,
+                    dir: project_root.to_path_buf(),
+                    status,
+                    stderr: stderr.trim_end().to_string(),
+                });
+            }
+            Ok(())
+        }
     }
-    Ok(())
+}
+
+/// Forwards everything `reader` produces to `sink` as it arrives and returns
+/// what it read (lossily decoded) for failure reporting.
+fn forward<R: Read, W: Write>(reader: R, mut sink: W) -> String {
+    let mut reader = BufReader::new(reader);
+    let mut captured = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        match reader.read(&mut buffer) {
+            // The child closed the pipe (or the reader errored): stop.
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let chunk = &buffer[..read];
+                let _ = sink.write_all(chunk);
+                let _ = sink.flush();
+                captured.extend_from_slice(chunk);
+            }
+        }
+    }
+    String::from_utf8_lossy(&captured).into_owned()
 }
 
 /// Owns a static argument list for [`run_cargo`].
@@ -379,8 +488,19 @@ pub struct BuildOutcome {
 /// source hash) guarantee the build matches the synced view. Without a project
 /// manifest there is nothing to build, so `build` only lays out
 /// `target/rticx-xbin/`.
+///
+/// Cargo output is captured, keeping library callers quiet; the CLI uses
+/// [`build_with_output`] to stream it.
 pub fn build(project_root: &Path) -> Result<BuildOutcome, DriverError> {
-    let sync = sync(project_root)?;
+    build_with_output(project_root, CargoOutput::default())
+}
+
+/// [`build`] with an explicit cargo-output mode.
+pub(crate) fn build_with_output(
+    project_root: &Path,
+    output: CargoOutput,
+) -> Result<BuildOutcome, DriverError> {
+    let sync = sync_with_output(project_root, output)?;
 
     // The pass can discover the view from the project root, but the driver
     // knows the exact path it just wrote; passing it explicitly keeps the
@@ -401,6 +521,7 @@ pub fn build(project_root: &Path) -> Result<BuildOutcome, DriverError> {
             &args,
             &[(SYSTEM_ENV, system.as_os_str())],
             &[META_OUT_ENV],
+            output,
         )?;
         builds.push(AppBuild {
             package: package.to_string(),
@@ -409,4 +530,38 @@ pub fn build(project_root: &Path) -> Result<BuildOutcome, DriverError> {
     }
 
     Ok(BuildOutcome { sync, builds })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward;
+
+    #[test]
+    fn forward_streams_every_chunk_and_captures_it() {
+        let input: &[u8] = b"Compiling app-m7\nFinished `dev` profile\n";
+        let mut sink = Vec::new();
+
+        let captured = forward(input, &mut sink);
+
+        assert_eq!(
+            sink.as_slice(),
+            input,
+            "the sink sees the child's bytes verbatim"
+        );
+        assert_eq!(
+            captured, "Compiling app-m7\nFinished `dev` profile\n",
+            "the captured text is returned for failure reporting"
+        );
+    }
+
+    #[test]
+    fn forward_tolerates_non_utf8_output() {
+        let input: &[u8] = &[b'a', 0xff, b'\n'];
+        let mut sink = Vec::new();
+
+        let captured = forward(input, &mut sink);
+
+        assert_eq!(sink.as_slice(), input);
+        assert_eq!(captured, "a\u{fffd}\n");
+    }
 }

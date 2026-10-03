@@ -22,6 +22,7 @@ use rticx_xbin_proto::FileChange;
 
 pub use cli::{Cli, Command};
 pub use commands::{AppBuild, BuildOutcome, IpcTypesOutcome, SyncOutcome, build, sync};
+use commands::{CargoOutput, build_with_output, sync_with_output};
 pub use error::DriverError;
 pub use project::{
     IDL_MANIFEST, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE, find_project_root, output_dir,
@@ -67,12 +68,12 @@ fn run(cli: Cli) -> Result<(), DriverError> {
     let project_root = find_project_root(&current_dir).unwrap_or(current_dir);
     match cli.command {
         Command::Sync => {
-            let outcome = sync(&project_root)?;
+            let outcome = sync_with_output(&project_root, CargoOutput::Streamed)?;
             report_ipc_types(&outcome);
             Ok(())
         }
         Command::Build => {
-            let outcome = build(&project_root)?;
+            let outcome = build_with_output(&project_root, CargoOutput::Streamed)?;
             report_ipc_types(&outcome.sync);
             Ok(())
         }
