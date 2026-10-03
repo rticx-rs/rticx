@@ -110,6 +110,7 @@ use rticx_core::rticx_traits::HWT_TRAIT_TY;
 use rticx_xbin_proto::{AppEntry, Hash64, ReceiverDecl, SystemView, TaskEntry, simple_type_name};
 use syn::{Item, ItemMod, LitInt, LitStr, Type};
 
+use crate::binding::{IpcPool, PhysicalCore};
 use crate::parse::AppExtensions;
 
 /// Code-generation configuration of the cross-binary extension.
@@ -203,6 +204,38 @@ pub trait XbinPassBackend {
     // TODO(extract): mirrors `rticx_sw_pass::SwPassBackend::custom_interrupt_path`.
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         None
+    }
+
+    /// Physical core this application's local core `local_core` runs on
+    /// (M6.9-T1).
+    ///
+    /// The id is a distribution vocabulary, not a project one: two
+    /// applications whose cores run on the same physical core report the same
+    /// id even when their local indexes differ, and the driver matches the two
+    /// endpoints of a dual through it (M6.9-T4).
+    ///
+    /// The default is the identity mapping, which is correct for a
+    /// distribution whose physical-core ids coincide with the local indexes
+    /// (the mock or a single-core target).
+    fn physical_core(&self, local_core: u32) -> PhysicalCore {
+        PhysicalCore(local_core)
+    }
+
+    /// Every IPC pool the physical core running local core `local_core` can
+    /// reach, from this side of the dual (M6.9-T1).
+    ///
+    /// The returned pools are the distribution's adjacency. An edge `{A, B}`
+    /// exists iff `A` reports a pool whose peer is `B` **and** `B` reports the
+    /// matching pool (the same [`PoolId`](crate::PoolId) with the opposite
+    /// physical core); the driver builds the global graph from the two
+    /// manifests and rejects a used direction with no pool path (M6.9-T4).
+    /// Both directions of a dual allocate inside one shared
+    /// [`budget`](IpcPool::budget).
+    ///
+    /// The default is empty: a distribution that has not adopted the
+    /// capability binding exposes no reachable peer.
+    fn ipc_pools(&self, _local_core: u32) -> Vec<IpcPool> {
+        Vec::new()
     }
 }
 
@@ -1618,5 +1651,49 @@ mod tests {
         assert_eq!(indices[&(0, 0, 3)], 0);
         assert_eq!(indices[&(0, 0, 4)], 1);
         assert_eq!(indices[&(1, 2, 1)], 0);
+    }
+
+    /// A backend that does not adopt the capability binding keeps the identity
+    /// physical core and reports no reachable pool (M6.9-T1): the defaults are
+    /// the "no distro capability information" fallback.
+    #[test]
+    fn capability_binding_defaults_to_identity_and_no_pools() {
+        struct BareBackend;
+
+        impl XbinPassBackend for BareBackend {
+            fn backend(&self) -> syn::Expr {
+                syn::parse_quote!(())
+            }
+
+            fn rt_path(&self) -> syn::Path {
+                syn::parse_quote!(rticx_xbin_rt)
+            }
+
+            fn ring_doorbell_fn(
+                &self,
+                _source: u32,
+                _target: u32,
+                template: syn::ItemFn,
+            ) -> syn::ItemFn {
+                template
+            }
+
+            fn doorbell_interrupt(&self, _target: u32, _source: u32) -> Ident {
+                format_ident!("IRQ")
+            }
+
+            fn read_doorbell_msg_fn(
+                &self,
+                _target: u32,
+                _source: u32,
+                template: syn::ItemFn,
+            ) -> syn::ItemFn {
+                template
+            }
+        }
+
+        let backend = BareBackend;
+        assert_eq!(backend.physical_core(4), PhysicalCore(4));
+        assert!(backend.ipc_pools(0).is_empty());
     }
 }

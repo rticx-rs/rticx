@@ -24,14 +24,39 @@ use rticx_core::RticMacroBuilder;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::parse_utils::RticAttr;
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use rticx_xbin_pass::{XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{CachePolicy, IpcPool, PhysicalCore, PoolId, XbinPass, XbinPassBackend};
 use syn::{Expr, ItemMod, Lit, parse_macro_input};
 
 /// Code-generation backend of the mock distribution.
 ///
 /// The generated code reaches the runtime through `xbin-mock-runtime` and
 /// calls the injected `__rticx_xbin_backend()` helper for its backend value.
-struct MockDistroBackend;
+/// The backend also carries the application's `core_ids`, so its capability
+/// binding ([`XbinPassBackend::physical_core`],
+/// [`XbinPassBackend::ipc_pools`], M6.9-T1) can map a local core index to the
+/// fixture's physical core.
+struct MockDistroBackend {
+    /// Local core index -> global core id (`core_ids = [..]`), empty when the
+    /// application leaves the identity default.
+    core_ids: Vec<u32>,
+}
+
+impl MockDistroBackend {
+    /// Physical core of local core `local_core` (M6.9-T1).
+    ///
+    /// The mock's physical-core vocabulary is the global core id, so the two
+    /// applications running on the endpoints of a dual agree on it. A local
+    /// index outside the declared mapping falls back to the identity, matching
+    /// the trait default.
+    fn physical(&self, local_core: u32) -> PhysicalCore {
+        PhysicalCore(
+            self.core_ids
+                .get(local_core as usize)
+                .copied()
+                .unwrap_or(local_core),
+        )
+    }
+}
 
 impl XbinPassBackend for MockDistroBackend {
     fn backend(&self) -> syn::Expr {
@@ -67,6 +92,53 @@ impl XbinPassBackend for MockDistroBackend {
 
     fn custom_interrupt_path(&self, _core: u32) -> Option<syn::Path> {
         Some(syn::parse_quote!(__XbinInterrupt))
+    }
+
+    fn physical_core(&self, local_core: u32) -> PhysicalCore {
+        self.physical(local_core)
+    }
+
+    fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool> {
+        fixture_pools(self.physical(local_core))
+    }
+}
+
+/// IPC pools of the mock fixtures: physical cores 0, 1 and 2 are fully
+/// connected through the three duals `{0, 1}`, `{1, 2}` and `{0, 2}`
+/// (M6.9-T1).
+///
+/// This is the mock distribution's capability binding, the counterpart of the
+/// mock runtime's six directional regions. The mock has a single address
+/// space, so both endpoints of a dual see its base at the same address; the
+/// budget matches the runtime's 4096-byte regions. The entries are ordered by
+/// ascending peer for determinism.
+fn fixture_pools(local: PhysicalCore) -> Vec<IpcPool> {
+    /// Bytes reserved for both directions of one dual.
+    const BUDGET: u32 = 4096;
+
+    let dual = |id: &str, peer: u32, base: u32| IpcPool {
+        id: PoolId::new(id),
+        peer: PhysicalCore(peer),
+        base_local: base,
+        base_peer: base,
+        budget: BUDGET,
+        policy: CachePolicy::NormalNonCacheableShareable,
+    };
+
+    match local.0 {
+        0 => vec![
+            dual("mock-0-1", 1, 0x3000_0000),
+            dual("mock-0-2", 2, 0x3000_2000),
+        ],
+        1 => vec![
+            dual("mock-0-1", 0, 0x3000_0000),
+            dual("mock-1-2", 2, 0x3000_1000),
+        ],
+        2 => vec![
+            dual("mock-0-2", 0, 0x3000_2000),
+            dual("mock-1-2", 1, 0x3000_1000),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -114,34 +186,43 @@ impl SwPassBackend for MockSwBackend {
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let parsed_args = TokenStream2::from(args.clone());
     let mut app_mod = parse_macro_input!(input as ItemMod);
-    inject_backend_helper(&mut app_mod, global_core(&parsed_args));
+    let core_ids = core_ids(&parsed_args);
+    inject_backend_helper(&mut app_mod, core_ids.first().copied().unwrap_or(0));
     inject_interrupt_support(&mut app_mod, &parsed_args);
 
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
-    builder.bind_pre_core_pass(XbinPass::from_env().with_backend(MockDistroBackend));
+    builder.bind_pre_core_pass(XbinPass::from_env().with_backend(MockDistroBackend {
+        core_ids: core_ids.clone(),
+    }));
     builder.bind_pre_core_pass(SoftwarePass::new(MockSwBackend));
     builder.build_rtic_macro(args, quote!(#app_mod).into())
 }
 
-/// Reads the global core id of the application's (single) core from
-/// `core_ids = [g]`, defaulting to `0` like the pass does.
+/// Reads the local core index -> global core id mapping from
+/// `core_ids = [g0, g1, ..]`.
 ///
-/// The fixture applications declare exactly one core each, so the first entry
-/// is the current global core id.
-fn global_core(args: &TokenStream2) -> u32 {
+/// The mapping drives both the injected backend helper (the fixture
+/// applications declare exactly one core each, so the first entry is the
+/// current global core id) and the capability binding's
+/// [`physical_core`](XbinPassBackend::physical_core) (M6.9-T1).
+fn core_ids(args: &TokenStream2) -> Vec<u32> {
     let Ok(attr) = RticAttr::parse_from_tokens(args.clone(), format_ident!("app")) else {
-        return 0;
+        return Vec::new();
     };
     let Some(Expr::Array(array)) = attr.get_expr("core_ids") else {
-        return 0;
+        return Vec::new();
     };
-    let Some(Expr::Lit(lit)) = array.elems.first() else {
-        return 0;
-    };
-    match &lit.lit {
-        Lit::Int(int) => int.base10_parse().unwrap_or(0),
-        _ => 0,
-    }
+    array
+        .elems
+        .iter()
+        .filter_map(|element| match element {
+            Expr::Lit(lit) => match &lit.lit {
+                Lit::Int(int) => int.base10_parse().ok(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 /// Injects the fixture interrupt enum (M6.5-T3/T5).
@@ -214,4 +295,102 @@ fn inject_backend_helper(app_mod: &mut ItemMod, core: u32) {
             xbin_mock_runtime::backend_for(#core)
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mock distribution backend for an application whose `core_ids` are
+    /// `core_ids`.
+    fn backend(core_ids: &[u32]) -> MockDistroBackend {
+        MockDistroBackend {
+            core_ids: core_ids.to_vec(),
+        }
+    }
+
+    /// The mock's physical-core vocabulary is the global core id: the
+    /// capability binding maps the local index through `core_ids` (M6.9-T1).
+    #[test]
+    fn physical_core_maps_the_local_index_through_core_ids() {
+        let backend = backend(&[7, 9]);
+        assert_eq!(backend.physical_core(0), PhysicalCore(7));
+        assert_eq!(backend.physical_core(1), PhysicalCore(9));
+        // Outside the declared mapping the local index is the identity,
+        // matching the trait default.
+        assert_eq!(backend.physical_core(5), PhysicalCore(5));
+    }
+
+    /// The fixture topology is fully connected: each of the physical cores
+    /// 0, 1 and 2 reaches the other two through one pool each.
+    #[test]
+    fn fixture_topology_exposes_three_duals() {
+        for core in 0..3u32 {
+            let pools = backend(&[core]).ipc_pools(0);
+            assert_eq!(
+                pools.len(),
+                2,
+                "physical core {core} must reach its two peers"
+            );
+            let mut peers: Vec<u32> = pools.iter().map(|pool| pool.peer.0).collect();
+            peers.sort_unstable();
+            let expected: Vec<u32> = (0..3u32).filter(|peer| *peer != core).collect();
+            assert_eq!(peers, expected, "physical core {core} reaches {expected:?}");
+        }
+    }
+
+    /// The entries are ordered by ascending peer, so the capability binding is
+    /// deterministic.
+    #[test]
+    fn pools_are_ordered_by_peer() {
+        for core in 0..3u32 {
+            let pools = backend(&[core]).ipc_pools(0);
+            let peers: Vec<u32> = pools.iter().map(|pool| pool.peer.0).collect();
+            let mut sorted = peers.clone();
+            sorted.sort_unstable();
+            assert_eq!(peers, sorted, "physical core {core} pools are not sorted");
+        }
+    }
+
+    /// The two endpoints of a dual report the same pool from their own side:
+    /// the same id, opposite physical cores, each side's local view equal to
+    /// the other's peer view, and the same shared budget and policy
+    /// (M6.9-T1).
+    #[test]
+    fn pools_are_symmetric_across_endpoints() {
+        // The fixture applications each run on one physical core, with ids 0,
+        // 1 and 2.
+        let endpoints: Vec<(u32, Vec<IpcPool>)> = (0..3u32)
+            .map(|core| (core, backend(&[core]).ipc_pools(0)))
+            .collect();
+
+        for (core, pools) in &endpoints {
+            for pool in pools {
+                let (_, peer_pools) = endpoints
+                    .iter()
+                    .find(|(peer, _)| *peer == pool.peer.0)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "physical core {core} reports a non-fixture peer {}",
+                            pool.peer
+                        )
+                    });
+                let mirror = peer_pools
+                    .iter()
+                    .find(|candidate| candidate.id == pool.id)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "physical core {core} reports pool `{}` that peer {} does not",
+                            pool.id, pool.peer
+                        )
+                    });
+
+                assert_eq!(mirror.peer, PhysicalCore(*core));
+                assert_eq!(mirror.base_local, pool.base_peer);
+                assert_eq!(mirror.base_peer, pool.base_local);
+                assert_eq!(mirror.budget, pool.budget);
+                assert_eq!(mirror.policy, pool.policy);
+            }
+        }
+    }
 }

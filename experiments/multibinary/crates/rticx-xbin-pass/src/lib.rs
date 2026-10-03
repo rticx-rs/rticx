@@ -81,6 +81,7 @@
 //! constructed (`XbinPass::from_env`), i.e. at the macro entry point, so a
 //! distribution can simply bind it unconditionally.
 
+mod binding;
 mod codegen;
 mod parse;
 mod priority;
@@ -109,6 +110,11 @@ use crate::priority::validate_priority_lines;
 pub use rticx_core::RticPass;
 
 pub use crate::codegen::XbinPassBackend;
+
+/// The distribution capability binding of the code-generation contract
+/// (M6.9-T1): the physical-core and IPC-pool vocabulary a distribution uses to
+/// tell the pass which cores it can reach and through which shared pool.
+pub use crate::binding::{CachePolicy, IpcPool, PhysicalCore, PoolId};
 
 /// Environment variable that switches the pass into metadata mode.
 ///
