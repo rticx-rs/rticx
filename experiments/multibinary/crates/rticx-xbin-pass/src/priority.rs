@@ -185,6 +185,7 @@ mod tests {
                 fifo: rticx_xbin_proto::FifoEntry {
                     source: spawner,
                     target: receiver,
+                    pool: None,
                     offset: 0,
                     elem_size: 4,
                     depth: 2,

@@ -167,24 +167,31 @@ fn cargo_xbin_build_builds_the_three_applications() {
         ]
     );
 
-    // Every ordered pair is carried by the mock distribution's pool for that
-    // dual; each direction draws on the pool's 4096-byte budget (M6.9-T3; the
-    // two directions share the budget from M6.9-T4).
-    let directions: Vec<(u32, u32)> = system
-        .regions
+    // Every unordered pair is one shared pool from the mock distribution;
+    // both directions of a dual draw on that pool's 4096-byte budget
+    // (M6.9-T4/T5).
+    let pools: Vec<(&str, u32, u32)> = system
+        .pools
         .iter()
-        .map(|region| (region.source, region.target))
+        .map(|pool| (pool.id.as_str(), pool.core_a, pool.core_b))
         .collect();
     assert_eq!(
-        directions,
-        [(0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1)],
-        "one region per pool direction"
+        pools,
+        [("mock-0-1", 0, 1), ("mock-0-2", 0, 2), ("mock-1-2", 1, 2)],
+        "one shared pool per dual"
     );
-    for region in &system.regions {
+    for pool in &system.pools {
         assert_eq!(
-            region.size, 4096,
-            "region `{} -> {}` carries the pool budget",
-            region.source, region.target
+            pool.budget, 4096,
+            "pool `{}` carries the distro budget",
+            pool.id
+        );
+        assert!(
+            pool.used > 0 && pool.used <= pool.budget,
+            "pool `{}` uses {} of {} bytes",
+            pool.id,
+            pool.used,
+            pool.budget
         );
     }
 

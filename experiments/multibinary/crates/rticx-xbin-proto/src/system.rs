@@ -3,7 +3,7 @@
 //! `system.json` is the single description of the whole multi-binary project
 //! (see `multibinary-multicore-plan.md` §7.2): cores, IDL types with their
 //! canonical layout, cross-binary tasks with their FIFO allocations, the
-//! shared-memory regions and the doorbell lines. Phase 1 (`cargo xbin sync`)
+//! distro IPC pools and the doorbell lines. Phase 1 (`cargo xbin sync`)
 //! merges the per-application manifests into it; phase 2 (the compilation
 //! pass) reads it and filters it by its own cores.
 //!
@@ -26,7 +26,11 @@ use crate::hash::Hash64;
 use crate::manifest::TargetRef;
 
 /// Schema version of `system.json` understood by this crate.
-pub const SYSTEM_SCHEMA_VERSION: u32 = 1;
+///
+/// Schema 2 (M6.9-T5) gives every core its `physical_core`, replaces the
+/// per-direction `regions[]` with the distro `pools[]` and adds the pool id to
+/// every task FIFO.
+pub const SYSTEM_SCHEMA_VERSION: u32 = 2;
 
 /// RTICX generation (major.minor) recorded in every emitted `system.json`.
 ///
@@ -59,9 +63,9 @@ pub struct SystemView {
     /// Every cross-binary task, sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<TaskEntry>,
-    /// Every declared `(source -> target)` region, sorted by `(source, target)`.
+    /// Every matched distro IPC pool, sorted by `(core_a, core_b)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub regions: Vec<RegionEntry>,
+    pub pools: Vec<PoolEntry>,
     /// Every doorbell line, sorted by `(source, target, priority)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub doorbells: Vec<DoorbellEntry>,
@@ -80,7 +84,7 @@ impl SystemView {
             cores: Vec::new(),
             types: Vec::new(),
             tasks: Vec::new(),
-            regions: Vec::new(),
+            pools: Vec::new(),
             doorbells: Vec::new(),
         }
     }
@@ -152,8 +156,8 @@ impl SystemView {
         for core in &self.cores {
             let _ = writeln!(
                 out,
-                "core global_id={} app={} local_index={}",
-                core.global_id, core.app, core.local_index
+                "core global_id={} physical_core={} app={} local_index={}",
+                core.global_id, core.physical_core, core.app, core.local_index
             );
         }
         for ty in &self.types {
@@ -181,7 +185,8 @@ impl SystemView {
             let _ = writeln!(
                 out,
                 "task id={} name={} receiver_core={} spawner_core={} priority={} \
-                 capacity={} input_type={} fifo={{source={} target={} offset={} elem_size={} depth={}}}",
+                 capacity={} input_type={} fifo={{source={} target={} pool={} offset={} \
+                 elem_size={} depth={}}}",
                 task.id,
                 task.name,
                 task.receiver_core,
@@ -191,21 +196,24 @@ impl SystemView {
                 task.input_type,
                 task.fifo.source,
                 task.fifo.target,
+                task.fifo.pool.as_deref().unwrap_or("-"),
                 task.fifo.offset,
                 task.fifo.elem_size,
                 task.fifo.depth
             );
         }
-        for region in &self.regions {
+        for pool in &self.pools {
             let _ = writeln!(
                 out,
-                "region source={} target={} base_from_source=0x{:08x} \
-                 base_from_target=0x{:08x} size={}",
-                region.source,
-                region.target,
-                region.base_from_source,
-                region.base_from_target,
-                region.size
+                "pool id={} core_a={} core_b={} base_from_a=0x{:08x} \
+                 base_from_b=0x{:08x} budget={} used={}",
+                pool.id,
+                pool.core_a,
+                pool.core_b,
+                pool.base_from_a,
+                pool.base_from_b,
+                pool.budget,
+                pool.used
             );
         }
         for doorbell in &self.doorbells {
@@ -242,6 +250,11 @@ pub struct AppEntry {
 pub struct CoreEntry {
     /// Globally unique core id.
     pub global_id: u32,
+    /// Distro-defined physical core id this global core runs on (M6.9-T5).
+    ///
+    /// Reported by the application's capability binding; the identity
+    /// `global_id` when the application bound no distribution backend.
+    pub physical_core: u32,
     /// Package owning the core.
     pub app: String,
     /// Local core index inside the application (`core_ids[local_index]`).
@@ -326,7 +339,14 @@ pub struct FifoEntry {
     pub source: u32,
     /// Consumer (receiver) global core id.
     pub target: u32,
-    /// Byte offset inside the `(source, target)` region.
+    /// Id of the `pools[]` entry this FIFO lives in (M6.9-T5).
+    ///
+    /// `None` for a project whose manifests carry no capability table at all
+    /// (the minimal `metadata-macro` fixture until M6.9-T9); the offset is
+    /// then relative to the raw `(source -> target)` memory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    /// Byte offset inside the pool; pool-relative since M6.9-T5.
     pub offset: u32,
     /// Size of one element in bytes (canonical input-type size).
     pub elem_size: u32,
@@ -334,28 +354,7 @@ pub struct FifoEntry {
     pub depth: u32,
 }
 
-/// A distro-declared shared-memory region for one direction.
-///
-/// Since M6.9-T4 the merge model is pool-based ([`PoolEntry`]); this
-/// per-direction shape is the schema-1 `system.json` rendering emitted until
-/// M6.9-T5 replaces `regions[]` with `pools[]`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RegionEntry {
-    /// Producer global core id.
-    pub source: u32,
-    /// Consumer global core id.
-    pub target: u32,
-    /// Region base address as seen by the source core (hex in JSON).
-    #[serde(with = "hex_u32")]
-    pub base_from_source: u32,
-    /// Region base address as seen by the target core (hex in JSON).
-    #[serde(with = "hex_u32")]
-    pub base_from_target: u32,
-    /// Region size in bytes.
-    pub size: u32,
-}
-
-/// A distro IPC pool shared by the two directions of a dual (M6.9-T4).
+/// A distro IPC pool shared by the two directions of a dual (M6.9-T4/T5).
 ///
 /// The two directions `A -> B` and `B -> A` allocate their FIFOs inside the
 /// same physical block, so the pool carries one `budget` shared by both and

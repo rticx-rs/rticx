@@ -39,8 +39,8 @@
 //! Pool matching and FIFO allocation are deterministic: pools are keyed by
 //! `(core_a, core_b)` in ascending order and, within one pool, tasks are placed
 //! in the global (name) task order, so identical inputs always produce equal
-//! offsets. The `system.json` emit ([`crate::system_view`]) then expands each
-//! pool into its two directions until M6.9-T5 switches the schema to `pools[]`.
+//! offsets. The `system.json` emit ([`crate::system_view`]) then copies the
+//! pools and the per-task pool ids.
 //!
 //! A project whose manifests carry no capability table at all (the minimal
 //! `metadata-macro` fixture, until M6.9-T9 supplies the mock table) has no pool
@@ -126,6 +126,9 @@ pub struct MergedTask {
     elem_size: u32,
     elem_align: u32,
     offset: u32,
+    /// Id of the pool the FIFO was allocated in, if the project bound a
+    /// capability table (M6.9-T5).
+    pool: Option<String>,
 }
 
 impl MergedTask {
@@ -180,6 +183,11 @@ impl MergedTask {
         self.offset
     }
 
+    /// Returns the id of the pool the FIFO was allocated in, if any.
+    pub fn pool(&self) -> Option<&str> {
+        self.pool.as_deref()
+    }
+
     /// Returns the ring depth emitted into `system.json` (`capacity + 1`).
     pub fn fifo_depth(&self) -> u32 {
         u32::try_from(fifo_depth(self.capacity).expect("validated by merge_project"))
@@ -191,6 +199,7 @@ impl MergedTask {
         FifoEntry {
             source: self.spawner_core,
             target: self.receiver_core,
+            pool: self.pool.clone(),
             offset: self.offset,
             elem_size: self.elem_size,
             depth: self.fifo_depth(),
@@ -263,6 +272,14 @@ pub fn merge_project(
         }
     }
 
+    // -- distro pool graph ---------------------------------------------------
+    // Since M6.9 the distribution owns IPC memory: each application manifest
+    // reports, per local core, its physical core and the pools that physical
+    // core can reach. Matching the two endpoints of a dual yields one shared
+    // pool per core pair (M6.9-T4). The graph also carries each global core's
+    // physical id, which the global core table below records (M6.9-T5).
+    let mut graph = match_pools(applications, &manifest_of)?;
+
     // -- global core table ---------------------------------------------------
     let mut cores = Vec::new();
     let mut owner: BTreeMap<u32, (&str, u32)> = BTreeMap::new();
@@ -270,6 +287,7 @@ pub fn merge_project(
         for (local, &global) in application.core_ids().iter().enumerate() {
             cores.push(CoreEntry {
                 global_id: global,
+                physical_core: graph.physical_of.get(&global).copied().unwrap_or(global),
                 app: application.package().to_string(),
                 local_index: local as u32,
             });
@@ -394,6 +412,7 @@ pub fn merge_project(
             elem_size: to_u32(layout.size, &receiver.decl.name)?,
             elem_align: layout.align as u32,
             offset: 0,
+            pool: None,
         });
     }
     tasks.sort_by(|a, b| a.name.cmp(&b.name));
@@ -420,13 +439,6 @@ pub fn merge_project(
             lines.insert(key, (task, task.spawner_core));
         }
     }
-
-    // -- distro pool graph ---------------------------------------------------
-    // Since M6.9 the distribution owns IPC memory: each application manifest
-    // reports, per local core, its physical core and the pools that physical
-    // core can reach. Matching the two endpoints of a dual yields one shared
-    // pool per core pair (M6.9-T4).
-    let mut graph = match_pools(applications, &manifest_of)?;
 
     // -- FIFO allocation and pool fit ----------------------------------------
     // Each pool is an independent cursor; within a pool the tasks are placed in
@@ -478,6 +490,7 @@ pub fn merge_project(
                     budget,
                 });
             }
+            task.pool = Some(pool);
             task.offset = u32::try_from(start).map_err(|_| MergeError::TaskTooLarge {
                 task: name.clone(),
                 capacity,
@@ -559,6 +572,9 @@ struct PoolGraph {
     pools: Vec<PoolEntry>,
     /// `(core_a, core_b)` -> index into `pools`.
     by_pair: BTreeMap<(u32, u32), usize>,
+    /// Global core id -> distro physical core id, for every core that bound a
+    /// capability entry (M6.9-T5).
+    physical_of: BTreeMap<u32, u32>,
     /// Whether any application bound a distribution capability table.
     present: bool,
 }
@@ -741,6 +757,7 @@ fn match_pools(
     Ok(PoolGraph {
         pools,
         by_pair,
+        physical_of,
         present,
     })
 }

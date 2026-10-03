@@ -16,7 +16,7 @@ use quote::{ToTokens, format_ident, quote};
 use rticx_core::RticPass;
 use rticx_xbin_pass::{XbinPass, XbinPassBackend};
 use rticx_xbin_proto::{
-    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, RegionEntry, SystemView,
+    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, PoolEntry, SystemView,
     TargetRef, TaskEntry, TypeEntry, TypeKind,
 };
 
@@ -65,6 +65,16 @@ struct TaskSpec {
     capacity: usize,
 }
 
+/// The pool id of a dual: `p{core_a}{core_b}` with `core_a < core_b`.
+fn pool_id(first: u32, second: u32) -> String {
+    let (a, b) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    format!("p{a}{b}")
+}
+
 /// The three-application view: `app-m7` (global core 0) and `app-m5` (global
 /// core 2) produce onto `app-m4` (`core_ids`, global core 1 by default).
 fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> SystemView {
@@ -95,11 +105,13 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
     view.cores = vec![
         CoreEntry {
             global_id: 0,
+            physical_core: 0,
             app: "app-m7".to_string(),
             local_index: 0,
         },
         CoreEntry {
             global_id: 2,
+            physical_core: 2,
             app: "app-m5".to_string(),
             local_index: 0,
         },
@@ -107,6 +119,7 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
     for (local, &global) in core_ids.iter().enumerate() {
         view.cores.push(CoreEntry {
             global_id: global,
+            physical_core: global,
             app: "app-m4".to_string(),
             local_index: local as u32,
         });
@@ -153,6 +166,7 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
             fifo: FifoEntry {
                 source: task.spawner,
                 target: task.receiver,
+                pool: Some(pool_id(task.spawner, task.receiver)),
                 offset: 0,
                 elem_size: 12,
                 depth: task.capacity as u32 + 1,
@@ -160,22 +174,33 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
         })
         .collect();
 
-    view.regions = vec![
-        RegionEntry {
-            source: 0,
-            target: 1,
-            base_from_source: 0x3004_0000,
-            base_from_target: 0x3004_0000,
-            size: 4096,
-        },
-        RegionEntry {
-            source: 2,
-            target: 1,
-            base_from_source: 0x3004_1000,
-            base_from_target: 0x3004_1000,
-            size: 4096,
-        },
-    ];
+    // The distro pool of each used dual (the pass does not read the pools
+    // themselves yet; they keep the fixture a valid schema-2 view).
+    let mut pools: Vec<PoolEntry> = Vec::new();
+    for task in tasks {
+        let (core_a, core_b) = if task.spawner <= task.receiver {
+            (task.spawner, task.receiver)
+        } else {
+            (task.receiver, task.spawner)
+        };
+        if pools
+            .iter()
+            .any(|pool| (pool.core_a, pool.core_b) == (core_a, core_b))
+        {
+            continue;
+        }
+        let base = 0x3004_0000 + 0x1000 * pools.len() as u32;
+        pools.push(PoolEntry {
+            id: pool_id(core_a, core_b),
+            core_a,
+            core_b,
+            base_from_a: base,
+            base_from_b: base,
+            budget: 4096,
+            used: 0,
+        });
+    }
+    view.pools = pools;
 
     // One doorbell per distinct `(source, target, priority)` line, numbered
     // per target core in `(source, priority)` order, like `alloc::doorbells`.

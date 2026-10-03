@@ -3,9 +3,8 @@
 //! [`system_view`] converts the merged and allocated [`MergedProject`] into
 //! the driver's `target/rticx-xbin/system.json` view: it copies the
 //! applications, cores and types, copies the tasks with their FIFO
-//! allocations, expands each matched pool into its two per-direction regions
-//! (until M6.9-T5 switches the schema to `pools[]`), assigns the doorbell
-//! lines, sets the IDL `layout_hash` and seals the topology hash.
+//! allocations and their pool ids, copies the matched distro pools, assigns
+//! the doorbell lines, sets the IDL `layout_hash` and seals the topology hash.
 //!
 //! Determinism is a hard requirement (see `multibinary-multicore-plan.md`
 //! §7.1): the merged project is deterministic, the doorbell assignment below
@@ -26,7 +25,7 @@ use crate::error::CodegenError;
 use crate::hash::Hash64;
 use crate::idl::IpcTypes;
 use crate::merge::MergedProject;
-use crate::system::{DoorbellEntry, RegionEntry, SystemView, TaskEntry};
+use crate::system::{DoorbellEntry, SystemView, TaskEntry};
 
 /// Builds the `system.json` system view of `project`.
 ///
@@ -57,34 +56,9 @@ pub fn system_view(
             fifo: task.fifo(),
         })
         .collect();
-    // Transitional (M6.9-T4): the merge model is pool-based, but `system.json`
-    // still carries one `region` per direction until M6.9-T5 switches the
-    // schema to `pools[]`. Expand each matched pool into its two directions so
-    // the schema-1 view keeps working.
-    view.regions = project
-        .pools()
-        .iter()
-        .flat_map(|pool| {
-            [
-                RegionEntry {
-                    source: pool.core_a,
-                    target: pool.core_b,
-                    base_from_source: pool.base_from_a,
-                    base_from_target: pool.base_from_b,
-                    size: pool.budget,
-                },
-                RegionEntry {
-                    source: pool.core_b,
-                    target: pool.core_a,
-                    base_from_source: pool.base_from_b,
-                    base_from_target: pool.base_from_a,
-                    size: pool.budget,
-                },
-            ]
-        })
-        .collect();
-    view.regions
-        .sort_by_key(|region| (region.source, region.target));
+    // M6.9-T5: `system.json` schema 2 carries the distro pools directly; each
+    // task FIFO records the pool id it was allocated in.
+    view.pools = project.pools().to_vec();
     view.doorbells = doorbells(project);
     view.seal();
     Ok(view)

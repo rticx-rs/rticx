@@ -7,6 +7,9 @@
 //! a static HTML document. The inline script lays the page out and draws the
 //! arrows; the driver itself never depends on a browser.
 //!
+//! Until M6.9-T8 replaces them with pool panels, the region panels are derived
+//! by expanding each `system.json` pool into its two per-direction views.
+//!
 //! Keeping the normalization in Rust is deliberate: `system.json` only carries
 //! cross-binary tasks today, but when it later also carries same-binary
 //! cross-core tasks, only this module grows a category -- the embedded JSON
@@ -168,9 +171,9 @@ impl ViewModel {
             ids.insert(task.receiver_core);
             ids.insert(task.spawner_core);
         }
-        for region in &view.regions {
-            ids.insert(region.source);
-            ids.insert(region.target);
+        for pool in &view.pools {
+            ids.insert(pool.core_a);
+            ids.insert(pool.core_b);
         }
 
         // Doorbell line per `(source, target, priority)` task line.
@@ -234,12 +237,39 @@ impl ViewModel {
             });
         }
 
-        let mut regions: Vec<&rticx_xbin_proto::RegionEntry> = view.regions.iter().collect();
-        regions.sort_by_key(|region| (region.source, region.target));
+        // Transitional (M6.9-T5): `system.json` carries pools; until M6.9-T8
+        // renders pool panels, expand each pool into its two per-direction
+        // panels so the existing model and script stay unchanged.
+        struct Direction {
+            source: u32,
+            target: u32,
+            base_from_source: u32,
+            base_from_target: u32,
+            size: u32,
+        }
 
-        let mut panels = Vec::with_capacity(regions.len());
+        let mut directions: Vec<Direction> = Vec::with_capacity(view.pools.len() * 2);
+        for pool in &view.pools {
+            directions.push(Direction {
+                source: pool.core_a,
+                target: pool.core_b,
+                base_from_source: pool.base_from_a,
+                base_from_target: pool.base_from_b,
+                size: pool.budget,
+            });
+            directions.push(Direction {
+                source: pool.core_b,
+                target: pool.core_a,
+                base_from_source: pool.base_from_b,
+                base_from_target: pool.base_from_a,
+                size: pool.budget,
+            });
+        }
+        directions.sort_by_key(|direction| (direction.source, direction.target));
+
+        let mut panels = Vec::with_capacity(directions.len());
         let mut pairs: BTreeSet<(u32, u32)> = BTreeSet::new();
-        for region in regions {
+        for region in &directions {
             let mut buffers: Vec<&rticx_xbin_proto::TaskEntry> = view
                 .tasks
                 .iter()
@@ -318,6 +348,7 @@ impl ViewModel {
             (left.source, left.target, &left.name).cmp(&(right.source, right.target, &right.name))
         });
 
+        let region_count = panels.len();
         ViewModel {
             generation: view.rticx_generation.clone(),
             topology_hash: hash_text(view.topology_hash),
@@ -329,7 +360,7 @@ impl ViewModel {
             stats: Stats {
                 cores: ids.len(),
                 tasks: view.tasks.len(),
-                regions: view.regions.len(),
+                regions: region_count,
                 doorbells: view.doorbells.len(),
             },
         }
@@ -366,7 +397,7 @@ fn hash_text(hash: rticx_xbin_proto::Hash64) -> String {
 #[cfg(test)]
 mod tests {
     use rticx_xbin_proto::{
-        AppEntry, CoreEntry, DoorbellEntry, FifoEntry, Hash64, RegionEntry, SystemView, TargetKind,
+        AppEntry, CoreEntry, DoorbellEntry, FifoEntry, Hash64, PoolEntry, SystemView, TargetKind,
         TargetRef, TaskEntry,
     };
 
@@ -399,6 +430,7 @@ mod tests {
             fifo: FifoEntry {
                 source: spawner,
                 target: receiver,
+                pool: None,
                 offset,
                 elem_size: 12,
                 depth: u32::try_from(capacity + 1).unwrap(),
@@ -409,7 +441,7 @@ mod tests {
     /// The three-application topology: producers 0 and 2 spawn onto 1.
     fn three_app_view() -> SystemView {
         SystemView {
-            schema_version: 1,
+            schema_version: 2,
             rticx_generation: "0.2".to_string(),
             topology_hash: Hash64::new(0x1234),
             layout_hash: Hash64::new(0x5678),
@@ -423,16 +455,19 @@ mod tests {
             cores: vec![
                 CoreEntry {
                     global_id: 0,
+                    physical_core: 0,
                     app: "app-m7".to_string(),
                     local_index: 0,
                 },
                 CoreEntry {
                     global_id: 2,
+                    physical_core: 2,
                     app: "app-m5".to_string(),
                     local_index: 0,
                 },
                 CoreEntry {
                     global_id: 1,
+                    physical_core: 1,
                     app: "app-m4".to_string(),
                     local_index: 0,
                 },
@@ -442,20 +477,24 @@ mod tests {
                 task(1, "EncryptTask", 1, 0, 3, 2, 0),
                 task(2, "SensorTask", 1, 2, 4, 1, 0),
             ],
-            regions: vec![
-                RegionEntry {
-                    source: 0,
-                    target: 1,
-                    base_from_source: 0x3004_0000,
-                    base_from_target: 0x3004_0000,
-                    size: 128,
+            pools: vec![
+                PoolEntry {
+                    id: "p01".to_string(),
+                    core_a: 0,
+                    core_b: 1,
+                    base_from_a: 0x3004_0000,
+                    base_from_b: 0x3004_0000,
+                    budget: 128,
+                    used: 100,
                 },
-                RegionEntry {
-                    source: 2,
-                    target: 1,
-                    base_from_source: 0x3004_1000,
-                    base_from_target: 0x2004_1000,
-                    size: 128,
+                PoolEntry {
+                    id: "p12".to_string(),
+                    core_a: 1,
+                    core_b: 2,
+                    base_from_a: 0x2004_1000,
+                    base_from_b: 0x3004_1000,
+                    budget: 128,
+                    used: 100,
                 },
             ],
             doorbells: vec![
@@ -503,7 +542,7 @@ mod tests {
 
         assert_eq!(model.stats.cores, 3);
         assert_eq!(model.stats.tasks, 2);
-        assert_eq!(model.stats.regions, 2);
+        assert_eq!(model.stats.regions, 4, "two pools, two directions each");
         assert_eq!(model.stats.doorbells, 2);
 
         // Cores are ordered by global id.
@@ -543,7 +582,8 @@ mod tests {
             "a producer stub does not carry the consumer's doorbell"
         );
 
-        // Regions keep both base views and place the FIFO at its offset.
+        // Each pool expands into its two per-direction panels; they keep both
+        // base views and place the FIFO at its offset.
         let region = &model.regions[0];
         assert_eq!((region.source, region.target), (0, 1));
         assert_eq!(region.buffers[0].total_bytes, 64 + 3 * 12);
@@ -553,7 +593,11 @@ mod tests {
         assert_eq!(region.buffers[0].depth, 3);
         assert_eq!(region.buffers[0].capacity, 2);
 
-        let aliased = &model.regions[1];
+        let aliased = model
+            .regions
+            .iter()
+            .find(|region| (region.source, region.target) == (2, 1))
+            .expect("the 2 -> 1 direction is present");
         assert_ne!(aliased.base_from_source, aliased.base_from_target);
 
         // Two unordered interaction pairs.
@@ -603,22 +647,15 @@ mod tests {
             task(1, "Forward", 1, 0, 3, 2, 0),
             task(2, "Back", 0, 1, 3, 1, 0),
         ];
-        view.regions = vec![
-            RegionEntry {
-                source: 0,
-                target: 1,
-                base_from_source: 0x3004_0000,
-                base_from_target: 0x1004_0000,
-                size: 128,
-            },
-            RegionEntry {
-                source: 1,
-                target: 0,
-                base_from_source: 0x3004_1000,
-                base_from_target: 0x1004_1000,
-                size: 128,
-            },
-        ];
+        view.pools = vec![PoolEntry {
+            id: "p01".to_string(),
+            core_a: 0,
+            core_b: 1,
+            base_from_a: 0x3004_0000,
+            base_from_b: 0x1004_0000,
+            budget: 128,
+            used: 100,
+        }];
         view.doorbells = vec![
             DoorbellEntry {
                 source: 0,
@@ -654,15 +691,17 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_but_empty_region_is_rendered_without_buffers() {
+    fn a_declared_but_empty_pool_is_rendered_without_buffers() {
         let mut view = three_app_view();
         view.tasks = vec![task(1, "EncryptTask", 1, 0, 3, 2, 0)];
-        view.regions.push(RegionEntry {
-            source: 1,
-            target: 2,
-            base_from_source: 0x3004_2000,
-            base_from_target: 0x3004_2000,
-            size: 64,
+        view.pools.push(PoolEntry {
+            id: "p12".to_string(),
+            core_a: 1,
+            core_b: 2,
+            base_from_a: 0x3004_2000,
+            base_from_b: 0x3004_2000,
+            budget: 64,
+            used: 0,
         });
 
         let model = ViewModel::from_view(&view);
@@ -670,7 +709,7 @@ mod tests {
             .regions
             .iter()
             .find(|region| region.direction == "1-2")
-            .expect("the declared region is present");
+            .expect("the declared pool's 1 -> 2 direction is present");
         assert!(empty.buffers.is_empty());
         assert_eq!(empty.used_bytes, 0);
     }

@@ -64,5 +64,5 @@ pub use project::{
 };
 pub use system::{
     AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, PoolEntry, RTICX_GENERATION,
-    RegionEntry, SYSTEM_SCHEMA_VERSION, SystemView, TaskEntry, TypeEntry, TypeKind, VariantEntry,
+    SYSTEM_SCHEMA_VERSION, SystemView, TaskEntry, TypeEntry, TypeKind, VariantEntry,
 };

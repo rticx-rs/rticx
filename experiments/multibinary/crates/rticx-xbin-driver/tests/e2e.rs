@@ -102,6 +102,20 @@ fn cargo_xbin_build_builds_the_fixture_applications() {
     assert_eq!(system.tasks[0].name, "EncryptTask");
     assert_eq!(system.tasks[0].fifo.source, 0);
     assert_eq!(system.tasks[0].fifo.target, 1);
+    assert_eq!(
+        system.tasks[0].fifo.pool.as_deref(),
+        Some("mock-0-1"),
+        "the FIFO records its distro pool"
+    );
+    assert_eq!(system.pools.len(), 1, "one shared pool for the dual");
+    assert_eq!(
+        (
+            system.pools[0].core_a,
+            system.pools[0].core_b,
+            system.pools[0].budget
+        ),
+        (0, 1, 4096)
+    );
 
     // The checked-in generated crate is up to date with the IDL (M1-T7).
     assert!(

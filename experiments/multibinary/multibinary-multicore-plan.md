@@ -2,13 +2,13 @@
 
 **Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
 native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, ready/epoch, docs), **M6.9-T1..T4** (distro capability
+routing, multi-source, ready/epoch, docs), **M6.9-T1..T5** (distro capability
 binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
-budget) complete. Remaining work:
-**M6.9-T5..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
+budget, `system.json` schema 2) complete. Remaining work:
+**M6.9-T6..T9** (distro-owned IPC pools + ELF verification), **M7** (STM32H7
 acceptance + extraction) and **M8-T1** (advisory CI), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-03 (M6.9-T4; compacted: completed milestone task lists
+**Last updated:** 2026-10-03 (M6.9-T5; compacted: completed milestone task lists
 removed).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
@@ -462,29 +462,31 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "rticx_generation": "0.x",
   "topology_hash": "...",
-  "cores":  [ { "global_id": 0, "app": "app-m7", "local_index": 0 } ],
+  "cores":  [ { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 } ],
   "types":  [ { "name": "EncryptReq", "size": 12, "align": 4,
                 "fields": [ { "name": "addr", "ty": "u32", "offset": 0 } ] } ],
   "tasks":  [ { "id": 1, "name": "EncryptTask",
                 "receiver_core": 1, "spawner_core": 0,
                 "priority": 3, "capacity": 2,
                 "input_type": "EncryptReq",
-                "fifo": { "source": 0, "target": 1, "offset": 0,
+                "fifo": { "source": 0, "target": 1, "pool": "p01", "offset": 0,
                           "elem_size": 12, "depth": 3 } } ],
-  "regions": [ { "source": 0, "target": 1,
-                 "base_from_source": "0x30040000",
-                 "base_from_target": "0x30040000", "size": 4096 } ],
+  "pools": [ { "id": "p01", "core_a": 0, "core_b": 1,
+               "base_from_a": "0x30040000",
+               "base_from_b": "0x30040000", "budget": 4096, "used": 100 } ],
   "doorbells": [ { "source": 0, "target": 1, "priority": 3, "line": 0 } ]
 }
 ```
 
-> **Planned change (M6.9, [§13](#13-remaining-milestones)):** `cores[]` gains
-> `physical_core`, `regions[]` is replaced by `pools[]` (one per unordered core
-> pair, with per-core views, a shared budget and the bytes used), and `fifo`
-> gains `pool` with a pool-relative `offset`. See M6.9-T5.
+> **Since M6.9-T5 (schema 2):** `cores[]` records each core's `physical_core`,
+> `pools[]` replaces `regions[]` (one entry per unordered core pair, with each
+> core's view, the shared `budget` and the bytes `used`), and `fifo` carries the
+> `pool` id with a pool-relative `offset`. `fifo.pool` is omitted when the
+> project bound no distro capability table (the minimal `metadata-macro`
+> fixture, until M6.9-T9).
 
 v1 keeps one producer core per task, so every `tasks[]` entry has a single
 `spawner_core` and one `fifo` (one FIFO per `(task, source → target)` direction),
@@ -830,13 +832,22 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   carry no capability table at all (the minimal `metadata-macro` fixture, until
   T9) has an empty pool graph and allocates sequentially per direction, exactly
   as in T3.
-- [ ] **M6.9-T5 — `system.json` schema 2.** `cores[]` gains `physical_core`;
-  `regions[]` is replaced by `pools[]`
+- [x] **M6.9-T5 — `system.json` schema 2.** `cores[]` gains `physical_core`
+  (the capability binding's id; the identity global id when the application
+  bound no backend); `regions[]` is replaced by `pools[]`
   (`{ id, core_a, core_b, base_from_a, base_from_b, budget, used }`); `FifoEntry`
   gains `pool` and its `offset` is pool-relative. `canonical_topology_text` /
   `seal` cover pools and physical ids, so a distro change that moves a pool
   changes the topology hash and forces a rebuild; `SYSTEM_SCHEMA_VERSION` bumps
-  to 2. Golden tests and `alloc.rs` updated.
+  to 2. `alloc.rs` copies the matched pools and the per-task pool ids directly.
+  `FifoEntry::pool` is `Option<String>` (serialized only when present): a
+  project whose manifests carry no capability table at all (the minimal
+  `metadata-macro` fixture, until T9) has no pool to name and its FIFOs are
+  unbounded, exactly as in T3/T4. `visualize.rs` keeps emitting the existing
+  per-direction region panels by expanding each pool into its two directions
+  until T8 renders real pool panels. Golden/host fixtures and `alloc.rs` updated
+  (`proto/tests/system.rs`, `proto/tests/alloc.rs`, the pass codegen/init-hooks/
+  priority-line fixtures, the driver fixture/three-app assertions).
 - [ ] **M6.9-T6 — Codegen and runtime.** `CrossBinBackend::ipc_region(source,
   target)` keeps its signature and documented semantics: it returns the dual's
   pool views (`base_from_source`/`base_from_target` = each endpoint's view);

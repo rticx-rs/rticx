@@ -77,7 +77,7 @@ impl Drop for EnvGuard {
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 1,
+  "schema_version": 2,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -98,8 +98,8 @@ const SYSTEM_JSON: &str = r#"{
     }
   ],
   "cores": [
-    { "global_id": 0, "app": "app-m7", "local_index": 0 },
-    { "global_id": 1, "app": "app-m4", "local_index": 0 }
+    { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 },
+    { "global_id": 1, "physical_core": 1, "app": "app-m4", "local_index": 0 }
   ],
   "types": [
     {
@@ -123,23 +123,18 @@ const SYSTEM_JSON: &str = r#"{
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
-      "fifo": { "source": 0, "target": 1, "offset": 0, "elem_size": 12, "depth": 3 }
+      "fifo": { "source": 0, "target": 1, "pool": "p01", "offset": 0, "elem_size": 12, "depth": 3 }
     }
   ],
-  "regions": [
+  "pools": [
     {
-      "source": 0,
-      "target": 1,
-      "base_from_source": "0x30040000",
-      "base_from_target": "0x30040000",
-      "size": 4096
-    },
-    {
-      "source": 1,
-      "target": 0,
-      "base_from_source": "0x30041000",
-      "base_from_target": "0x30041000",
-      "size": 4096
+      "id": "p01",
+      "core_a": 0,
+      "core_b": 1,
+      "base_from_a": "0x30040000",
+      "base_from_b": "0x30040000",
+      "budget": 4096,
+      "used": 100
     }
   ],
   "doorbells": [
@@ -1253,10 +1248,8 @@ fn the_owner_is_the_lowest_global_core_id() {
             view["tasks"][0]["spawner_core"] = serde_json::json!(5);
             view["tasks"][0]["fifo"]["source"] = serde_json::json!(5);
             view["tasks"][0]["fifo"]["target"] = serde_json::json!(2);
-            view["regions"][0]["source"] = serde_json::json!(5);
-            view["regions"][0]["target"] = serde_json::json!(2);
-            view["regions"][1]["source"] = serde_json::json!(2);
-            view["regions"][1]["target"] = serde_json::json!(5);
+            view["pools"][0]["core_a"] = serde_json::json!(2);
+            view["pools"][0]["core_b"] = serde_json::json!(5);
             view["doorbells"][0]["source"] = serde_json::json!(5);
             view["doorbells"][0]["target"] = serde_json::json!(2);
         },

@@ -144,7 +144,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(bytes, system.to_json(), "the emitted bytes match the view");
     assert!(system.verify_topology_hash());
     assert_eq!(SystemView::from_json(&bytes).expect("parse"), *system);
-    assert_eq!(system.schema_version, 1);
+    assert_eq!(system.schema_version, 2);
     assert_eq!(system.rticx_generation, RTICX_GENERATION);
     assert_eq!(
         system.layout_hash,
@@ -171,10 +171,20 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
         FifoEntry {
             source: 0,
             target: 1,
+            pool: None,
             offset: 0,
             elem_size: 12,
             depth: 3,
         }
+    );
+    assert_eq!(
+        system
+            .cores
+            .iter()
+            .map(|core| (core.global_id, core.physical_core))
+            .collect::<Vec<_>>(),
+        [(0, 0), (1, 1)],
+        "without a distro binding the physical core id is the identity"
     );
     assert_eq!(
         system.doorbells,

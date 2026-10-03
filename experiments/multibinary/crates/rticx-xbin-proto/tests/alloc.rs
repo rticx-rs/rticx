@@ -185,7 +185,7 @@ fn emits_the_reference_system_view() {
     let view = system_view(&merged, &idl, rticx_xbin_proto::RTICX_GENERATION)
         .expect("layout hash is computable");
 
-    assert_eq!(view.schema_version, 1);
+    assert_eq!(view.schema_version, 2);
     assert_eq!(view.rticx_generation, "0.2");
     assert_eq!(
         view.layout_hash,
@@ -199,6 +199,14 @@ fn emits_the_reference_system_view() {
             .map(|app| app.package.as_str())
             .collect::<Vec<_>>(),
         ["app-m7", "app-m4"]
+    );
+    assert_eq!(
+        view.cores
+            .iter()
+            .map(|core| (core.global_id, core.physical_core))
+            .collect::<Vec<_>>(),
+        [(0, 0), (1, 1)],
+        "each core records its distro physical id"
     );
     assert_eq!(view.cores.len(), 2);
     assert_eq!(
@@ -222,20 +230,20 @@ fn emits_the_reference_system_view() {
         FifoEntry {
             source: 0,
             target: 1,
+            pool: Some("p01".to_string()),
             offset: 0,
             elem_size: 12,
             depth: 3,
         }
     );
 
-    assert_eq!(
-        view.regions.len(),
-        2,
-        "both capability pool directions are emitted"
-    );
-    assert_eq!(view.regions[0].source, 0);
-    assert_eq!(view.regions[0].target, 1);
-    assert_eq!(view.regions[0].base_from_source, BASE_01);
+    assert_eq!(view.pools.len(), 1, "the dual matches into one shared pool");
+    assert_eq!(view.pools[0].id, "p01");
+    assert_eq!((view.pools[0].core_a, view.pools[0].core_b), (0, 1));
+    assert_eq!(view.pools[0].base_from_a, BASE_01);
+    assert_eq!(view.pools[0].base_from_b, BASE_01);
+    assert_eq!(view.pools[0].budget, BUDGET);
+    assert_eq!(view.pools[0].used, 100, "the single FIFO uses the budget");
 
     assert_eq!(
         view.doorbells,
@@ -260,6 +268,7 @@ fn emits_an_empty_view_for_an_empty_project() {
 
     assert!(view.apps.is_empty());
     assert!(view.tasks.is_empty());
+    assert!(view.pools.is_empty());
     assert!(view.doorbells.is_empty());
     assert_eq!(view.layout_hash, Hash64::new(layout_hash(&idl).unwrap()));
     assert!(view.verify_topology_hash());

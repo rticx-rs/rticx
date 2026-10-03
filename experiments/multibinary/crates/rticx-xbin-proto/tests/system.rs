@@ -2,7 +2,7 @@
 //! schema (M1-T1).
 
 use rticx_xbin_proto::{
-    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, RegionEntry, SystemError,
+    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, PoolEntry, SystemError,
     SystemView, TargetRef, TaskEntry, TypeEntry, TypeKind, VariantEntry,
 };
 
@@ -29,11 +29,13 @@ fn sample_view() -> SystemView {
     view.cores = vec![
         CoreEntry {
             global_id: 0,
+            physical_core: 0,
             app: "app-m7".to_string(),
             local_index: 0,
         },
         CoreEntry {
             global_id: 1,
+            physical_core: 1,
             app: "app-m4".to_string(),
             local_index: 0,
         },
@@ -92,17 +94,20 @@ fn sample_view() -> SystemView {
         fifo: FifoEntry {
             source: 0,
             target: 1,
+            pool: Some("p01".to_string()),
             offset: 0,
             elem_size: 12,
             depth: 3,
         },
     }];
-    view.regions = vec![RegionEntry {
-        source: 0,
-        target: 1,
-        base_from_source: 0x3004_0000,
-        base_from_target: 0x3004_0000,
-        size: 4096,
+    view.pools = vec![PoolEntry {
+        id: "p01".to_string(),
+        core_a: 0,
+        core_b: 1,
+        base_from_a: 0x3004_0000,
+        base_from_b: 0x3004_0000,
+        budget: 4096,
+        used: 100,
     }];
     view.doorbells = vec![DoorbellEntry {
         source: 0,
@@ -184,8 +189,10 @@ fn addresses_and_hashes_are_hex_strings_in_json() {
     let json = sample_view().to_json();
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-    assert_eq!(value["regions"][0]["base_from_source"], "0x30040000");
-    assert_eq!(value["regions"][0]["base_from_target"], "0x30040000");
+    assert_eq!(value["pools"][0]["base_from_a"], "0x30040000");
+    assert_eq!(value["pools"][0]["base_from_b"], "0x30040000");
+    assert_eq!(value["cores"][0]["physical_core"], 0);
+    assert_eq!(value["tasks"][0]["fifo"]["pool"], "p01");
     assert_eq!(value["tasks"][0]["fifo"]["offset"], 0);
 
     let topology = value["topology_hash"].as_str().expect("hash is a string");
@@ -203,21 +210,21 @@ fn addresses_and_hashes_are_hex_strings_in_json() {
 fn unknown_schema_version_is_rejected() {
     let mut value: serde_json::Value =
         serde_json::from_str(&sample_view().to_json()).expect("valid JSON");
-    value["schema_version"] = serde_json::Value::from(2u32);
+    value["schema_version"] = serde_json::Value::from(3u32);
 
-    let error = SystemView::from_json(&value.to_string()).expect_err("schema 2 is rejected");
+    let error = SystemView::from_json(&value.to_string()).expect_err("schema 3 is rejected");
     assert!(
         matches!(
             error,
             SystemError::Schema {
-                found: 2,
-                expected: 1
+                found: 3,
+                expected: 2
             }
         ),
         "unexpected error: {error}"
     );
     assert_eq!(
         error.to_string(),
-        "unsupported system.json schema version 2; this tool supports schema = 1"
+        "unsupported system.json schema version 3; this tool supports schema = 2"
     );
 }

@@ -59,14 +59,14 @@ use rticx_core::{RticMacroBuilder, RticPass};
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 use rticx_xbin_pass::{XbinPass, XbinPassBackend};
 use rticx_xbin_proto::{
-    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, RegionEntry, SystemView,
+    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, PoolEntry, SystemView,
     TargetRef, TaskEntry, TypeEntry, TypeKind,
 };
 
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 1,
+  "schema_version": 2,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -87,8 +87,8 @@ const SYSTEM_JSON: &str = r#"{
     }
   ],
   "cores": [
-    { "global_id": 0, "app": "app-m7", "local_index": 0 },
-    { "global_id": 1, "app": "app-m4", "local_index": 0 }
+    { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 },
+    { "global_id": 1, "physical_core": 1, "app": "app-m4", "local_index": 0 }
   ],
   "types": [
     {
@@ -112,16 +112,18 @@ const SYSTEM_JSON: &str = r#"{
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
-      "fifo": { "source": 0, "target": 1, "offset": 0, "elem_size": 12, "depth": 3 }
+      "fifo": { "source": 0, "target": 1, "pool": "p01", "offset": 0, "elem_size": 12, "depth": 3 }
     }
   ],
-  "regions": [
+  "pools": [
     {
-      "source": 0,
-      "target": 1,
-      "base_from_source": "0x30040000",
-      "base_from_target": "0x30040000",
-      "size": 4096
+      "id": "p01",
+      "core_a": 0,
+      "core_b": 1,
+      "base_from_a": "0x30040000",
+      "base_from_b": "0x30040000",
+      "budget": 4096,
+      "used": 100
     }
   ],
   "doorbells": [
@@ -779,16 +781,19 @@ fn three_app_system() -> String {
     view.cores = vec![
         CoreEntry {
             global_id: 0,
+            physical_core: 0,
             app: "app-m7".to_string(),
             local_index: 0,
         },
         CoreEntry {
             global_id: 2,
+            physical_core: 2,
             app: "app-m5".to_string(),
             local_index: 0,
         },
         CoreEntry {
             global_id: 1,
+            physical_core: 1,
             app: "app-m4".to_string(),
             local_index: 0,
         },
@@ -829,6 +834,7 @@ fn three_app_system() -> String {
             fifo: FifoEntry {
                 source: 0,
                 target: 1,
+                pool: Some("p01".to_string()),
                 offset: 0,
                 elem_size: 12,
                 depth: 3,
@@ -845,26 +851,31 @@ fn three_app_system() -> String {
             fifo: FifoEntry {
                 source: 2,
                 target: 1,
+                pool: Some("p12".to_string()),
                 offset: 0,
                 elem_size: 12,
                 depth: 2,
             },
         },
     ];
-    view.regions = vec![
-        RegionEntry {
-            source: 0,
-            target: 1,
-            base_from_source: 0x3004_0000,
-            base_from_target: 0x3004_0000,
-            size: 4096,
+    view.pools = vec![
+        PoolEntry {
+            id: "p01".to_string(),
+            core_a: 0,
+            core_b: 1,
+            base_from_a: 0x3004_0000,
+            base_from_b: 0x3004_0000,
+            budget: 4096,
+            used: 100,
         },
-        RegionEntry {
-            source: 2,
-            target: 1,
-            base_from_source: 0x3004_1000,
-            base_from_target: 0x3004_1000,
-            size: 4096,
+        PoolEntry {
+            id: "p12".to_string(),
+            core_a: 1,
+            core_b: 2,
+            base_from_a: 0x3004_1000,
+            base_from_b: 0x3004_1000,
+            budget: 4096,
+            used: 88,
         },
     ];
     view.doorbells = vec![

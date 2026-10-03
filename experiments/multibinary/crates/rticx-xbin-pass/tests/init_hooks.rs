@@ -29,7 +29,7 @@ use rticx_xbin_proto::SystemView;
 /// that a core initializes exactly the FIFOs it produces (M6-T1) and that
 /// `mark_ready` publishes the ready bit.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 1,
+  "schema_version": 2,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -50,8 +50,8 @@ const SYSTEM_JSON: &str = r#"{
     }
   ],
   "cores": [
-    { "global_id": 0, "app": "app-m7", "local_index": 0 },
-    { "global_id": 1, "app": "app-m4", "local_index": 0 }
+    { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 },
+    { "global_id": 1, "physical_core": 1, "app": "app-m4", "local_index": 0 }
   ],
   "types": [
     {
@@ -75,7 +75,7 @@ const SYSTEM_JSON: &str = r#"{
       "priority": 4,
       "capacity": 1,
       "input_type": "EncryptReq",
-      "fifo": { "source": 1, "target": 0, "offset": 0, "elem_size": 12, "depth": 2 }
+      "fifo": { "source": 1, "target": 0, "pool": "p01", "offset": 0, "elem_size": 12, "depth": 2 }
     },
     {
       "id": 2,
@@ -85,23 +85,18 @@ const SYSTEM_JSON: &str = r#"{
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
-      "fifo": { "source": 0, "target": 1, "offset": 0, "elem_size": 12, "depth": 3 }
+      "fifo": { "source": 0, "target": 1, "pool": "p01", "offset": 88, "elem_size": 12, "depth": 3 }
     }
   ],
-  "regions": [
+  "pools": [
     {
-      "source": 0,
-      "target": 1,
-      "base_from_source": "0x30040000",
-      "base_from_target": "0x30040000",
-      "size": 4096
-    },
-    {
-      "source": 1,
-      "target": 0,
-      "base_from_source": "0x30041000",
-      "base_from_target": "0x30041000",
-      "size": 4096
+      "id": "p01",
+      "core_a": 0,
+      "core_b": 1,
+      "base_from_a": "0x30040000",
+      "base_from_b": "0x30040000",
+      "budget": 4096,
+      "used": 188
     }
   ],
   "doorbells": [
@@ -287,10 +282,12 @@ fn write_project(root: &Path, expanded: &str) {
               // so the owner's `init_shared` must leave both untouched and\n\
               // `init_fifos_core0` must zero exactly the `0 -> 1` FIFO.\n\
              let out_region = system.backend(0).ipc_region(0, 1).expect(\"region 0->1\");\n\
+             // `EncryptTask` is the second task of the shared `p01` pool.\n\
              let out_fifo = unsafe {\n\
-                 Fifo::<ipc_types::EncryptReq, 3usize>::view_at(out_region.base_from_source())\n\
+                 Fifo::<ipc_types::EncryptReq, 3usize>::view_at(out_region.base_from_source() + 88)\n\
              };\n\
              let in_region = system.backend(0).ipc_region(1, 0).expect(\"region 1->0\");\n\
+             // `DecryptTask` is the first task of the shared `p01` pool.\n\
              let in_fifo = unsafe {\n\
                  Fifo::<ipc_types::EncryptReq, 2usize>::view_at(in_region.base_from_target())\n\
              };\n\

@@ -269,6 +269,7 @@ fn merges_the_producer_receiver_fixture() {
         rticx_xbin_proto::FifoEntry {
             source: 0,
             target: 1,
+            pool: Some("p01".to_string()),
             offset: 0,
             elem_size: 12,
             depth: 3,
