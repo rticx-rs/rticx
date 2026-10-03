@@ -1,14 +1,11 @@
 # User guide
 
-**Status: complete (M6-T3).** This guide covers the multi-binary /
-heterogeneous multi-core extension as implemented in `experiments/multibinary/`
-(M0–M6.5, M6-T1–M6-T3). Async cross-binary tasks, cross-binary `#[shared]`
-resources and the future `Producer` API are out of scope for v1; every
-out-of-scope point is called out where it matters.
+This guide covers the multi-binary /
+heterogeneous multi-core extension as implemented in `experiments/multibinary/`.
 
 The extension is experimental and lives in its own workspace
 (`experiments/multibinary/`), deliberately outside the root workspace and its
-release process; extracting it into its own repository is M7.
+release process.
 
 1. [Installing `cargo-xbin`](#1-installing-cargo-xbin)
 2. [Project layout](#2-project-layout)
@@ -34,30 +31,16 @@ cargo install --path experiments/multibinary/crates/rticx-xbin-driver
 cargo xbin --help
 ```
 
-```text
-Multi-binary / heterogeneous multi-core driver for RTICX
-
-Usage: cargo xbin <COMMAND>
-
-Commands:
-  sync   Phase 1: parse `rticx.toml` and `ipc-types.toml`, collect the per-application metadata, merge and validate the system view, allocate FIFO addresses and write `target/rticx-xbin/system.json`
-  build  Run `sync`, then build every application of the project
-  help   Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
-```
-
-Run `cargo xbin` from inside the project: the driver discovers the project
-root by walking up from the current directory until it finds `rticx.toml`, and
+Run `cargo xbin` from inside a multicore project cargo workspace or one of the crates of the workspace.
+the driver discovers the project root by walking up from the current directory until it finds `rticx.toml`, and
 runs Cargo from there.
 
-## 2. Project layout
+## 2. Multibin Multicore Project layout
 
 ```text
 my-project/
-├── rticx.toml            # project topology (the driver's map)
+├── Cargo.toml            # (optional) cargo workspace
+├── rticx.toml            # RTICX Multicore project workspace describing the projects topology (cores, applications, IPC regions ..etc)
 ├── ipc-types.toml        # shared data types, the type-only IDL
 ├── ipc-types/            # generated crate; kept in VCS, synced by the driver
 ├── .cargo/config.toml    # target triple, linker, runner (as usual)
@@ -133,8 +116,7 @@ core_ids = [1]
 
 `core_ids` is the only place global core ids are declared: the `#[app]` macro
 uses them in the runtime core checks, `external_cores`/`spawn_by` refer to
-them, and the system view records them. See
-[diagram 1](diagrams/01-project-topology.puml) for the same topology.
+them, and the system view records them. 
 
 ## 4. Writing `ipc-types.toml`
 
@@ -250,7 +232,7 @@ publishes the task id on the pair's doorbell word and triggers the target's
 pends the line's **line dispatcher** from the pool, whose `exec` drains the
 task FIFO until empty and calls the receiver's `exec(input)`. Duplicate and
 coalesced notifications are idempotent because the dispatcher drains until
-empty. [Diagram 3](diagrams/03-spawn-timeline.puml) shows the sequence.
+empty. 
 
 On one target core every priority level belongs to exactly one origin core:
 receivers fed by different producer cores need disjoint priorities. `cargo
@@ -605,8 +587,7 @@ mod app {
 }
 ```
 
-Each producer gets its own region, ring function, router and dispatcher line;
-[diagram 4](diagrams/04-memory-priority-map.puml) maps them. See
+Each producer gets its own region, ring function, router and dispatcher line. See
 [architecture §7](architecture.md#7-priorities-and-locking) for why the
 priority lines must be disjoint.
 

@@ -1,7 +1,7 @@
 # Architecture
 
-Status: **complete (M6-T3)**. The design is specified in
-[`multibinary-multicore-plan.md`](../../../multibinary-multicore-plan.md);
+The design is specified in
+[`multibinary-multicore-plan.md`](../multibinary-multicore-plan.md);
 this document condenses it and records the implemented design through M6.5
 plus M6-T1–M6-T3. The [user guide](user-guide.md) is the task-oriented
 companion; this document explains how the pieces fit together.
@@ -31,17 +31,8 @@ declaration is the only task-topology declaration — producer applications
 declare nothing since M5.5. The driver is the only merger and address
 allocator.
 
-Out of scope (v1): async tasks, cross-binary `#[shared]` resources/locks,
-zero-copy bulk transfer, dynamic memory, more than one binary per core group,
-root-workspace/release integration.
+Out of scope (v1): async tasks, root-workspace/release integration.
 
-The end-to-end acceptance target is out-of-tree (M7): an STM32H7 distribution
-running an M7 and an M4 binary on the same die, with the shared region in
-non-cacheable SRAM, a hardware doorbell (for example HSEM/EXTI or IPCC), the
-M7 releasing the M4 after initializing shared memory, and cross-binary spawns
-in both directions under Renode. In-tree, the same generated code is exercised
-by the host mock fixtures (section 11), so the demo reuses the pipeline
-unchanged.
 
 ## 2. Layers and crates
 

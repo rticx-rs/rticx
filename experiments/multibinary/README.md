@@ -2,7 +2,7 @@
 
 Standalone experimental workspace for the multi-binary / heterogeneous
 multi-core extension of RTICX. See
-[`multibinary-multicore-plan.md`](../../multibinary-multicore-plan.md) at the
+[`multibinary-multicore-plan.md`](multibinary-multicore-plan.md) at the
 repository root for the design and task checklist.
 
 This workspace is deliberately **not** part of the root workspace: it
