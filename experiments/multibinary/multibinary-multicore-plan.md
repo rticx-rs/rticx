@@ -5,12 +5,12 @@ native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
 routing, multi-source, ready/epoch, docs), **M6.9-T1..T9** (distro capability
 binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
 budget, `system.json` schema 2, pool-aware codegen/runtime, linked-ELF
-verification, pool-panel visualization, docs and fixtures) and **M7-T1**
-(in-tree STM32H7 M7+M4 distribution, Renode boot acceptance) complete.
-Remaining work: **M7-T2** (cross-binary spawn demo), **M7-T3/M7-T4**
-(extraction and follow-ups), see
+verification, pool-panel visualization, docs and fixtures), **M7-T1**
+(in-tree STM32H7 M7+M4 distribution, Renode boot acceptance) and **M7-T2**
+(cross-binary M7↔M4 ping-pong under Renode) complete.
+Remaining work: **M7-T3** (extraction), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-04 (M7-T1; in-tree STM32H7 distribution and Renode boot).
+**Last updated:** 2026-10-04 (M7-T2; Renode cross-binary ping-pong demo).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
@@ -195,6 +195,7 @@ the root generation.
 | | `hash.rs` | Deterministic FNV-1a 64-bit hash (source/layout/topology) |
 | `rticx-xbin-pass` | `lib.rs` | `XbinPass`: mode detection (`RTICX_XBIN_META_OUT` / `RTICX_XBIN_SYSTEM`), view load, pass orchestration |
 | | `parse.rs` | `#[app]` args (`external_cores`, `ipc_dispatchers`; reads `core_ids`), native `#[sw_task]` receiver extraction + `spawn_by` resolution, receiver injection/strip |
+| | `shim.rs` | Metadata-mode (phase-1) permissive sender shims for `Task::cross_spawn` targets the source mentions, so `cargo xbin sync`'s `cargo check` type-checks before `system.json` exists (M7-T2) |
 | | `codegen.rs` | Sender stubs, receiver FIFO views, line dispatchers, doorbell routers, ring/read functions, init hooks, freshness anchors, `XbinPassBackend` |
 | | `priority.rs` | Build-phase priority-line validation over raw sw/async declarations + view receivers |
 | `rticx-xbin-rt` | `fifo.rs` | Atomic SPSC ring (`Fifo`), producer/consumer split, `view_at` placement |
@@ -261,7 +262,7 @@ the workspace's default members (it only compiles for Cortex-M).
 | `rticx-stm32h7` | `rticx-stm32h7/` | Distribution library: `CrossBinBackend` runtime (`xbin.rs`), BASEPRI locking (`export.rs`), the generated `memory.x` (`build.rs`, `linker/`) |
 | `rticx-stm32h7-macro` | `rticx-stm32h7/rticx-stm32h7-macro/` | `#[app]` macro: core pass backend + `XbinPassBackend` + software pass, with the reserved-HSEM validation |
 | `rticx-stm32h7-bindings` | `rticx-stm32h7/rticx-stm32h7-bindings/` | Shared SRAM3 IPC pool geometry and HSEM semaphore vocabulary both halves must agree on (hardware registers come from the `stm32h7` PAC) |
-| Acceptance demo | `rticx-stm32h7/examples-apps/` | A `cargo xbin` project (`app-cm7`/`app-cm4`) booting under `renode/run.sh`; each app declares a cross-binary receiver, so the full transport codegen is compiled |
+| Acceptance demo | `rticx-stm32h7/examples-apps/` | A `cargo xbin` project (`app-cm7`/`app-cm4`) booting under `renode/run.sh`; each app declares a cross-binary receiver, so the full transport codegen is compiled, and `app-cm7`'s `idle` starts an M7↔M4 ping-pong through the generated `cross_spawn` stubs (M7-T2) |
 
 Layout decisions: one `h7-sram3` pool per the `{cm7, cm4}` dual (`0x3004_0000`
 from the M7, `0x1004_0000` from the M4), shared state at `+0x0000`, doorbell
@@ -407,6 +408,14 @@ Producer binary (no declaration; phase 2 generates the stub from `system.json`):
 //   }
 EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
 ```
+
+> **Metadata-mode shim (M7-T2).** Phase 1's `cargo check` runs before
+> `system.json` exists, so it cannot generate the real stub. Metadata mode emits
+> a permissive shim (`pub struct <Task>;` plus a generic `cross_spawn`) for every
+> `Task::cross_spawn` target the source mentions, only so the check
+> type-checks. Phase 2 never emits the shim; it generates the typed,
+> view-derived stub, so a missing or misspelled task (or a wrong input type) is
+> still a hard `cargo xbin build` / `cargo build` error.
 
 - Cross-binary receivers are **ordinary native software tasks**: a `#[sw_task]`
   struct plus `impl RticSwTask` with `SpawnInput`. There are no xbin-specific
@@ -714,7 +723,8 @@ The router IRQ is enabled/prioritized by the core pass's used-IRQ machinery (no
 - **Acceptance (STM32H7):** the in-tree `rticx-stm32h7` M7+M4 distribution
   under the Renode harness (§11.1) with a real doorbell (HSEM) and
   non-cacheable shared SRAM; M7-T1 boots both cores and reports them ready,
-  and `cargo xbin build --verify-elf` checks the linked images against the
+  M7-T2 runs the M7↔M4 cross-binary ping-pong both ways, and
+  `cargo xbin build --verify-elf` checks the linked images against the
   `h7-sram3` pool.
 
 
@@ -976,13 +986,21 @@ distro may use them internally, but no new framework mechanism).
       region, releases the M4 through `RCC_GCR.BOOT_C2`, and both cores mark
       themselves ready. Met: the demo prints both cores ready and the linked
       ELFs pass `cargo xbin build --verify-elf`.
-- [ ] **M7-T2** Renode acceptance demo: cross-binary spawn M7→M4 and M4→M7.
+- [x] **M7-T2** Renode acceptance demo: cross-binary spawn M7→M4 and M4→M7.
       *Acceptance:* `renode/run.sh <m7.elf> <m4.elf>` shows both cross-binary
       directions executing (console output and/or a shared result word) through
-      the generated dispatch path. The transport is already generated and
-      compiled by the demo (both receivers + ring/read/router); the remaining
-      work is triggering `cross_spawn` from a producer, which needs the phase-1
-      metadata `cargo check` to accept a generated sender stub.
+      the generated dispatch path. Met: the M7 `idle` waits for the M4's ready
+      bit and calls the generated `PingTask::cross_spawn`; the M4's
+      `PingTask::exec` answers through the generated `PongTask::cross_spawn`,
+      and the two handlers alternate for four hops. The run logs
+      `[M4] rx ping seq=1` / `[M4] rx ping seq=3` and
+      `[M7] rx pong seq=2` / `[M7] rx pong seq=4`, then
+      `[M7] cross-binary ping-pong complete after 4 hops (M7-T2)`. The remaining
+      work was making the phase-1 metadata `cargo check` accept a source that
+      calls a phase-2-generated sender stub: metadata mode now emits a
+      permissive shim for every `Task::cross_spawn` target the source mentions
+      (phase 2 still generates the typed, view-derived stub, so missing or
+      misspelled tasks remain hard build errors).
 - [ ] **M7-T3** Extract `experiments/multibinary` into its own repository; resolve
       and remove `TODO(extract)` markers; add CI there.
 

@@ -250,10 +250,16 @@ mod app {
 The pass generates `pub struct EncryptTask;` and
 `EncryptTask::cross_spawn(input) -> Result<(), Option<Input>>` inside the
 producer's `#[app]` module for every view task whose producer core belongs to
-the application; the producer source never mentions the task and only adds the
+the application; the producer source never *declares* the task and only adds the
 generated `ipc-types` crate as a dependency. A generated stub name colliding
-with a user item is a dedicated compile error. The error semantics match the
-single-binary `cross_spawn`:
+with a user item is a dedicated compile error.
+
+Because the real stub only exists once `system.json` does, phase 1
+(`cargo xbin sync`) cannot type-check a `cross_spawn` call against it. Metadata
+mode therefore treats the call with a permissive shim (`pub struct <Task>;`
+plus a generic `cross_spawn`); `cargo xbin build` replaces it with the typed,
+view-derived stub, so a misspelled task or a wrong input type is still a hard
+build error. The error semantics match the single-binary `cross_spawn`:
 
 | Result | Meaning |
 |---|---|

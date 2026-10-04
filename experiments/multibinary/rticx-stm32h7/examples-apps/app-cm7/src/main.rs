@@ -1,4 +1,4 @@
-//! Cortex-M7 side of the rticx-stm32h7 demo (M7-T1; transport ready for M7-T2).
+//! Cortex-M7 side of the rticx-stm32h7 demo (M7-T1 + M7-T2).
 //!
 //! Global core 0. The rticx-stm32h7 `#[app]` macro runs the core pass, the
 //! cross-binary pass and the software-tasks pass; the distribution's runtime
@@ -9,12 +9,16 @@
 //! `stm32-hal2` `Usart`.
 //!
 //! The application declares a cross-binary receiver (`PongTask`, spawned by the
-//! M4 on global core 1). The pass therefore generates the complete M7-T1/M7-T2
-//! transport here: the `PingTask` sender stub, the `0 -> 1` doorbell ring
-//! function, the `1 -> 0` read function and doorbell router bound to `HSEM0`
-//! (IRQ 125), and the USART3 line dispatcher. Triggering the ping from `idle`
-//! is left to M7-T2: phase-1 `cargo xbin sync` cannot type-check a generated
-//! sender stub.
+//! M4 on global core 1). The pass therefore generates the complete transport
+//! here: the `PingTask` sender stub, the `0 -> 1` doorbell ring function, the
+//! `1 -> 0` read function and doorbell router bound to `HSEM0` (IRQ 125), and
+//! the USART3 line dispatcher.
+//!
+//! `idle` waits until the M4 has marked itself ready and then starts the
+//! cross-binary ping-pong by calling the generated `PingTask::cross_spawn`
+//! (M7-T2). Each handler logs its hop and spawns the next one through the other
+//! core, so a single `renode/run.sh` boot shows both directions executing
+//! through the generated dispatch path.
 #![no_std]
 #![no_main]
 
@@ -31,6 +35,14 @@ pub mod app {
     use embedded_io::Write as _;
 
     use stm32_hal2::{clocks::Clocks, pac, usart::Usart};
+
+    /// Cross-binary hops the demo runs before it stops; the ping-pong
+    /// alternates M7 -> M4 -> M7 ..., so four hops show both directions twice.
+    ///
+    /// `allow(dead_code)`: during the phase-1 metadata check the receiver is
+    /// not yet a task, so the only user of the constant is dead code.
+    #[allow(dead_code)]
+    const PING_PONG_LIMIT: u32 = 4;
 
     /// Console shared (under the SRP lock) by `init`, `PongTask` and `Idle`.
     #[shared]
@@ -55,6 +67,25 @@ pub mod app {
                     "[M7] rx pong seq={} value={:#010x}",
                     input.seq, input.value
                 );
+            });
+
+            if input.seq >= PING_PONG_LIMIT {
+                self.shared().console.lock(|console| {
+                    let _ = writeln!(
+                        console,
+                        "[M7] cross-binary ping-pong complete after {PING_PONG_LIMIT} hops \
+                         (M7-T2)"
+                    );
+                });
+                return;
+            }
+
+            // Answer the M4 through the generated `PingTask` sender stub: the
+            // input is enqueued in the `(0 -> 1)` FIFO and the M4's HSEM1 router
+            // is rung (M7-T2).
+            let _ = PingTask::cross_spawn(ipc_types::PingMsg {
+                seq: input.seq + 1,
+                value: input.value.wrapping_add(1),
             });
         }
     }
@@ -86,17 +117,27 @@ pub mod app {
                 );
             });
 
-            let mut announced = false;
+            // The M4 marks itself ready at the end of its `post_init`, so a
+            // spawn before that would return `Err(Some(input))`.
+            while !backend.is_ready(1) {
+                core::hint::spin_loop();
+            }
+            self.shared().console.lock(|console| {
+                let _ = writeln!(
+                    console,
+                    "[M7] Cortex-M4 marked itself ready; starting the M7 -> M4 ping (M7-T2)"
+                );
+            });
+
+            // Start the ping-pong; the M4's `PingTask::exec` answers with a pong
+            // and the two handlers keep alternating until `PING_PONG_LIMIT`.
+            let _ = PingTask::cross_spawn(ipc_types::PingMsg {
+                seq: 1,
+                // `0x4D37` is "M7" in ASCII: the marker of the initiating core.
+                value: 0x4D37,
+            });
+
             loop {
-                if !announced && backend.is_ready(1) {
-                    announced = true;
-                    self.shared().console.lock(|console| {
-                        let _ = writeln!(
-                            console,
-                            "[M7] Cortex-M4 marked itself ready; both cores ready (M7-T1)"
-                        );
-                    });
-                }
                 core::hint::spin_loop();
             }
         }

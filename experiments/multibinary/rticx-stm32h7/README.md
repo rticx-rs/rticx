@@ -5,11 +5,11 @@ runs its own binary; cross-binary software-task spawns travel through a shared
 D2 SRAM3 pool with HSEM doorbells, reusing the RTICX task/dispatcher model of
 the multi-binary extension (`experiments/multibinary`).
 
-This is the M7-T1 acceptance distribution: the Cortex-M7 initializes the shared
+This is the M7 acceptance distribution: the Cortex-M7 initializes the shared
 region and releases the Cortex-M4 through `RCC_GCR.BOOT_C2`; both cores map the
 shared pool through the MPU and mark themselves ready in the shared state. The
-cross-binary transport is bound and generated; M7-T2 adds the runtime
-ping-pong.
+cross-binary transport is bound and generated, and the demo runs an M7↔M4
+software-task ping-pong through the generated `cross_spawn` stubs (M7-T2).
 
 ## Features
 
@@ -93,19 +93,29 @@ The M7 prints on USART1 and the M4 on USART2:
 [M7] boot; initializing shared IPC region and releasing the M4
 [M7] shared region ready, RCC_GCR.BOOT_C2 set; waiting for the M4
 [M4] released by RCC_GCR.BOOT_C2; mapping shared region and marking ready
-[M7] Cortex-M4 marked itself ready; both cores ready (M7-T1)
+[M7] Cortex-M4 marked itself ready; starting the M7 -> M4 ping (M7-T2)
 [M4] shared region mapped, HSEM1 receive enabled, ready bit set (M7-T1)
+[M4] rx ping seq=1 value=0x00004d37
+[M7] rx pong seq=2 value=0x00004d38
+[M4] rx ping seq=3 value=0x00004d39
+[M7] rx pong seq=4 value=0x00004d3a
+[M7] cross-binary ping-pong complete after 4 hops (M7-T2)
 ```
+
+The ping-pong exercises both directions end to end: the M7 starts it by
+calling the generated `PingTask::cross_spawn`, the M4's `PingTask::exec`
+answers through the generated `PongTask::cross_spawn`, and the two generated
+doorbell routers (HSEM1 on the M4, HSEM0 on the M7) wake the line dispatchers
+that run the receiver tasks.
 
 ## Limitations
 
 - Async cross-binary tasks are out of scope (the extension's v1 scope).
 - Renode models neither the M7 D-cache nor clock gating; the MPU configuration
   is verified statically, not simulated.
-- The demo generates the full cross-binary transport but does not trigger a
-  spawn yet: a producer calling a generated `cross_spawn` stub cannot be
-  type-checked by the phase-1 metadata `cargo check`. The dynamic M7<->M4
-  ping-pong is M7-T2.
+- Phase 1's metadata `cargo check` sees a permissive shim of a sender stub
+  instead of the real one; the typed stub is checked at `cargo xbin build`
+  (M7-T2).
 
 ## License
 

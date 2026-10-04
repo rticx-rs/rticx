@@ -87,6 +87,7 @@ mod binding;
 mod codegen;
 mod parse;
 mod priority;
+mod shim;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,7 @@ use crate::parse::{
     strip_receiver_tasks, validate_ipc_dispatchers,
 };
 use crate::priority::validate_priority_lines;
+use crate::shim::generate_sender_shims;
 
 /// Re-export of the pass trait, so that distributions and fixtures binding
 /// [`XbinPass`] need not depend on `rticx-core` directly.
@@ -342,6 +344,14 @@ impl RticPass for XbinPass {
             // struct and its `impl RticSwTask` block; the manifest already
             // recorded the task.
             strip_receiver_tasks(&mut app_mod, &decls.receivers);
+
+            // M7-T2: the real sender stubs are generated in phase 2 from the
+            // synced view, which does not exist yet. Emit permissive shims for
+            // the `Task::cross_spawn` targets this source mentions so the
+            // metadata `cargo check` type-checks; phase 2 replaces them with
+            // the typed, view-derived stubs.
+            let shims = generate_sender_shims(&app_mod);
+            append_items(&mut app_mod, shims);
         }
 
         if let Some(system) = &self.system {

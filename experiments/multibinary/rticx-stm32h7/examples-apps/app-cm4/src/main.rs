@@ -1,4 +1,4 @@
-//! Cortex-M4 side of the rticx-stm32h7 demo (M7-T1; transport ready for M7-T2).
+//! Cortex-M4 side of the rticx-stm32h7 demo (M7-T1 + M7-T2).
 //!
 //! Global core 1. The Cortex-M4 is held in hold-boot until the Cortex-M7 writes
 //! `RCC_GCR.BOOT_C2`; when it boots it maps the shared SRAM3 through the MPU,
@@ -12,6 +12,11 @@
 //! here: the `PongTask` sender stub, the `1 -> 0` doorbell ring function, the
 //! `0 -> 1` read function, the doorbell router bound to `HSEM1`, and the
 //! USART3 line dispatcher that drains the task FIFO into `PingTask::exec`.
+//!
+//! `PingTask::exec` logs the arriving ping and answers with the generated
+//! `PongTask::cross_spawn`, so the M7's first ping drives the whole M7 <-> M4
+//! exchange (M7-T2).
+
 #![no_std]
 #![no_main]
 
@@ -28,6 +33,13 @@ pub mod app {
     use embedded_io::Write as _;
 
     use stm32_hal2::{clocks::Clocks, pac, usart::Usart};
+
+    /// Cross-binary hops the demo runs before it stops; see the M7 side.
+    ///
+    /// `allow(dead_code)`: during the phase-1 metadata check the receiver is
+    /// not yet a task, so the only user of the constant is dead code.
+    #[allow(dead_code)]
+    const PING_PONG_LIMIT: u32 = 4;
 
     /// Console shared (under the SRP lock) by `init`, `PingTask` and `Idle`.
     #[shared]
@@ -50,6 +62,18 @@ pub mod app {
                     "[M4] rx ping seq={} value={:#010x}",
                     input.seq, input.value
                 );
+            });
+
+            if input.seq >= PING_PONG_LIMIT {
+                return;
+            }
+
+            // Answer the M7 through the generated `PongTask` sender stub: the
+            // input is enqueued in the `(1 -> 0)` FIFO and the M7's HSEM0 router
+            // is rung (M7-T2).
+            let _ = PongTask::cross_spawn(ipc_types::PingMsg {
+                seq: input.seq + 1,
+                value: input.value.wrapping_add(1),
             });
         }
     }
