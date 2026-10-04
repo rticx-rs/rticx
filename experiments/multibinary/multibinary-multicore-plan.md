@@ -56,10 +56,10 @@ by an out-of-tree distribution.
 | v1 scope | Native `#[sw_task]` control-plane spawn only; no async |
 | Async | Explicitly out of scope; no extension of `rticx-async-pass`. The xbin pass requires the distribution's `swtasks` feature (sync `#[sw_task]` only) until a later milestone adds async |
 | Cross-binary channels / shared resources | Out of scope |
-| Task syntax | Cross-binary receivers are native `#[sw_task]` items with `impl RticSwTask`; no xbin-specific attributes or traits. In applications declaring `external_cores`, `spawn_by` names a **global** core (`∈ core_ids` → in-app, mapped back to a local index for sw-pass; `∈ external_cores` → cross receiver; else error); `core` stays a local index. `SpawnInput: rticx_xbin_rt::CrossCoreMessage` is enforced by a generated const assertion |
+| Task syntax | Cross-binary receivers are native `#[sw_task]` items with `impl RticSwTask`; no xbin-specific attributes or traits. In applications declaring `external_cores`, `spawn_by` names a **global** core (`∈ core_ids` → in-app, mapped back to a local index for sw-pass; `∈ external_cores` → cross receiver; else error); `core` stays a local index. `SpawnInput: CrossCoreMessage` (the pass-injected marker trait) is enforced by a generated const assertion |
 | Receiver transport | Per-task shared FIFO, direct dispatcher drain; the per-pair router only routes task ids and pends dispatchers — it never forwards payloads (no forwarder ISR) |
 | Sender-side lock | v1: `core_local_interrupt_free` inside generated spawn. Future: `Producer` as a shared resource with SRP lock |
-| Type discovery | TOML IDL at workspace root, types only; driver generates a shared `ipc-types` crate |
+| Type discovery | TOML IDL at workspace root, types only; driver generates a shared `ipc_types` module the pass re-emits into each `#[app]` |
 | Type subset v1 | 32-bit-safe only: `u8..u32`, `i8..i32`, `f32`, `[T; N]`, nested messages, optional `repr(u32)` enums. No `u64/i64/f64`, `usize`, `bool`, pointers, references |
 | Layout guarantee | Generated `#[repr(C)]` types + canonical layout consts + per-target compile-time assertions |
 | FIFO ordering | New atomic SPSC queue (`AtomicUsize` head/tail via `portable-atomic`, Release/Acquire) — not `rticx-spsc` |
@@ -89,7 +89,7 @@ by an out-of-tree distribution.
 - Receiver declarations are the single task-topology source and use the native
   `#[sw_task]`/`RticSwTask` syntax; the pass generates the producer-side
   `cross_spawn` stubs, and a task has exactly one producer core.
-- Type-only IDL → generated types crate; driver-generated JSON system view.
+- Type-only IDL → generated types module; driver-generated JSON system view.
 - Driver commands `cargo xbin sync`, `cargo xbin build` and `cargo xbin verify`.
 - Distro bindings: IPC pools, doorbells, cache/MPU policy, boot sequencing.
 
@@ -116,7 +116,7 @@ Application sources (Rust)          IDL (types only)         Project + distro
      per-app metadata (pass in metadata mode)  ->  <app>.xbin.json
      driver merge + validate + allocate addresses
      -> target/rticx-xbin/system.json
-     -> generated ipc-types/ crate (repr(C), consts, asserts)
+     -> generated ipc_types module at target/rticx-xbin/ipc_types.rs (repr(C), consts, asserts)
           |
           v
    Phase 2: cargo xbin build (normal cargo build per app)
@@ -178,7 +178,7 @@ the root generation.
 |---|---|---|
 | `rticx-xbin-proto` | `crates/rticx-xbin-proto/` | IDL parser, canonical layout engine, merge + validation, JSON schemas, canonical FIFO image |
 | `rticx-xbin-pass` | `crates/rticx-xbin-pass/` | `RticPass` implementation, metadata mode + codegen mode |
-| `rticx-xbin-rt` | `crates/rticx-xbin-rt/` | Atomic cross-core SPSC queue, marker trait, backend contract |
+| `rticx-xbin-rt` | `crates/rticx-xbin-rt/` | Atomic cross-core SPSC queue, backend contract |
 | `rticx-xbin-driver` | `crates/rticx-xbin-driver/` | `cargo-xbin` subcommand (`sync`, `build`, `verify`) |
 | `rticx-xbin-mock` | `crates/mock/rticx-xbin-mock/` | `MockSystem` runtime for host tests |
 | `mock-pac` | `crates/mock/mock-pac/` | Minimal PAC for the mock `#[app]` |
@@ -192,7 +192,7 @@ the root generation.
 |---|---|---|
 | `rticx-xbin-proto` | `idl.rs` | Parse `ipc-types.toml`; validate the 32-bit-safe type subset |
 | | `layout.rs` | Canonical little-endian layout (natural alignment capped at 4) |
-| | `codegen.rs` | Generate the `ipc-types` crate (types, marker impls, consts, asserts, `LAYOUT_HASH`) with change-detecting writes |
+| | `codegen.rs` | Generate the `ipc_types` module (types, marker impls, consts, asserts, `LAYOUT_HASH`) with change-detecting writes |
 | | `project.rs` | Parse `rticx.toml` (`[[application]]`, `core_ids`; rejects the removed `[ipc.regions]`) |
 | | `manifest.rs` | `<app>.xbin.json` schema (written by the pass in metadata mode: receivers + per-core distro capability binding) |
 | | `merge.rs` | Merge manifests, validate topology/priority/type/core-id rules, match the distro pool graph, reject impossible links, allocate FIFOs in the shared pool budgets |
@@ -206,7 +206,7 @@ the root generation.
 | | `priority.rs` | Build-phase priority-line validation over raw sw/async declarations + view receivers |
 | `rticx-xbin-rt` | `fifo.rs` | Atomic SPSC ring (`Fifo`), producer/consumer split, `view_at` placement |
 | | `backend.rs` | `CrossBinBackend` + `IpcRegion` contract (pools, core id, cache/MPU) |
-| | `lib.rs` | `CrossCoreMessage` marker trait, `Queue` re-export for ready queues |
+| | `lib.rs` | `Queue` re-export for ready queues (the `CrossCoreMessage` trait is injected by `rticx-xbin-pass`, not defined here) |
 | `rticx-xbin-driver` | `cli.rs` | `cargo xbin` CLI surface (`sync`, `build [--verify-elf]`, `verify [--release]`) |
 | | `commands.rs` | `sync` (collect, merge, allocate, emit, generate), `build` (= sync + per-app build, optional ELF verification) and `verify` (check a plain `cargo build` output) |
 | | `elf.rs` | Linked-ELF verification with the `object` crate: pool-view overlap, stack bound and distro pool bound symbols (M6.9-T7) |
@@ -223,7 +223,7 @@ workspace crates and (for `e2e`/`three-app`) on the shared mock distribution.
 
 | Fixture | Topology | Exercises |
 |---|---|---|
-| `crates/mock/fixtures/metadata/` | Two apps (`app-m7` producer core 0, `app-m4` receiver core 1) + a minimal `metadata-macro` `#[app]` stand-in that runs only the xbin metadata pass and binds the mock capability table (M6.9-T9) | `cargo xbin sync` end to end: metadata collection, merge/validation, `system.json` (schema 2, `pools` + physical ids) emission and `ipc-types/` generation. Driven by the driver's `tests/fixture.rs`; the generated `ipc-types/` crate is checked in like a real project |
+| `crates/mock/fixtures/metadata/` | Two apps (`app-m7` producer core 0, `app-m4` receiver core 1) + a minimal `metadata-macro` `#[app]` stand-in that runs only the xbin metadata pass and binds the mock capability table (M6.9-T9) | `cargo xbin sync` end to end: metadata collection, merge/validation, `system.json` (schema 2, `pools` + physical ids) emission and `target/rticx-xbin/ipc_types.rs` generation. Driven by the driver's `tests/fixture.rs`; nothing generated is checked in |
 | `crates/mock/fixtures/e2e/` | Same two apps, with the mock **distribution** (`xbin-mock-distro` + `xbin-mock-runtime`) running the full core pass on `MockCoreBackend` and the xbin pass against an in-process backend | `cargo xbin build` over a real phase-1/phase-2 cycle (driver `tests/e2e.rs`); phase 2 generates the sender `cross_spawn`, the receiver dispatcher and the init hooks and links both host binaries. The pass crate's `tests/e2e_runtime.rs` expands both apps into one host binary and **runs** the generated chain: `cross_spawn` → ring function → router ISR → pended line dispatcher → `exec`, plus FIFO backpressure and coalesced/duplicate notifications |
 | `crates/mock/fixtures/three-app/` | Three apps: producers `app-m7` (global 0) and `app-m5` (global 2) spawn onto receiver `app-m4` (global 1) through two shared pools, two priority lines and two per-pair routers | Multi-source support: driver `tests/three_app.rs` builds it with `cargo xbin build`; `tests/e2e_runtime.rs` runs all three apps in one process (per-pair routers/dispatcher lines, per-source backpressure, and the non-owner producer initializing its own pool); pass `tests/priority_lines.rs` covers build-phase priority-line validation |
 
@@ -341,10 +341,13 @@ Allowed field types v1:
 Rejected: `u64/i64/f64`, `usize/isize`, `bool`, pointers, references, tuples,
 default-`repr` enums, ZSTs, unions, bitfields.
 
-### 6.3 Generated `ipc-types` crate
+### 6.3 Generated `ipc_types` module
 
-Generated at project root as `ipc-types/` (kept in VCS; `sync` reports changes).
-Contents per message:
+Generated at `target/rticx-xbin/ipc_types.rs`, next to `system.json` (`sync`
+reports changes; nothing is checked in). The cross-binary pass re-emits the
+file's tokens into each application's `#[app]` module as `pub mod ipc_types`,
+together with the `unsafe trait CrossCoreMessage: Copy + 'static` the impls
+name (see §8). Contents per message:
 
 ```rust
 #[repr(C)]
@@ -356,7 +359,7 @@ pub const OFF_ENCRYPT_REQ_ADDR: usize = 0;
 // ... one const per field
 pub const LAYOUT_HASH: u64 = 0x...;
 
-unsafe impl rticx_xbin_rt::CrossCoreMessage for EncryptReq {}
+unsafe impl CrossCoreMessage for EncryptReq {}
 
 const _: () = {
     assert!(core::mem::size_of::<EncryptReq>() == SIZE_ENCRYPT_REQ);
@@ -367,6 +370,9 @@ const _: () = {
     assert!(cfg!(target_pointer_width = "32"));
 };
 ```
+
+The file carries no inner attributes and no `rticx-xbin-rt` dependency: the
+pass injects the trait and wraps the re-emitted items in the module.
 
 ### 6.4 `#[app(...)]` additions
 
@@ -448,16 +454,16 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
   receiver `core`, and `external_cores` overlapping the application's own
   `core_ids` are hard errors. `shared = [...]` is passed through to the core pass,
   which computes the SRP ceilings.
-- The receiver's `SpawnInput` must implement `rticx_xbin_rt::CrossCoreMessage`; the
-  pass emits a const assertion for it instead of relying on a trait bound in the
-  generated `RticSwTask`.
+- The receiver's `SpawnInput` must implement the pass-injected
+  `CrossCoreMessage` (see §8); the pass emits a const assertion for it instead
+  of relying on a trait bound in the generated `RticSwTask`.
 - Phase 2 generates `pub struct <Task>;` plus
   `Task::cross_spawn(input) -> Result<(), Option<Input>>` in the producer
   application's `#[app]` module for every view task whose `spawner_core` belongs to
   that application, matching the existing `cross_spawn` error semantics. The input
   type is the receiver's IDL type, reached through the distribution's
-  `ipc_types_path`, so producer applications declare nothing and only add
-  `ipc-types` as a dependency.
+  `ipc_types_path`; the pass injects the shared `ipc_types` module next to the
+  trait, so producer applications declare nothing and add no dependency.
 - The pass is bound **before** `rticx-sw-pass` and requires the distribution's
   `swtasks` feature: sw-pass emits the generated `RticSwTask` trait, the receiver
   is compiled through the core pass's `task_trait` mechanism, and the pass reuses
@@ -508,8 +514,8 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
      exact because the dispatcher drains the FIFO directly);
    - hard error if the pool overflows.
 6. Write `target/rticx-xbin/system.json`.
-7. Generate/update `ipc-types/` (types, marker impls, consts, asserts, `LAYOUT_HASH`);
-   report if changed.
+7. Generate/update `target/rticx-xbin/ipc_types.rs` (types, marker impls, consts,
+   asserts, `LAYOUT_HASH`); report if changed.
 
 ### 7.2 `system.json` contents
 
@@ -552,8 +558,9 @@ also the future input for `cargo xbin visualize`.
 
 ### 7.3 Freshness / staleness
 
-- The pass in phase 2 emits `include_str!` of `system.json` so rustc records it in
-  dep-info and rebuilds when it changes.
+- The pass in phase 2 emits `include_str!` of `system.json` and of the generated
+  `ipc_types.rs`, so rustc records both in dep-info and rebuilds when either
+  changes.
 - Generated code embeds a `const TOPOLOGY_HASH: u64 = ...;`; a mismatch between the
   app's own recomputed hash and the JSON hash is a hard compile error instructing the
   user to run `cargo xbin sync`.
@@ -604,10 +611,14 @@ longer requires cross-task declarations:
   producer may share a line. Violations are hard compile errors on the receiver
   declaration naming the conflicting task; `sync` cannot see local tasks, so this
   check runs at `build` only.
-- **Message-type assertion:** the pass emits a const assertion that each
-  receiver's `<Task as RticSwTask>::SpawnInput` implements
-  `rticx_xbin_rt::CrossCoreMessage`, so the guarantee lives in generated code
-  instead of the trait definition.
+- **IDL types and message-type assertion:** the pass injects
+  `unsafe trait CrossCoreMessage: Copy + 'static` and a `pub mod ipc_types`
+  re-emitting `target/rticx-xbin/ipc_types.rs` into the `#[app]` module, then
+  emits a const assertion that each receiver's
+  `<Task as RticSwTask>::SpawnInput` implements `CrossCoreMessage`, so the
+  guarantee lives in generated code instead of a runtime trait definition. A
+  user item named `CrossCoreMessage` or `ipc_types` in the app module is a
+  dedicated compile error.
 - **Sender stubs:** for every view task whose `spawner_core` belongs to this
   application, the pass generates `pub struct <Task>;` and the `cross_spawn` impl
   below inside the `#[app]` module; the producer source never mentions the task. A
@@ -631,7 +642,7 @@ longer requires cross-task declarations:
     used-IRQ machinery, so no per-line doorbell arming step remains;
   - boot sequencing — releasing/waking peers and handling resets — belongs to
     the distribution, typically in its `post_init`.
-- **Assertions:** layout consts from `ipc-types`, `TOPOLOGY_HASH`, FIFO address
+- **Assertions:** layout consts from `ipc_types`, `TOPOLOGY_HASH`, FIFO address
   bounds and alignment.
 
 Generated `#[task]` items are exactly what the core pass already consumes via
@@ -647,10 +658,9 @@ external `task_trait` paths, so no core changes are required.
   - payload stored in place; element type must be `Copy`;
   - cache-line-padded indices to avoid false sharing;
   - `unsafe fn view_at(addr: usize) -> *mut Self` for fixed-address placement.
-- `unsafe trait CrossCoreMessage: Copy + 'static {}` — implemented only by generated
-  types.
 - `Queue` — the core-local SPSC queue backing generated line ready queues (re-export
-  of the software pass's queue type).
+  of the software pass's queue type). The `CrossCoreMessage` marker trait lives in
+  the pass, not here: the pass injects it into every `#[app]` module (§8).
 - Deliberately separate from `rticx-spsc` so existing non-atomic single-binary
   semantics stay frozen.
 
@@ -1023,7 +1033,7 @@ distro may use them internally, but no new framework mechanism).
 
 | Risk / open item | Mitigation / note |
 |---|---|
-| `ipc-types` generation location policy | Recommended: root `ipc-types/`, kept in VCS; `sync` reports changes |
+| `ipc_types` generation location | `target/rticx-xbin/ipc_types.rs` next to `system.json`; regenerated by `sync`, never checked in |
 | Doorbell/IRQ availability per distro | One doorbell IRQ per producer pair plus one dispatcher IRQ per line, supplied by the user's `ipc_dispatchers` list; the router coalesces all lines of a pair onto that one IRQ |
 | Cacheable-region fallback correctness | v1 recommends non-cacheable only; fallback hooks exist but are not the supported path |
 | Staleness under plain `cargo build` | Only the changed app detects its own staleness; `cargo xbin build` is the safe path |

@@ -5,7 +5,7 @@
 //! scalars, natural alignment capped at [`MAX_ALIGN`] (4) and trailing
 //! padding. It is deliberately computed by *this* crate rather than by the
 //! host compiler, because the host is not necessarily the target: the same
-//! canonical values are embedded in the generated `ipc-types` crate and
+//! canonical values are embedded in the generated `ipc_types` module and
 //! checked there with `core::mem::{size_of, align_of, offset_of}`.
 //!
 //! Because the supported subset contains no pointers, the canonical sizes and

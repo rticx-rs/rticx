@@ -449,7 +449,7 @@ pub enum MergeError {
     },
 }
 
-/// Failure while generating the `ipc-types` crate.
+/// Failure while generating the `ipc_types.rs` module.
 #[derive(Debug, Error)]
 pub enum CodegenError {
     /// The canonical layout could not be computed.

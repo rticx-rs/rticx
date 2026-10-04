@@ -14,9 +14,9 @@ Standalone workspace for the multi-binary / heterogeneous multi-core extension o
 
 | Crate | Purpose |
 |---|---|
-| `rticx-xbin-rt` | Atomic cross-core SPSC queue and marker trait |
-| `rticx-xbin-proto` | IDL parser, canonical layout engine, merge + validation, JSON schemas, canonical FIFO image |
-| `rticx-xbin-pass` | `RticPass` capturing Multi-binary cross-core tasks syntax |
+| `rticx-xbin-rt` | Atomic cross-core SPSC queue and backend contract |
+| `rticx-xbin-proto` | IDL parser, canonical layout engine, `ipc_types` module generator, merge + validation, JSON schemas, canonical FIFO image |
+| `rticx-xbin-pass` | `RticPass` capturing Multi-binary cross-core tasks syntax; injects the `CrossCoreMessage` trait and the `ipc_types` module |
 | `rticx-xbin-driver` | `cargo-xbin` subcommand (`sync`, `build [--verify-elf]`, `verify`) |
 | `rticx-xbin-mock` | Mock distro/backend for host tests |
 | `xbin-mock-capability` | Fixture IPC capability table shared by the mock distributions |

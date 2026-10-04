@@ -1,14 +1,14 @@
-//! Golden and determinism tests for the `ipc-types` crate generator
+//! Golden and determinism tests for the `ipc_types` module generator
 //! (M0-T4).
 //!
-//! The golden fixture pair under `tests/fixtures/` is byte-for-byte compared
-//! with the generator output; it documents exactly what `cargo xbin sync`
-//! writes (the fixture is regenerated with the `dump` helper when the format
+//! The golden fixture under `tests/fixtures/` is byte-for-byte compared with
+//! the generator output; it documents exactly what `cargo xbin sync` writes
+//! (the fixture is regenerated with the `dump` helper when the format
 //! intentionally changes).
 
 use rticx_xbin_proto::{
-    CodegenOptions, FileChange, RtDependency, canonical_layout_text, generate_crate, layout_hash,
-    parse_idl_str,
+    FileChange, canonical_layout_text, generate_module, layout_hash, parse_idl_str,
+    write_if_changed,
 };
 
 const GOLDEN_IDL: &str = r#"
@@ -29,30 +29,33 @@ fn golden_idl() -> rticx_xbin_proto::IpcTypes {
 }
 
 #[test]
-fn generated_crate_matches_golden_fixture() {
-    let generated = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
-    assert_eq!(
-        generated.file("src/lib.rs"),
-        Some(include_str!("fixtures/golden_lib.rs"))
-    );
-    assert_eq!(
-        generated.file("Cargo.toml"),
-        Some(include_str!("fixtures/golden_cargo.toml"))
-    );
-
-    let paths: Vec<&str> = generated
-        .files
-        .iter()
-        .map(|file| file.path.as_str())
-        .collect();
-    assert_eq!(paths, vec!["Cargo.toml", "src/lib.rs"]);
+fn generated_module_matches_golden_fixture() {
+    let generated = generate_module(&golden_idl()).expect("codegen");
+    assert_eq!(generated, include_str!("fixtures/golden_ipc_types.rs"));
 }
 
 #[test]
 fn generation_is_deterministic() {
-    let first = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
-    let second = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
+    let first = generate_module(&golden_idl()).expect("codegen");
+    let second = generate_module(&golden_idl()).expect("codegen");
     assert_eq!(first, second);
+}
+
+#[test]
+fn module_has_no_inner_attributes_or_rt_dependency() {
+    let generated = generate_module(&golden_idl()).expect("codegen");
+    assert!(
+        !generated.contains("#!["),
+        "the module body must not carry inner attributes"
+    );
+    assert!(
+        !generated.contains("rticx_xbin_rt") && !generated.contains("rticx-xbin-rt"),
+        "the module body must not reference the runtime crate"
+    );
+    assert!(
+        generated.contains("unsafe impl CrossCoreMessage for EncryptReq {}"),
+        "marker impls must use the bare trait name"
+    );
 }
 
 #[test]
@@ -86,99 +89,38 @@ variant Kind::Slow=1
 }
 
 #[test]
-fn rt_dependency_path_and_version_forms() {
-    let path_options = CodegenOptions {
-        rt_dependency: RtDependency::Path("vendor/rticx-xbin-rt".to_string()),
-    };
-    let generated = generate_crate(&golden_idl(), &path_options).expect("codegen");
-    assert!(
-        generated
-            .file("Cargo.toml")
-            .expect("manifest")
-            .contains("rticx-xbin-rt = { path = \"vendor/rticx-xbin-rt\" }")
-    );
-
-    let version_options = CodegenOptions {
-        rt_dependency: RtDependency::Version("0.1".to_string()),
-    };
-    let generated = generate_crate(&golden_idl(), &version_options).expect("codegen");
-    assert!(
-        generated
-            .file("Cargo.toml")
-            .expect("manifest")
-            .contains("rticx-xbin-rt = \"0.1\"")
-    );
-}
-
-#[test]
-fn write_to_creates_the_crate_tree() {
-    let generated = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
-    let dir = tempfile::tempdir().expect("tempdir");
-    generated.write_to(dir.path()).expect("write");
-    assert!(dir.path().join("Cargo.toml").is_file());
-    assert!(dir.path().join("src/lib.rs").is_file());
-}
-
-#[test]
 fn write_if_changed_creates_then_is_a_noop() {
-    let generated = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
+    let contents = generate_module(&golden_idl()).expect("codegen");
     let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("target/rticx-xbin/ipc_types.rs");
 
-    let first = generated.write_if_changed(dir.path()).expect("write");
-    assert!(first.changed());
-    assert!(!first.is_noop());
-    assert_eq!(first.files.len(), 2);
-    assert!(
-        first
-            .files
-            .iter()
-            .all(|file| file.change == FileChange::Created),
-        "{first:?}"
-    );
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("src/lib.rs")).expect("lib.rs"),
-        generated.file("src/lib.rs").expect("generated lib.rs")
+        write_if_changed(&path, &contents).expect("write"),
+        FileChange::Created
     );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), contents);
 
-    let second = generated.write_if_changed(dir.path()).expect("write");
-    assert!(second.is_noop(), "{second:?}");
-    assert!(
-        second
-            .files
-            .iter()
-            .all(|file| file.change == FileChange::Unchanged),
-        "{second:?}"
+    assert_eq!(
+        write_if_changed(&path, &contents).expect("write"),
+        FileChange::Unchanged
     );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), contents);
 }
 
 #[test]
-fn write_if_changed_restores_tampered_files_only() {
-    let generated = generate_crate(&golden_idl(), &CodegenOptions::default()).expect("codegen");
+fn write_if_changed_restores_a_tampered_file() {
+    let contents = generate_module(&golden_idl()).expect("codegen");
     let dir = tempfile::tempdir().expect("tempdir");
-    generated.write_if_changed(dir.path()).expect("write");
+    let path = dir.path().join("ipc_types.rs");
+    write_if_changed(&path, &contents).expect("write");
 
-    std::fs::write(dir.path().join("src/lib.rs"), "// stale\n").expect("tamper");
+    std::fs::write(&path, "// stale\n").expect("tamper");
 
-    let status = generated.write_if_changed(dir.path()).expect("write");
-    assert!(status.changed());
     assert_eq!(
-        status
-            .changed_files()
-            .map(|file| (file.path.as_str(), file.change))
-            .collect::<Vec<_>>(),
-        [("src/lib.rs", FileChange::Updated)]
+        write_if_changed(&path, &contents).expect("write"),
+        FileChange::Updated
     );
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("src/lib.rs")).expect("lib.rs"),
-        generated.file("src/lib.rs").expect("generated lib.rs")
-    );
-
-    let cargo_toml = status
-        .files
-        .iter()
-        .find(|file| file.path == "Cargo.toml")
-        .expect("Cargo.toml status");
-    assert_eq!(cargo_toml.change, FileChange::Unchanged);
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), contents);
 }
 
 #[test]
@@ -189,7 +131,7 @@ fn constant_name_collisions_are_rejected() {
          [message.Foo_Bar]\nfields = { y = \"u8\" }\n",
     )
     .expect("valid IDL");
-    let error = generate_crate(&idl, &CodegenOptions::default())
+    let error = generate_module(&idl)
         .expect_err("colliding constant names")
         .to_string();
     assert_eq!(
@@ -203,7 +145,7 @@ fn constant_name_collisions_are_rejected() {
          [message.Foo]\nfields = { xY = \"u8\", x_y = \"u8\" }\n",
     )
     .expect("valid IDL");
-    let error = generate_crate(&idl, &CodegenOptions::default())
+    let error = generate_module(&idl)
         .expect_err("colliding field constant names")
         .to_string();
     assert_eq!(

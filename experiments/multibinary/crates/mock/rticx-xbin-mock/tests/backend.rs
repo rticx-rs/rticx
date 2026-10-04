@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rticx_xbin_mock::{MockError, MockSystem};
 use rticx_xbin_rt::backend::CrossBinBackend;
-use rticx_xbin_rt::{CrossCoreMessage, FIFO_ALIGN, FIFO_HEADER, Fifo};
+use rticx_xbin_rt::{FIFO_ALIGN, FIFO_HEADER, Fifo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,8 +19,6 @@ struct Msg {
     seq: u32,
     payload: [u8; 8],
 }
-
-unsafe impl CrossCoreMessage for Msg {}
 
 fn msg(seq: u32) -> Msg {
     Msg {

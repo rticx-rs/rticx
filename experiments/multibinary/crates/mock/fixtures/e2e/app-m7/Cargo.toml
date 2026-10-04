@@ -10,7 +10,6 @@ name = "m7"
 path = "src/main.rs"
 
 [dependencies]
-ipc-types = { path = "../ipc-types" }
 mock-pac = { path = "../../../mock-pac" }
 xbin-mock-distro = { path = "../../../xbin-mock-distro" }
 xbin-mock-runtime = { path = "../../../xbin-mock-runtime" }

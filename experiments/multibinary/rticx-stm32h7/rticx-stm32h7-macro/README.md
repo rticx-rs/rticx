@@ -10,6 +10,17 @@ instead.
 The macro is target-gated: exactly one of the `cm7` / `cm4` features selects the
 physical core the binary runs on.
 
+## Generated code
+
+`#[app]` also injects the shared IDL types. `cargo xbin sync` writes
+`target/rticx-xbin/ipc_types.rs`, and the macro re-emits its tokens into the
+application module as `pub mod ipc_types`, next to an
+`unsafe trait CrossCoreMessage: Copy + 'static` that every generated type
+implements — the same injection pattern as `RticSwTask` and `RticIdleTask`.
+Application code therefore writes `ipc_types::EncryptReq` inside `#[app]` with
+no crate dependency; an external module reaches the types through
+`crate::app::ipc_types`.
+
 ## License
 
 MIT

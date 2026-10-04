@@ -219,15 +219,19 @@ fn cargo_xbin_build_builds_the_three_applications() {
         ]
     );
 
-    // The checked-in generated crate is up to date with the IDL (M1-T7).
-    assert!(
+    // The generated `ipc_types` module is written into the output directory
+    // (M1-T7).
+    let ipc_types = outcome
+        .sync
+        .ipc_types
+        .as_ref()
+        .expect("the fixture IDL generates the module");
+    assert_eq!(
+        ipc_types.path,
         outcome
             .sync
-            .ipc_types
-            .as_ref()
-            .expect("the fixture IDL generates a crate")
-            .status
-            .is_noop(),
-        "the checked-in `ipc-types` must match `ipc-types.toml`; run `cargo xbin sync`"
+            .output_dir
+            .join(rticx_xbin_driver::IPC_TYPES_FILE)
     );
+    assert!(ipc_types.path.is_file(), "the generated module is on disk");
 }

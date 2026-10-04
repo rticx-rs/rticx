@@ -172,8 +172,10 @@ fn sync_reports_generated_ipc_types_changes() {
         String::from_utf8_lossy(&first.stderr)
     );
     let stderr = String::from_utf8(first.stderr).expect("utf-8");
-    assert!(stderr.contains("created ipc-types/Cargo.toml"), "{stderr}");
-    assert!(stderr.contains("created ipc-types/src/lib.rs"), "{stderr}");
+    assert!(
+        stderr.contains("created target/rticx-xbin/ipc_types.rs"),
+        "{stderr}"
+    );
 
     let second = run(dir.path(), &["xbin", "sync"]);
     assert!(
@@ -182,7 +184,10 @@ fn sync_reports_generated_ipc_types_changes() {
         String::from_utf8_lossy(&second.stderr)
     );
     let stderr = String::from_utf8(second.stderr).expect("utf-8");
-    assert!(stderr.contains("ipc-types is up to date"), "{stderr}");
+    assert!(
+        stderr.contains("target/rticx-xbin/ipc_types.rs is up to date"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("created"), "{stderr}");
 }
 

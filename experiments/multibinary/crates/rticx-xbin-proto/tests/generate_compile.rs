@@ -1,14 +1,15 @@
-//! M0-T4 acceptance test: the generated `ipc-types` crate must compile on
+//! M0-T4 acceptance test: the generated `ipc_types` module must compile on
 //! the host and on at least two embedded targets, which also evaluates every
 //! layout assertion at compile time.
 //!
-//! The generated manifest points at `rticx-xbin-rt` by absolute path so the
-//! crate can be built outside the experimental workspace.
+//! The module is wrapped exactly the way the cross-binary pass wraps it: a
+//! `CrossCoreMessage` trait plus `pub mod ipc_types { use super::…; … }` in a
+//! `#![no_std]` crate with **no** `rticx-xbin-rt` dependency.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rticx_xbin_proto::{CodegenOptions, RtDependency, generate_crate, parse_idl_str};
+use rticx_xbin_proto::{generate_module, parse_idl_str};
 
 const IDL: &str = r#"
 schema = 1
@@ -33,9 +34,28 @@ const EMBEDDED_TARGETS: &[&str] = &[
     "riscv32imc-unknown-none-elf",
 ];
 
-fn rt_crate_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../rticx-xbin-rt")
+const WRAPPER_CARGO_TOML: &str = "\
+[package]
+name = \"generated-ipc-types-wrapper\"
+version = \"0.0.0\"
+edition = \"2021\"
+publish = false
+
+[lib]
+path = \"src/lib.rs\"
+";
+
+const WRAPPER_LIB_RS: &str = "\
+#![no_std]
+
+pub unsafe trait CrossCoreMessage: Copy + 'static {}
+
+#[allow(non_camel_case_types, non_snake_case)]
+pub mod ipc_types {
+    use super::CrossCoreMessage;
+    include!(\"ipc_types.rs\");
 }
+";
 
 fn cargo() -> PathBuf {
     std::env::var_os("CARGO")
@@ -62,6 +82,14 @@ fn target_installed(target: &str) -> bool {
         .is_dir()
 }
 
+fn write_wrapper(dir: &Path, generated: &str) {
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).expect("create src");
+    std::fs::write(dir.join("Cargo.toml"), WRAPPER_CARGO_TOML).expect("write Cargo.toml");
+    std::fs::write(src.join("lib.rs"), WRAPPER_LIB_RS).expect("write lib.rs");
+    std::fs::write(src.join("ipc_types.rs"), generated).expect("write ipc_types.rs");
+}
+
 fn build(dir: &Path, target: Option<&str>) {
     let mut command = Command::new(cargo());
     command
@@ -77,24 +105,17 @@ fn build(dir: &Path, target: Option<&str>) {
     let status = command.status().expect("failed to run cargo");
     assert!(
         status.success(),
-        "generated crate failed to build for {target:?}"
+        "generated module failed to build for {target:?}"
     );
 }
 
 #[test]
-fn generated_crate_compiles_on_host_and_embedded_targets() {
+fn generated_module_compiles_on_host_and_embedded_targets() {
     let idl = parse_idl_str(IDL).expect("valid IDL");
-    let options = CodegenOptions {
-        rt_dependency: RtDependency::Path(
-            rt_crate_path().to_str().expect("utf-8 path").to_string(),
-        ),
-    };
-    let generated = generate_crate(&idl, &options).expect("codegen");
+    let generated = generate_module(&idl).expect("codegen");
 
     let dir = tempfile::tempdir().expect("tempdir");
-    generated
-        .write_to(dir.path())
-        .expect("write generated crate");
+    write_wrapper(dir.path(), &generated);
 
     build(dir.path(), None);
 
@@ -108,7 +129,7 @@ fn generated_crate_compiles_on_host_and_embedded_targets() {
 
     assert!(
         embedded >= 2,
-        "M0-T4 requires the generated crate to compile on at least two embedded targets, \
+        "M0-T4 requires the generated module to compile on at least two embedded targets, \
          found {embedded}; install them with `rustup target add thumbv7em-none-eabihf \
          thumbv6m-none-eabi`"
     );

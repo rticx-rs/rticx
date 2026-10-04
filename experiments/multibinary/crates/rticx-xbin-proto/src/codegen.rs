@@ -1,13 +1,19 @@
-//! `ipc-types` crate generator.
+//! `ipc_types` module generator.
 //!
-//! Given a validated [`IpcTypes`], this module emits the complete generated
-//! crate:
+//! Given a validated [`IpcTypes`], this module emits the body of the generated
+//! `ipc_types.rs` file, which the cross-binary pass re-emits into each
+//! application's `#[app]` module as `pub mod ipc_types { … }`:
 //!
-//! - `Cargo.toml`, depending on `rticx-xbin-rt` (path or version);
-//! - `src/lib.rs` with one `#[repr(C)]` struct / `#[repr(u32)]` enum per IDL
-//!   declaration, the canonical `SIZE_*` / `ALIGN_*` / `OFF_*` constants, one
-//!   `unsafe impl CrossCoreMessage` per type, a `LAYOUT_HASH`, and a block of
-//!   `const` assertions checked by the target compiler.
+//! - one `#[repr(C)]` struct / `#[repr(u32)]` enum per IDL declaration;
+//! - the canonical `SIZE_*` / `ALIGN_*` / `OFF_*` constants;
+//! - one `unsafe impl CrossCoreMessage` per type (the trait is injected next to
+//!   the module by the pass);
+//! - a `LAYOUT_HASH`;
+//! - a block of `const` assertions checked by the target compiler.
+//!
+//! The generated text carries **no inner attributes** and **no
+//! `rticx-xbin-rt` dependency**: the pass wraps it in a `pub mod ipc_types`
+//! with the `CrossCoreMessage` trait and a `use super::CrossCoreMessage;`.
 //!
 //! Output is fully deterministic: items are ordered by name and the canonical
 //! text hashed into `LAYOUT_HASH` contains no incidental formatting.
@@ -23,113 +29,11 @@ use crate::error::CodegenError;
 use crate::idl::{FieldType, IpcTypes};
 use crate::layout::{Layouts, MAX_ALIGN};
 
-/// Package name of the generated crate.
-pub const GENERATED_CRATE_NAME: &str = "ipc-types";
+/// File name of the generated `ipc_types` module, next to `system.json` under
+/// `<project root>/target/rticx-xbin/`.
+pub const IPC_TYPES_FILE: &str = "ipc_types.rs";
 
-/// Default in-tree relative path to `rticx-xbin-rt`.
-///
-/// This is only a convenience for tests and tooling that run from inside the
-/// experimental workspace; the driver computes a project-relative (or later,
-/// registry) dependency and passes it via [`CodegenOptions`].
-pub const DEFAULT_RT_PATH: &str = "../../crates/rticx-xbin-rt";
-
-/// How the generated crate depends on `rticx-xbin-rt`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RtDependency {
-    /// In-tree development: `rticx-xbin-rt = { path = "…" }`.
-    Path(String),
-    /// After extraction: `rticx-xbin-rt = "…"`.
-    Version(String),
-}
-
-impl Default for RtDependency {
-    fn default() -> Self {
-        Self::Path(DEFAULT_RT_PATH.to_string())
-    }
-}
-
-/// Options for [`generate_crate`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CodegenOptions {
-    /// Dependency specification for the runtime crate.
-    pub rt_dependency: RtDependency,
-}
-
-/// A single generated file, with a `/`-separated path relative to the
-/// generated crate root.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GeneratedFile {
-    /// Relative path, for example `src/lib.rs`.
-    pub path: String,
-    /// Full file contents.
-    pub contents: String,
-}
-
-/// The set of files making up the generated crate.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GeneratedCrate {
-    /// Generated files, in a stable order.
-    pub files: Vec<GeneratedFile>,
-}
-
-impl GeneratedCrate {
-    /// Returns the contents of the file at `path`, if generated.
-    pub fn file(&self, path: &str) -> Option<&str> {
-        self.files
-            .iter()
-            .find(|file| file.path == path)
-            .map(|file| file.contents.as_str())
-    }
-
-    /// Writes every file below `root`, creating parent directories.
-    pub fn write_to(&self, root: &Path) -> io::Result<()> {
-        for file in &self.files {
-            let path = root.join(&file.path);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&path, &file.contents)?;
-        }
-        Ok(())
-    }
-
-    /// Writes below `root` only the files whose contents differ from disk.
-    ///
-    /// Files that are already byte-identical are left untouched, so an
-    /// unchanged IDL neither bumps modification times nor triggers rebuilds of
-    /// dependents. The per-file outcome is returned for reporting.
-    pub fn write_if_changed(&self, root: &Path) -> io::Result<CrateStatus> {
-        let mut status = CrateStatus {
-            files: Vec::with_capacity(self.files.len()),
-        };
-        for file in &self.files {
-            let path = root.join(&file.path);
-            let change = match std::fs::read_to_string(&path) {
-                Ok(existing) if existing == file.contents => FileChange::Unchanged,
-                Ok(_) => {
-                    std::fs::write(&path, &file.contents)?;
-                    FileChange::Updated
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    std::fs::write(&path, &file.contents)?;
-                    FileChange::Created
-                }
-                Err(error) => return Err(error),
-            };
-            status.files.push(FileStatus {
-                path: file.path.clone(),
-                change,
-            });
-        }
-        Ok(status)
-    }
-}
-
-/// What happened to one generated file during
-/// [`GeneratedCrate::write_if_changed`].
+/// What happened to the generated file during [`write_if_changed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileChange {
     /// The file did not exist and was written.
@@ -141,61 +45,34 @@ pub enum FileChange {
     Unchanged,
 }
 
-/// Per-file outcome of [`GeneratedCrate::write_if_changed`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileStatus {
-    /// Path relative to the generated crate root, for example `src/lib.rs`.
-    pub path: String,
-    /// What happened to the file.
-    pub change: FileChange,
-}
-
-/// Outcome of [`GeneratedCrate::write_if_changed`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CrateStatus {
-    /// One entry per generated file, in generation order.
-    pub files: Vec<FileStatus>,
-}
-
-impl CrateStatus {
-    /// Returns `true` when at least one file was created or updated.
-    pub fn changed(&self) -> bool {
-        self.changed_files().next().is_some()
-    }
-
-    /// Returns `true` when every generated file was already up to date.
-    pub fn is_noop(&self) -> bool {
-        !self.changed()
-    }
-
-    /// Iterates over the files that were created or updated.
-    pub fn changed_files(&self) -> impl Iterator<Item = &FileStatus> {
-        self.files
-            .iter()
-            .filter(|file| file.change != FileChange::Unchanged)
-    }
-}
-
-/// Generates the complete `ipc-types` crate for `idl`.
-pub fn generate_crate(
-    idl: &IpcTypes,
-    options: &CodegenOptions,
-) -> Result<GeneratedCrate, CodegenError> {
+/// Generates the complete `ipc_types.rs` module file for `idl`.
+pub fn generate_module(idl: &IpcTypes) -> Result<String, CodegenError> {
     let layouts = Layouts::of(idl)?;
-    let lib_rs = generate_lib_rs(idl, &layouts)?;
-    let cargo_toml = generate_cargo_toml(options);
-    Ok(GeneratedCrate {
-        files: vec![
-            GeneratedFile {
-                path: "Cargo.toml".to_string(),
-                contents: cargo_toml,
-            },
-            GeneratedFile {
-                path: "src/lib.rs".to_string(),
-                contents: lib_rs,
-            },
-        ],
-    })
+    generate_module_body(idl, &layouts)
+}
+
+/// Writes `contents` to `path`, creating parent directories, but leaves the
+/// file untouched when it already has exactly those contents.
+///
+/// This keeps an unchanged IDL from bumping modification times, and therefore
+/// from triggering rebuilds of dependents. The outcome is returned for
+/// reporting.
+pub fn write_if_changed(path: &Path, contents: &str) -> io::Result<FileChange> {
+    match std::fs::read_to_string(path) {
+        Ok(existing) if existing == contents => Ok(FileChange::Unchanged),
+        Ok(_) => {
+            std::fs::write(path, contents)?;
+            Ok(FileChange::Updated)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, contents)?;
+            Ok(FileChange::Created)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Builds the canonical layout description that is hashed into `LAYOUT_HASH`.
@@ -255,27 +132,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-fn generate_cargo_toml(options: &CodegenOptions) -> String {
-    let dependency = match &options.rt_dependency {
-        RtDependency::Path(path) => format!("rticx-xbin-rt = {{ path = \"{path}\" }}"),
-        RtDependency::Version(version) => format!("rticx-xbin-rt = \"{version}\""),
-    };
-    format!(
-        "# @generated by `cargo xbin sync` from `ipc-types.toml` -- do not edit\n\
-         # manually; run `cargo xbin sync` instead.\n\
-         \n\
-         [package]\n\
-         name = \"{GENERATED_CRATE_NAME}\"\n\
-         version = \"0.1.0\"\n\
-         edition = \"2021\"\n\
-         publish = false\n\
-         \n\
-         [dependencies]\n\
-         {dependency}\n"
-    )
-}
-
-fn generate_lib_rs(idl: &IpcTypes, layouts: &Layouts) -> Result<String, CodegenError> {
+fn generate_module_body(idl: &IpcTypes, layouts: &Layouts) -> Result<String, CodegenError> {
     let names: Vec<String> = interleaved_names(idl);
     let mut constants = ConstRegistry::default();
 
@@ -348,10 +205,7 @@ fn generate_lib_rs(idl: &IpcTypes, layouts: &Layouts) -> Result<String, CodegenE
     let _ = writeln!(out, "pub const LAYOUT_HASH: u64 = 0x{hash:016x};\n");
 
     for name in &names {
-        let _ = writeln!(
-            out,
-            "unsafe impl rticx_xbin_rt::CrossCoreMessage for {name} {{}}\n"
-        );
+        let _ = writeln!(out, "unsafe impl CrossCoreMessage for {name} {{}}\n");
     }
 
     let _ = writeln!(out, "const _: () = {{");
@@ -421,9 +275,6 @@ const HEADER: &str = "\
 // The `SIZE_*`, `ALIGN_*` and `OFF_*` constants describe the canonical
 // 32-bit, little-endian layout; the const assertions at the bottom check that
 // the compiler agrees with them on the target core.
-
-#![no_std]
-#![allow(non_camel_case_types, non_snake_case)]
 
 ";
 

@@ -49,7 +49,11 @@ impl XbinPassBackend for MetadataCapabilityBackend {
     }
 
     fn rt_path(&self) -> syn::Path {
-        syn::parse_quote!(ipc_types)
+        // Placeholder: metadata mode halts before any codegen, so no runtime
+        // path is ever emitted. It deliberately does not name the injected
+        // `ipc_types` module, which holds the IDL message types, not the
+        // runtime.
+        syn::parse_quote!(xbin_mock_runtime)
     }
 
     fn ring_doorbell_fn(&self, _source: u32, _target: u32, template: syn::ItemFn) -> syn::ItemFn {

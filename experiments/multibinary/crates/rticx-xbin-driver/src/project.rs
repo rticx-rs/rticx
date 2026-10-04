@@ -19,6 +19,13 @@ pub const OUTPUT_DIR: &str = "target/rticx-xbin";
 /// Driver-generated system view inside [`OUTPUT_DIR`] (M1-T6).
 pub const SYSTEM_FILE: &str = "system.json";
 
+/// Driver-generated `ipc_types` module inside [`OUTPUT_DIR`] (M1-T7).
+///
+/// The cross-binary pass re-emits this file's tokens into each application's
+/// `#[app]` module. The name is owned by `rticx-xbin-proto`, which also emits
+/// the file, so the driver and the pass can never disagree.
+pub use rticx_xbin_proto::IPC_TYPES_FILE;
+
 /// Self-contained HTML visualization of the system view, written inside
 /// [`OUTPUT_DIR`] by `cargo xbin sync --html`.
 pub const HTML_FILE: &str = "system.html";

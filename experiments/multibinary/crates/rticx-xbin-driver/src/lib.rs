@@ -5,8 +5,8 @@
 //!
 //! - `cargo xbin sync`: phase 1 -- collect per-application metadata, merge
 //!   and validate the system view (M1-T5), allocate the per-task FIFO
-//!   addresses and emit `target/rticx-xbin/system.json` (M1-T6), and
-//!   generate/update the `ipc-types` crate (M1-T7);
+//!   addresses and emit `target/rticx-xbin/system.json` (M1-T6), and write
+//!   the generated `target/rticx-xbin/ipc_types.rs` module (M1-T7);
 //! - `cargo xbin build`: `sync`, then build every application against the
 //!   emitted system view (M4-T1); `--verify-elf` additionally checks every
 //!   linked binary against the distro IPC pools (M6.9-T7);
@@ -42,8 +42,8 @@ use commands::{CargoOutput, build_with_output, sync_with_output, verify_with_out
 pub use elf::{ElfVerification, verify_binary};
 pub use error::{DriverError, VerifyError};
 pub use project::{
-    HTML_FILE, IDL_MANIFEST, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE, find_project_root,
-    output_dir,
+    HTML_FILE, IDL_MANIFEST, IPC_TYPES_FILE, OUTPUT_DIR, PROJECT_MANIFEST, SYSTEM_FILE,
+    find_project_root, output_dir,
 };
 
 /// Name under which Cargo invokes this binary (`cargo xbin`).
@@ -163,7 +163,7 @@ fn open_in_browser(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Reports generated `ipc-types` changes (M1-T7) on standard error, like
+/// Reports generated `ipc_types.rs` changes (M1-T7) on standard error, like
 /// Cargo's own progress output.
 ///
 /// Library callers inspect [`SyncOutcome::ipc_types`] instead; this is pure
@@ -172,20 +172,14 @@ fn report_ipc_types(outcome: &SyncOutcome) {
     let Some(ipc_types) = &outcome.ipc_types else {
         return;
     };
-    let dir = ipc_types
+    let path = ipc_types
         .path
         .strip_prefix(&outcome.project_root)
         .unwrap_or(&ipc_types.path);
-    for file in &ipc_types.status.files {
-        let path = dir.join(&file.path);
-        match file.change {
-            FileChange::Created => eprintln!("[cargo-xbin] created {}", path.display()),
-            FileChange::Updated => eprintln!("[cargo-xbin] updated {}", path.display()),
-            FileChange::Unchanged => {}
-        }
-    }
-    if ipc_types.status.is_noop() {
-        eprintln!("[cargo-xbin] {} is up to date", dir.display());
+    match ipc_types.change {
+        FileChange::Created => eprintln!("[cargo-xbin] created {}", path.display()),
+        FileChange::Updated => eprintln!("[cargo-xbin] updated {}", path.display()),
+        FileChange::Unchanged => eprintln!("[cargo-xbin] {} is up to date", path.display()),
     }
 }
 

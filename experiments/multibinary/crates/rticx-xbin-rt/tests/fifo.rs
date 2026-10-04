@@ -7,9 +7,7 @@
 use std::mem::{align_of, size_of};
 use std::thread;
 
-use rticx_xbin_rt::{
-    Consumer, CrossCoreMessage, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer,
-};
+use rticx_xbin_rt::{Consumer, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,13 +16,9 @@ struct Msg {
     payload: [u8; 8],
 }
 
-unsafe impl CrossCoreMessage for Msg {}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Word(u32);
-
-unsafe impl CrossCoreMessage for Word {}
 
 fn msg(seq: u32) -> Msg {
     Msg {

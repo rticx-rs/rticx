@@ -6,10 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use rticx_xbin_driver::{SYSTEM_FILE, build, find_project_root, output_dir, sync};
-use rticx_xbin_proto::{
-    FileChange, GENERATED_CRATE_NAME, Hash64, IpcTypes, RTICX_GENERATION, SystemView, layout_hash,
-};
+use rticx_xbin_driver::{IPC_TYPES_FILE, SYSTEM_FILE, build, find_project_root, output_dir, sync};
+use rticx_xbin_proto::{FileChange, Hash64, IpcTypes, RTICX_GENERATION, SystemView, layout_hash};
 use tempfile::tempdir;
 
 /// A valid project without applications: `sync` reads it but invokes no
@@ -47,7 +45,12 @@ fn sync_without_manifest_is_a_noop_that_creates_the_layout() {
     let outcome = sync(dir.path()).expect("sync succeeds");
 
     assert!(dir.path().join("target/rticx-xbin").is_dir());
-    assert!(!dir.path().join(GENERATED_CRATE_NAME).exists());
+    assert!(
+        !dir.path()
+            .join("target/rticx-xbin")
+            .join(IPC_TYPES_FILE)
+            .exists()
+    );
     assert_eq!(outcome.project_root, dir.path());
     assert_eq!(outcome.output_dir, dir.path().join("target/rticx-xbin"));
     assert_eq!(outcome.manifest_path, None);
@@ -80,9 +83,14 @@ fn sync_reads_the_project_manifest() {
     assert!(outcome.idl.is_some(), "an absent IDL becomes an empty one");
     assert!(
         outcome.ipc_types.is_none(),
-        "without an IDL there is no crate to generate"
+        "without an IDL there is no module to generate"
     );
-    assert!(!dir.path().join(GENERATED_CRATE_NAME).exists());
+    assert!(
+        !dir.path()
+            .join("target/rticx-xbin")
+            .join(IPC_TYPES_FILE)
+            .exists()
+    );
     let merged = outcome.merged.as_ref().expect("an empty project merges");
     assert!(merged.tasks().is_empty());
     assert!(outcome.applications().is_empty());
@@ -154,51 +162,41 @@ fn find_project_root_walks_up_to_the_manifest() {
     assert_eq!(find_project_root(&nested).as_deref(), Some(dir.path()));
 }
 
-// -- M1-T7: `ipc-types` generation, change detection and reporting ---------
+// -- M1-T7: `ipc_types` generation, change detection and reporting ---------
 
 #[test]
-fn sync_generates_the_ipc_types_crate_and_then_no_ops() {
+fn sync_generates_the_ipc_types_module_and_then_no_ops() {
     let dir = tempdir().expect("tempdir");
     write_typed_project(dir.path());
 
     let first = sync(dir.path()).expect("sync succeeds");
-    let ipc_types = first.ipc_types.as_ref().expect("the IDL generates a crate");
-    assert_eq!(ipc_types.path, dir.path().join(GENERATED_CRATE_NAME));
-    assert!(ipc_types.status.changed());
+    let ipc_types = first
+        .ipc_types
+        .as_ref()
+        .expect("the IDL generates a module");
     assert_eq!(
-        ipc_types
-            .status
-            .files
-            .iter()
-            .map(|file| (file.path.as_str(), file.change))
-            .collect::<Vec<_>>(),
-        [
-            ("Cargo.toml", FileChange::Created),
-            ("src/lib.rs", FileChange::Created),
-        ]
+        ipc_types.path,
+        dir.path().join("target/rticx-xbin").join(IPC_TYPES_FILE)
     );
+    assert_eq!(ipc_types.change, FileChange::Created);
 
-    let lib_rs =
-        std::fs::read_to_string(ipc_types.path.join("src/lib.rs")).expect("generated lib.rs");
-    assert!(lib_rs.contains("pub struct EncryptReq {"), "{lib_rs}");
+    let module = std::fs::read_to_string(&ipc_types.path).expect("generated ipc_types.rs");
+    assert!(module.contains("pub struct EncryptReq {"), "{module}");
     assert!(
-        lib_rs.contains("pub const SIZE_ENCRYPT_REQ: usize = 12;"),
-        "{lib_rs}"
+        module.contains("pub const SIZE_ENCRYPT_REQ: usize = 12;"),
+        "{module}"
     );
     assert!(
-        lib_rs.contains("pub const LAYOUT_HASH: u64 = 0x"),
-        "{lib_rs}"
-    );
-
-    let cargo_toml =
-        std::fs::read_to_string(ipc_types.path.join("Cargo.toml")).expect("generated Cargo.toml");
-    assert!(
-        cargo_toml.contains("rticx-xbin-rt = { path = "),
-        "{cargo_toml}"
+        module.contains("pub const LAYOUT_HASH: u64 = 0x"),
+        "{module}"
     );
     assert!(
-        !cargo_toml.contains("path = \"/"),
-        "the dependency path must stay relative so the crate is portable:\n{cargo_toml}"
+        module.contains("unsafe impl CrossCoreMessage for EncryptReq {}"),
+        "{module}"
+    );
+    assert!(
+        !module.contains("rticx_xbin_rt"),
+        "the module must not reference the runtime crate:\n{module}"
     );
 
     // M1-T7 acceptance: an unchanged IDL is a no-op.
@@ -206,37 +204,23 @@ fn sync_generates_the_ipc_types_crate_and_then_no_ops() {
     let ipc_types = second
         .ipc_types
         .as_ref()
-        .expect("the IDL generates a crate");
-    assert!(ipc_types.status.is_noop(), "{:?}", ipc_types.status);
-    assert!(
-        ipc_types
-            .status
-            .files
-            .iter()
-            .all(|file| file.change == FileChange::Unchanged)
-    );
+        .expect("the IDL generates a module");
+    assert_eq!(ipc_types.change, FileChange::Unchanged);
     assert_eq!(
-        std::fs::read_to_string(ipc_types.path.join("src/lib.rs")).expect("lib.rs"),
-        lib_rs,
-        "a no-op sync must not rewrite the generated files"
+        std::fs::read_to_string(&ipc_types.path).expect("ipc_types.rs"),
+        module,
+        "a no-op sync must not rewrite the generated module"
     );
 }
 
 #[test]
-fn sync_updates_the_ipc_types_crate_when_the_idl_changes() {
+fn sync_updates_the_ipc_types_module_when_the_idl_changes() {
     let dir = tempdir().expect("tempdir");
     write_typed_project(dir.path());
 
     let first = sync(dir.path()).expect("sync succeeds");
-    let before = std::fs::read_to_string(
-        first
-            .ipc_types
-            .as_ref()
-            .expect("generated")
-            .path
-            .join("src/lib.rs"),
-    )
-    .expect("lib.rs");
+    let before = std::fs::read_to_string(&first.ipc_types.as_ref().expect("generated").path)
+        .expect("ipc_types.rs");
 
     std::fs::write(
         dir.path().join("ipc-types.toml"),
@@ -246,17 +230,9 @@ fn sync_updates_the_ipc_types_crate_when_the_idl_changes() {
 
     let second = sync(dir.path()).expect("sync succeeds");
     let ipc_types = second.ipc_types.as_ref().expect("generated");
-    assert!(ipc_types.status.changed());
-    assert_eq!(
-        ipc_types
-            .status
-            .changed_files()
-            .map(|file| (file.path.as_str(), file.change))
-            .collect::<Vec<_>>(),
-        [("src/lib.rs", FileChange::Updated)]
-    );
+    assert_eq!(ipc_types.change, FileChange::Updated);
 
-    let after = std::fs::read_to_string(ipc_types.path.join("src/lib.rs")).expect("lib.rs");
-    assert_ne!(after, before, "the generated crate follows the IDL");
+    let after = std::fs::read_to_string(&ipc_types.path).expect("ipc_types.rs");
+    assert_ne!(after, before, "the generated module follows the IDL");
     assert!(after.contains("pub struct SensorBatch {"), "{after}");
 }

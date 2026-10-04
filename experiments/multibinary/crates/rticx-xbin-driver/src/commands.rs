@@ -2,19 +2,19 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufReader, IsTerminal, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use rticx_xbin_pass::{META_OUT_ENV, SYSTEM_ENV};
 use rticx_xbin_proto::{
-    AppManifest, Application, CodegenOptions, CrateStatus, GENERATED_CRATE_NAME, IpcTypes,
-    MergedProject, ProjectConfig, RTICX_GENERATION, RtDependency, SystemView, generate_crate,
-    merge_project, parse_idl_file, parse_project_file, system_view,
+    AppManifest, Application, FileChange, IpcTypes, MergedProject, ProjectConfig, RTICX_GENERATION,
+    SystemView, generate_module, merge_project, parse_idl_file, parse_project_file, system_view,
+    write_if_changed,
 };
 
 use crate::elf::{ElfVerification, verify_binary};
 use crate::error::DriverError;
-use crate::project::{IDL_MANIFEST, PROJECT_MANIFEST, SYSTEM_FILE, output_dir};
+use crate::project::{IDL_MANIFEST, IPC_TYPES_FILE, PROJECT_MANIFEST, SYSTEM_FILE, output_dir};
 
 /// Result of a `cargo xbin sync` run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,22 +36,22 @@ pub struct SyncOutcome {
     /// Emitted `target/rticx-xbin/system.json` view (M1-T6); `None` without a
     /// project manifest.
     pub system: Option<SystemView>,
-    /// Generated `ipc-types/` crate state (M1-T7); `None` without a project
-    /// manifest or without an `ipc-types.toml`.
+    /// Generated `target/rticx-xbin/ipc_types.rs` module state (M1-T7); `None`
+    /// without a project manifest or without an `ipc-types.toml`.
     pub ipc_types: Option<IpcTypesOutcome>,
     /// Application manifests collected during this run, in `rticx.toml` order
     /// (empty without a project manifest).
     pub manifests: Vec<AppManifest>,
 }
 
-/// Result of generating the `ipc-types` crate during a `sync` run (M1-T7).
+/// Result of generating the `ipc_types` module during a `sync` run (M1-T7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpcTypesOutcome {
-    /// Generated crate directory (`<project root>/ipc-types`).
+    /// Generated module file (`<project root>/target/rticx-xbin/ipc_types.rs`).
     pub path: PathBuf,
-    /// Per-file change detection result; untouched files stay untouched, so
-    /// an unchanged IDL is a no-op.
-    pub status: CrateStatus,
+    /// Change detection result; an unchanged IDL leaves the file untouched, so
+    /// a second sync is a no-op.
+    pub change: FileChange,
 }
 
 impl SyncOutcome {
@@ -97,8 +97,8 @@ pub(crate) enum CargoOutput {
 /// validated into [`SyncOutcome::merged`] (M1-T5), the per-task FIFO
 /// addresses are allocated and the sealed system view is written to
 /// `target/rticx-xbin/system.json` (M1-T6). Finally, when the project has an
-/// `ipc-types.toml`, the `ipc-types/` crate is generated below the project
-/// root and only changed files are rewritten (M1-T7).
+/// `ipc-types.toml`, the `target/rticx-xbin/ipc_types.rs` module is generated
+/// and only rewritten when its contents changed (M1-T7).
 ///
 /// Cargo output is captured, keeping library callers quiet; the CLI uses
 /// [`sync_with_output`] to stream it.
@@ -142,14 +142,10 @@ pub(crate) fn sync_with_output(
     if let (Some(merged), Some(idl)) = (&merged, &idl) {
         let view = system_view(merged, idl, RTICX_GENERATION)?;
 
-        // Generate (but do not write yet) the crate so a codegen error leaves
+        // Generate (but do not write yet) the module so a codegen error leaves
         // the previous run's output untouched.
-        let crate_path = project_root.join(GENERATED_CRATE_NAME);
         let generated = if has_idl {
-            let options = CodegenOptions {
-                rt_dependency: rt_dependency(project_root),
-            };
-            Some(generate_crate(idl, &options)?)
+            Some(generate_module(idl)?)
         } else {
             None
         };
@@ -159,17 +155,15 @@ pub(crate) fn sync_with_output(
             .map_err(|source| DriverError::WriteSystem { path, source })?;
         system = Some(view);
 
-        if let Some(generated) = generated {
-            let status = generated.write_if_changed(&crate_path).map_err(|source| {
+        if let Some(contents) = generated {
+            let path = output_dir.join(IPC_TYPES_FILE);
+            let change = write_if_changed(&path, &contents).map_err(|source| {
                 DriverError::WriteGenerated {
-                    path: crate_path.clone(),
+                    path: path.clone(),
                     source,
                 }
             })?;
-            ipc_types = Some(IpcTypesOutcome {
-                path: crate_path,
-                status,
-            });
+            ipc_types = Some(IpcTypesOutcome { path, change });
         }
     }
 
@@ -184,62 +178,6 @@ pub(crate) fn sync_with_output(
         ipc_types,
         manifests,
     })
-}
-
-/// Dependency of the generated crate on `rticx-xbin-rt`.
-///
-/// The generated crate lives at `<project root>/ipc-types`, so the dependency
-/// is expressed as a path relative to that directory. The in-tree runtime
-/// crate is located next to the driver's own package; after extraction (M7)
-/// this becomes a registry version.
-fn rt_dependency(project_root: &Path) -> RtDependency {
-    let rt = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rticx-xbin-rt");
-    let from = project_root.join(GENERATED_CRATE_NAME);
-    match relative_path(&from, &rt) {
-        // TOML basic strings treat `\` as an escape, so the dependency path
-        // always uses `/` separators.
-        Some(relative) => RtDependency::Path(relative.replace('\\', "/")),
-        None => RtDependency::Path(rt.to_string_lossy().into_owned()),
-    }
-}
-
-/// Returns `to` relative to the directory `from`, both canonicalized.
-///
-/// `from` may not exist yet (the generated crate is written after this call);
-/// in that case its parent is canonicalized instead.
-fn relative_path(from: &Path, to: &Path) -> Option<String> {
-    let from = canonicalize_allow_missing(from)?;
-    let to = to.canonicalize().ok()?;
-
-    let mut from_components = from.components().peekable();
-    let mut to_components = to.components().peekable();
-    while from_components.peek().is_some() && from_components.peek() == to_components.peek() {
-        from_components.next();
-        to_components.next();
-    }
-
-    let mut relative = PathBuf::new();
-    for component in from_components {
-        if !matches!(component, Component::Normal(_)) {
-            return None;
-        }
-        relative.push("..");
-    }
-    for component in to_components {
-        relative.push(component.as_os_str());
-    }
-    Some(relative.to_string_lossy().into_owned())
-}
-
-/// Canonicalizes `path`, or its parent joined with its final component when
-/// `path` does not exist yet.
-fn canonicalize_allow_missing(path: &Path) -> Option<PathBuf> {
-    if let Ok(canonical) = path.canonicalize() {
-        return Some(canonical);
-    }
-    let parent = path.parent()?.canonicalize().ok()?;
-    let name = path.file_name()?;
-    Some(parent.join(name))
 }
 
 /// Reads `ipc-types.toml`, or returns an empty IDL when the file is absent.

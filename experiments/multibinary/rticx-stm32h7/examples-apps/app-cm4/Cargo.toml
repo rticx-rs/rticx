@@ -15,7 +15,6 @@ path = "src/main.rs"
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.6"
 embedded-io = "0.6"
-ipc-types = { path = "../ipc-types" }
 panic-halt = "0.2"
 rticx-stm32h7 = { path = "../..", features = ["cm4"] }
 # `stm32-hal2` provides the `Usart` console on the Cortex-M4 too; its H7

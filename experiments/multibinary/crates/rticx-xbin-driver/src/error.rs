@@ -107,10 +107,10 @@ pub enum DriverError {
         source: io::Error,
     },
 
-    /// The generated `ipc-types` crate could not be written.
-    #[error("failed to write the generated `ipc-types` crate at `{}`: {source}", path.display())]
+    /// The generated `ipc_types` module could not be written.
+    #[error("failed to write the generated `ipc_types` module at `{}`: {source}", path.display())]
     WriteGenerated {
-        /// Generated crate directory the driver tried to write below.
+        /// Generated module file the driver tried to write.
         path: PathBuf,
         /// Underlying I/O error.
         #[source]

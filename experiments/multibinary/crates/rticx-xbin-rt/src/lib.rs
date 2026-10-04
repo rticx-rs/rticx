@@ -2,8 +2,6 @@
 //!
 //! Contents:
 //!
-//! - [`CrossCoreMessage`] — marker trait implemented only by the generated
-//!   `ipc-types`;
 //! - [`Fifo`] — the atomic SPSC ring placed at fixed addresses inside the
 //!   IPC pools, with its [`Producer`]/[`Consumer`] endpoints. See
 //!   [`fifo`] for the in-region image and the memory/ordering rules;
@@ -31,21 +29,3 @@ pub mod fifo;
 pub use backend::{CrossBinBackend, IpcRegion};
 pub use fifo::{Consumer, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer};
 pub use rticx_spsc::Queue;
-
-/// Marker trait for data types that may travel through cross-core shared
-/// memory.
-///
-/// The generated `ipc-types` crate implements this trait for every IDL type
-/// after asserting its canonical layout at compile time. It is intentionally
-/// **not** blanket-implemented: types must be explicitly reviewed as
-/// cross-core safe (plain data, no pointers/references, fixed layout).
-///
-/// # Safety
-///
-/// Implementors must:
-///
-/// - be `Copy` and have no interior mutability or destructor;
-/// - have a stable, target-independent layout that matches the canonical
-///   layout encoded by the generated `SIZE_*` / `ALIGN_*` / `OFF_*` constants;
-/// - not contain pointers, references or other core-local state;
-pub unsafe trait CrossCoreMessage: Copy + 'static {}

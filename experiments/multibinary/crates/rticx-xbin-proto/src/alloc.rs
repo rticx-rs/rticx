@@ -31,7 +31,7 @@ use crate::system::{DoorbellEntry, SystemView, TaskEntry};
 ///
 /// `generation` is the RTICX generation recorded in the view (normally
 /// [`crate::RTICX_GENERATION`]); the `layout_hash` is recomputed from `idl`,
-/// matching the `LAYOUT_HASH` of the generated `ipc-types` crate.
+/// matching the `LAYOUT_HASH` of the generated `ipc_types` module.
 pub fn system_view(
     project: &MergedProject,
     idl: &IpcTypes,

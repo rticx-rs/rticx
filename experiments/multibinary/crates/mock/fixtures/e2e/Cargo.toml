@@ -16,7 +16,9 @@
 # - `xbin-mock-runtime` owns the process-global in-memory pools and provides
 #   the receiver-side `RticSwTask` trait;
 # - `mock-pac` is an empty PAC stand-in for `device = mock_pac`;
-# - `ipc-types/` is the `cargo xbin sync`-generated crate (checked in).
+# - the `cargo xbin sync`-generated `ipc_types` module is written to
+#   `target/rticx-xbin/ipc_types.rs` and injected into each `#[app]` module by
+#   the cross-binary pass (no checked-in crate).
 #
 # Commanded by `rticx_xbin_driver::build` from
 # `crates/rticx-xbin-driver/tests/e2e.rs`.

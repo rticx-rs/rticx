@@ -17,11 +17,13 @@
 //! - [`fifo`]: the canonical in-region FIFO image and sizing;
 //! - [`hash`]: the deterministic FNV-1a 64-bit hash used for source, layout
 //!   and topology hashes;
-//! - [`codegen`]: generate the `ipc-types` crate (types, marker impls,
-//!   layout constants, compile-time assertions and `LAYOUT_HASH`).
+//! - [`codegen`]: generate the `ipc_types` module (types, marker impls,
+//!   layout constants, compile-time assertions and `LAYOUT_HASH`), which the
+//!   cross-binary pass re-emits into each application's `#[app]` module.
 //!
-//! The crate is host-only: the driver and the compilation pass link it, while
-//! the *generated* crate depends on `rticx-xbin-rt` instead.
+//! The crate is host-only: the driver and the compilation pass link it. The
+//! generated module carries no `rticx-xbin-rt` dependency; the
+//! `CrossCoreMessage` trait is injected alongside the module by the pass.
 
 #![forbid(unsafe_code)]
 
@@ -39,8 +41,8 @@ pub mod system;
 
 pub use alloc::system_view;
 pub use codegen::{
-    CodegenOptions, CrateStatus, FileChange, FileStatus, GENERATED_CRATE_NAME, GeneratedCrate,
-    GeneratedFile, RtDependency, canonical_layout_text, generate_crate, layout_hash,
+    FileChange, IPC_TYPES_FILE, canonical_layout_text, generate_module, layout_hash,
+    write_if_changed,
 };
 pub use error::{
     CodegenError, HashParseError, IdlError, LayoutError, ManifestError, MergeError, ProjectError,

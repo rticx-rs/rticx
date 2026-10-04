@@ -5,8 +5,8 @@
 //! - as a **producer** it spawns `SensorTask` (priority 4) and `TelemetryTask`
 //!   (priority 6) on `app-m4` (global core 1) through the `(2 -> 1)` region,
 //!   and `HeartbeatTask` (priority 6) on `app-m7` (global core 0) through the
-//!   `(2 -> 0)` region. Like the other producer it declares nothing and only
-//!   depends on the generated `ipc-types` crate (M5.5);
+//!   `(2 -> 0)` region. Like the other producer it declares nothing; the
+//!   cross-binary pass injects the synced `ipc_types` module (M5.5);
 //! - as a **receiver** it executes `ConfigTask` (priority 5), spawned by global
 //!   core 0 over `(0 -> 2)`, and `StatusTask` (priority 3), spawned by global
 //!   core 1 over `(1 -> 2)`.

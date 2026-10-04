@@ -32,9 +32,9 @@
 //!   - a hidden **FIFO view** helper like the sender's, but resolving the
 //!     consumer view of the pool (`base_from_target`);
 //!   - a const assertion that the receiver's `<Task as
-//!     RticSwTask>::SpawnInput` implements `rticx_xbin_rt::CrossCoreMessage`,
-//!     so the guarantee lives in generated code instead of the trait
-//!     definition;
+//!     RticSwTask>::SpawnInput` implements the injected `CrossCoreMessage`
+//!     marker trait, so the guarantee lives in generated code instead of the
+//!     trait definition;
 //!   - one generated **line dispatcher** per `(source, target, priority)`
 //!     line: a hardware task bound to the line's `ipc_dispatchers` entry at
 //!     the line's priority, whose `exec` drains the line's ready queue and,
@@ -85,9 +85,9 @@
 //! higher than the router that feeds its ready queue (M6.5-T3).
 //!
 //! The generated code only uses the frozen public surface of `rticx-core`
-//! (`__rticx_interrupt_free`, `main_injection`), the generated `ipc-types` and
-//! the distribution's re-export of `rticx-xbin-rt`, so no root-workspace API
-//! changes are required.
+//! (`__rticx_interrupt_free`, `main_injection`), the injected `ipc_types`
+//! module and the distribution's re-export of `rticx-xbin-rt`, so no
+//! root-workspace API changes are required.
 //!
 //! [`CrossBinBackend`]: rticx_xbin_rt::backend::CrossBinBackend
 
@@ -133,10 +133,15 @@ pub trait XbinPassBackend {
     /// runtime crate (for example `rticx_h7::export::xbin_rt`).
     fn rt_path(&self) -> syn::Path;
 
-    /// Path to the generated `ipc-types` crate as seen by applications.
+    /// Path to the generated `ipc_types` module as seen by applications.
     ///
-    /// The generated producer stubs reach the IDL input type as
-    /// `#ipc_types_path::<InputType>` (the producer declares nothing, M5.5).
+    /// `cargo xbin sync` writes the IDL types to `<output dir>/ipc_types.rs`
+    /// and the pass re-emits them into the `#[app]` module as
+    /// `pub mod <ipc_types>` (M1-T7). The generated producer stubs reach the
+    /// IDL input type as `#ipc_types_path::<InputType>` (the producer declares
+    /// nothing, M5.5). The pass injects a module, so only a single-segment path
+    /// is supported; a distribution that needs a nested path must keep the
+    /// default.
     fn ipc_types_path(&self) -> syn::Path {
         syn::parse_quote!(ipc_types)
     }
@@ -470,9 +475,9 @@ pub(crate) fn generate_receiver_items(
     }
 
     // ~ The receiver's `SpawnInput` must be a cross-core message; a generated
-    // const assertion pins the guarantee to the native `RticSwTask` trait
-    // (M5.5) instead of relying on a bound in its definition.
-    let rt_path = backend.rt_path();
+    // const assertion pins the guarantee to the injected `CrossCoreMessage`
+    // marker trait (M5.5, M1-T7) instead of relying on a bound in its
+    // definition.
     let assertions = receivers
         .iter()
         .map(|receiver| {
@@ -490,7 +495,7 @@ pub(crate) fn generate_receiver_items(
         #[doc(hidden)]
         #[allow(non_snake_case)]
         const _: () = {
-            fn __rticx_xbin_assert_cross_core_message<T: #rt_path::CrossCoreMessage>() {}
+            fn __rticx_xbin_assert_cross_core_message<T: CrossCoreMessage>() {}
             fn __rticx_xbin_check() {
                 #(#assertions)*
             }
@@ -1362,22 +1367,8 @@ pub(crate) fn check_source_hash(application: &AppEntry, source_hash: Hash64) -> 
 pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::Result<Vec<Item>> {
     // `include_str!` resolves a relative path against the file containing the
     // macro invocation, not the compilation working directory, so the path
-    // must be absolute. `load_system` already read the file, so canonicalizing
-    // normally succeeds; `absolute` only normalizes lexically as a fallback.
-    let absolute = path
-        .canonicalize()
-        .or_else(|_| std::path::absolute(path))
-        .unwrap_or_else(|_| path.to_path_buf());
-    let path_lit = absolute
-        .to_str()
-        .map(|text| LitStr::new(text, Span::call_site()))
-        .ok_or_else(|| {
-            error(format!(
-                "the system view path `{}` is not valid UTF-8; set `{}` to a UTF-8 path",
-                path.display(),
-                crate::SYSTEM_ENV
-            ))
-        })?;
+    // must be absolute (`load_system` already read the file).
+    let path_lit = include_str_path_lit(path)?;
     let hash = LitInt::new(
         &format!("0x{:016x}u64", view.topology_hash.get()),
         Span::call_site(),
@@ -1400,6 +1391,183 @@ pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::R
             const __RTICX_XBIN_SYSTEM_JSON: &str = include_str!(#path_lit);
         },
     ])
+}
+
+/// Returns `path` canonicalized (or lexically absolute as a fallback) as a
+/// UTF-8 string literal for `include_str!`.
+///
+/// `include_str!` resolves a relative path against the file containing the
+/// macro invocation, not the compilation working directory, so the path must be
+/// absolute.
+fn include_str_path_lit(path: &Path) -> syn::Result<LitStr> {
+    let absolute = path
+        .canonicalize()
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf());
+    absolute
+        .to_str()
+        .map(|text| LitStr::new(text, Span::call_site()))
+        .ok_or_else(|| {
+            error(format!(
+                "the generated file path `{}` is not valid UTF-8; use a UTF-8 path",
+                path.display()
+            ))
+        })
+}
+
+/// Generates the injected `CrossCoreMessage` marker trait and the `ipc_types`
+/// module of this application (M1-T7).
+///
+/// Since M1-T7 the IDL types are no longer a separate crate: `cargo xbin sync`
+/// writes `<output dir>/ipc_types.rs` next to `system.json`, and this pass
+/// re-emits the file's tokens into the `#[app]` module as
+/// `pub mod <ipc_types> { … }`. Re-emitting (rather than `include!` or
+/// `#[path]`) keeps the module visible to `cargo rticx-expand`.
+///
+/// The trait is injected alongside the module (the same pattern as
+/// `RticSwTask` and `RticIdleTask`), so the re-emitted
+/// `unsafe impl CrossCoreMessage for X {}` resolves through
+/// `use super::CrossCoreMessage;` without a runtime or distribution
+/// dependency.
+///
+/// Returns no items for a project without an `ipc-types.toml` (the view has no
+/// types). A view with types but a missing file is the documented
+/// "run `cargo xbin sync`" hard error. The `include_str!` anchor pins rustc's
+/// dep-info to the file, because the pass re-emits the tokens instead of
+/// including the file.
+pub(crate) fn generate_ipc_types_items(
+    app_mod: &ItemMod,
+    system_path: &Path,
+    view: &SystemView,
+    backend: Option<&dyn XbinPassBackend>,
+) -> syn::Result<Vec<Item>> {
+    if view.types.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let module_ident = injected_ipc_types_ident(backend)?;
+    check_ipc_types_collision(app_mod, &module_ident)?;
+    let file = system_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(rticx_xbin_proto::IPC_TYPES_FILE);
+    let source = std::fs::read_to_string(&file).map_err(|source| {
+        error(format!(
+            "failed to read the generated `{}`: {source}; run `cargo xbin sync`",
+            file.display()
+        ))
+    })?;
+    let parsed = syn::parse_file(&source).map_err(|source| {
+        error(format!(
+            "failed to parse the generated `{}`: {source}; run `cargo xbin sync`",
+            file.display()
+        ))
+    })?;
+    // The generator emits no inner attributes; drop any defensively so a
+    // hand-edited file cannot fail inside the injected module.
+    let generated_items = parsed.items;
+
+    let trait_doc = "Marker trait for a type that may cross a cross-binary IPC boundary. Every \
+         type of `ipc-types.toml` implements it; the injected declaration is what lets the \
+         generated `ipc_types` module re-emit the `unsafe impl`s without depending on the runtime \
+         crate (M5.5, M1-T7).";
+    let trait_item: Item = syn::parse_quote! {
+        #[doc = #trait_doc]
+        pub unsafe trait CrossCoreMessage: Copy + 'static {}
+    };
+
+    let module_doc = format!(
+        "IDL types of `ipc-types.toml`, generated by `cargo xbin sync` into `{}` and re-emitted \
+         into the `#[app]` module (M1-T7).",
+        file.display()
+    );
+    let module_item: Item = syn::parse_quote! {
+        #[doc = #module_doc]
+        #[allow(non_camel_case_types, non_snake_case, unused_imports)]
+        pub mod #module_ident {
+            use super::CrossCoreMessage;
+            #(#generated_items)*
+        }
+    };
+
+    let path_lit = include_str_path_lit(&file)?;
+    let anchor_doc = "The generated `ipc_types.rs`, embedded so rustc records it in dep-info and \
+         rebuilds this application when it changes (M1-T7).";
+    let anchor: Item = syn::parse_quote! {
+        #[doc = #anchor_doc]
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        const __RTICX_XBIN_IPC_TYPES_RS: &str = include_str!(#path_lit);
+    };
+
+    Ok(vec![trait_item, module_item, anchor])
+}
+
+/// Rejects a user item that collides with the injected `CrossCoreMessage`
+/// marker trait or the injected `ipc_types` module (M1-T7).
+///
+/// The pass appends both items to the `#[app]` module; a same-named user item
+/// would otherwise fail with rustc's generic "the name is defined multiple
+/// times" error. The check is limited to the namespaces the injected items
+/// occupy.
+fn check_ipc_types_collision(app_mod: &ItemMod, module_ident: &Ident) -> syn::Result<()> {
+    let Some((_, items)) = app_mod.content.as_ref() else {
+        return Ok(());
+    };
+    for item in items {
+        let (name, is_type_namespace) = match item {
+            Item::Mod(item) => (&item.ident, true),
+            Item::Trait(item) => (&item.ident, true),
+            Item::Struct(item) => (&item.ident, true),
+            Item::Enum(item) => (&item.ident, true),
+            Item::Union(item) => (&item.ident, true),
+            Item::Type(item) => (&item.ident, true),
+            Item::Fn(item) => (&item.sig.ident, false),
+            Item::Const(item) => (&item.ident, false),
+            Item::Static(item) => (&item.ident, false),
+            _ => continue,
+        };
+        if name == module_ident {
+            return Err(error(format!(
+                "the cross-binary pass injects a `{name}` module into the `#[app]` module; rename \
+                 the user item"
+            )));
+        }
+        if is_type_namespace && name == "CrossCoreMessage" {
+            return Err(error(
+                "the cross-binary pass injects a `CrossCoreMessage` trait into the `#[app]` \
+                 module; rename the user item",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Resolves the injected module identifier from the distribution backend's
+/// [`XbinPassBackend::ipc_types_path`] (default `ipc_types`).
+///
+/// The pass injects the module into the `#[app]` module, so only a
+/// single-segment path is representable; a multi-segment path is rejected
+/// instead of silently dropping the extra segments. Without a backend the
+/// default `ipc_types` is used.
+fn injected_ipc_types_ident(backend: Option<&dyn XbinPassBackend>) -> syn::Result<Ident> {
+    let Some(backend) = backend else {
+        return Ok(format_ident!("ipc_types"));
+    };
+    let path = backend.ipc_types_path();
+    let mut segments = path.segments.iter();
+    let Some(segment) = segments.next() else {
+        return Err(error(
+            "`XbinPassBackend::ipc_types_path` returned an empty path",
+        ));
+    };
+    if segments.next().is_some() || path.leading_colon.is_some() {
+        return Err(error(
+            "the cross-binary pass injects the `ipc_types` module into the `#[app]` module, so \
+             `XbinPassBackend::ipc_types_path` must name a single module",
+        ));
+    }
+    Ok(segment.ident.clone())
 }
 
 /// Generates the sender stub of one view task: the `pub struct <Task>;` the

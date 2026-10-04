@@ -6,7 +6,6 @@ version = 4
 name = "app-m4"
 version = "0.1.0"
 dependencies = [
- "ipc-types",
  "mock-pac",
  "xbin-mock-distro",
  "xbin-mock-runtime",
@@ -16,7 +15,6 @@ dependencies = [
 name = "app-m5"
 version = "0.1.0"
 dependencies = [
- "ipc-types",
  "mock-pac",
  "xbin-mock-distro",
  "xbin-mock-runtime",
@@ -26,7 +24,6 @@ dependencies = [
 name = "app-m7"
 version = "0.1.0"
 dependencies = [
- "ipc-types",
  "mock-pac",
  "xbin-mock-distro",
  "xbin-mock-runtime",
@@ -187,13 +184,6 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
-]
-
-[[package]]
-name = "ipc-types"
-version = "0.1.0"
-dependencies = [
- "rticx-xbin-rt",
 ]
 
 [[package]]

@@ -25,12 +25,18 @@
 //!     every view task whose `spawner_core` belongs to this application —
 //!     producer sources declare nothing;
 //!   - receiver side (M3-T2, M5.5, M6.5-T3): FIFO views, the
-//!     `SpawnInput: CrossCoreMessage` const assertion, one generated **line
+//!     `SpawnInput: CrossCoreMessage` const assertion against the injected
+//!     marker trait, one generated **line
 //!     dispatcher** per `(source -> target, priority)` line bound to its
 //!     `ipc_dispatchers` entry, one **doorbell router** per
 //!     `(source -> target)` pair routing task ids to the line ready queues,
 //!     and the core `#[task(..)]` shape on the native receiver structs
 //!     themselves (see `crate::parse::inject_receiver_tasks`);
+//!   - IDL types (M1-T7): the driver-generated
+//!     `target/rticx-xbin/ipc_types.rs` is re-emitted into the `#[app]` module
+//!     as `pub mod <ipc_types>` together with the `CrossCoreMessage` marker
+//!     trait its types implement, so `ipc_types::TypeX` resolves inside the
+//!     application without a checked-in crate;
 //!   - init hooks (M3-T3, M6-T1): `__rticx_xbin_configure_shared_memory` on
 //!     every core and `__rticx_xbin_init_fifos_core<N>` on every core
 //!     producing cross-binary FIFOs, wired into the generated entry functions
@@ -103,7 +109,7 @@ use syn::ItemMod;
 
 use crate::codegen::{
     HookPlan, check_application, check_source_hash, generate_freshness_items, generate_init_hooks,
-    generate_receiver_items, generate_sender_items,
+    generate_ipc_types_items, generate_receiver_items, generate_sender_items,
 };
 use crate::parse::{
     AppExtensions, ModuleDecls, inject_receiver_tasks, parse_app_args, parse_module,
@@ -417,6 +423,16 @@ impl RticPass for XbinPass {
             // mismatch first; both errors point at `cargo xbin sync`.
             check_source_hash(application, source_hash)?;
             items.extend(generate_freshness_items(&view, &system.path)?);
+
+            // The IDL types are no longer a crate: re-emit the synced
+            // `ipc_types.rs` into the `#[app]` module together with the
+            // `CrossCoreMessage` marker trait its types implement (M1-T7).
+            items.extend(generate_ipc_types_items(
+                &app_mod,
+                &system.path,
+                &view,
+                self.backend.as_deref(),
+            )?);
 
             // The init hooks need the backend for the same reason the sender
             // and receiver items do; without one the freshness anchors still
