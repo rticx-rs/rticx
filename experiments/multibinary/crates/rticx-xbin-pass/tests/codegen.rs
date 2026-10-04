@@ -1824,6 +1824,39 @@ fn source_hash_ignores_token_spacing() {
 }
 
 #[test]
+fn source_hash_ignores_ra_synthetic_statement_semicolons() {
+    // rust-analyzer's proc-macro server (`hir-expand`'s `fixup_syntax`)
+    // appends a semicolon to an expression statement that lacks one whose
+    // expression is not a bare block, so `if c { .. }` reaches the macro as
+    // `if c { .. };` under the IDE but verbatim under rustc. The freshness
+    // hash must be blind to that synthetic token (regression: the IDE reported
+    // every synced application as changed).
+    //
+    // Parsed from strings so rustfmt does not rewrite the redundant
+    // semicolons the test is about.
+    let args = TokenStream::new();
+    let module = |body: &str| {
+        syn::parse_str::<syn::ItemMod>(&format!("mod app {{ fn f() {{ {body} }} }}"))
+            .expect("the test modules parse")
+    };
+
+    let without_semi = module("if a { b(); } while c { d(); } let _ = e;");
+    let with_semi = module("if a { b(); }; while c { d(); }; let _ = e;");
+
+    assert_eq!(
+        rticx_xbin_pass::app_source_hash(&args, &without_semi),
+        rticx_xbin_pass::app_source_hash(&args, &with_semi),
+    );
+
+    // A genuine edit must still change the hash.
+    let changed = module("if a { b(); } while c { d(); } let _ = e + 1;");
+    assert_ne!(
+        rticx_xbin_pass::app_source_hash(&args, &without_semi),
+        rticx_xbin_pass::app_source_hash(&args, &changed),
+    );
+}
+
+#[test]
 fn discovered_project_root_without_a_synced_view_is_a_hard_error() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");

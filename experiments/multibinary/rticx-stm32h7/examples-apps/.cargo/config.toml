@@ -5,7 +5,7 @@
 # `OUT_DIR` and adds to the link search path. No per-app `memory.x` is needed.
 #
 # The target is not set here: the two applications use different triples and
-# `cargo xbin` (or the Makefile) always passes `--target` explicitly.
+# `cargo xbin` always passes `--target` explicitly. See `rticx.toml`
 
 [target.thumbv7em-none-eabihf]
 rustflags = ["-C", "link-arg=-Tlink.x"]

@@ -16,7 +16,9 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 rticx-core = { workspace = true }
 rticx-xbin-proto = { workspace = true }
-syn = { workspace = true }
+# `visit-mut` canonicalizes the annotated module before hashing it; see
+# `app_source_hash`.
+syn = { workspace = true, features = ["visit-mut"] }
 
 [dev-dependencies]
 rticx-sw-pass = { workspace = true }

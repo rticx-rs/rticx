@@ -549,8 +549,9 @@ From the view, the pass generated inside the `#[app]` modules:
   producer, with the distribution owning the boot handshake) and the
   `__RTICX_XBIN_TOPOLOGY_HASH` freshness anchor.
 
-**Step 7 — run it.** `cargo xbin build` compiles the host binaries but does
-not run them. The end-to-end behaviour (spawn → ring function → router →
+**Step 7 — run it.** `cargo xbin build` compiles the host binaries. 
+
+And end-to-end behaviour (spawn → ring function → router →
 line dispatcher → `exec`, backpressure) is driven by the in-tree harness, which
 expands both applications into one process over a
 shared mock system. Back in `experiments/multibinary/`:
