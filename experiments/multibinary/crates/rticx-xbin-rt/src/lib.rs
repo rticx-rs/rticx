@@ -1,10 +1,5 @@
 //! Runtime support for the RTICX multi-binary extension.
 //!
-//! This crate is deliberately kept separate from `rticx-spsc`: the
-//! single-binary software-task queue has frozen, non-atomic semantics, while
-//! cross-core FIFOs must use atomics with `Release`/`Acquire` ordering to
-//! publish data across cores.
-//!
 //! Contents:
 //!
 //! - [`CrossCoreMessage`] — marker trait implemented only by the generated
@@ -54,5 +49,4 @@ pub use state::{MAX_CORES, ReadyCache, SharedState};
 /// - have a stable, target-independent layout that matches the canonical
 ///   layout encoded by the generated `SIZE_*` / `ALIGN_*` / `OFF_*` constants;
 /// - not contain pointers, references or other core-local state;
-/// - not be larger than the FIFO element size they are stored in.
 pub unsafe trait CrossCoreMessage: Copy + 'static {}

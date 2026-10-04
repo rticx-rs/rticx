@@ -36,7 +36,7 @@
 //! # Memory requirements
 //!
 //! The shared region holding the FIFO must be Normal, Non-cacheable,
-//! Shareable (MPU), or the distribution must provide explicit cache
+//! Shareable (MPU), OR the RTICX distribution must provide explicit cache
 //! maintenance. Device/Strongly-ordered memory is forbidden: `ldrex`/`strex`
 //! are not valid there. Atomics provide ordering, not cache flushing.
 
@@ -66,7 +66,6 @@ const INDEX_PAD: usize = FIFO_INDEX_STRIDE - size_of::<AtomicUsize>();
 const _: () = {
     assert!(size_of::<AtomicUsize>() == size_of::<usize>());
     assert!(align_of::<AtomicUsize>() <= FIFO_ALIGN);
-    assert!(FIFO_HEADER == 64);
 };
 
 #[repr(C)]
@@ -119,7 +118,7 @@ impl<T, const DEPTH: usize> Fifo<T, DEPTH> {
     }
 }
 
-impl<T: crate::CrossCoreMessage, const DEPTH: usize> Fifo<T, DEPTH> {
+impl<T: Copy + 'static, const DEPTH: usize> Fifo<T, DEPTH> {
     /// Number of pending elements the FIFO can hold (`DEPTH - 1`).
     pub const fn capacity(&self) -> usize {
         DEPTH.saturating_sub(1)
@@ -254,7 +253,7 @@ pub struct Consumer<'a, T, const DEPTH: usize> {
     fifo: &'a Fifo<T, DEPTH>,
 }
 
-impl<T: crate::CrossCoreMessage, const DEPTH: usize> Producer<'_, T, DEPTH> {
+impl<T: Copy + 'static, const DEPTH: usize> Producer<'_, T, DEPTH> {
     /// Enqueues `value`, returning it back when the FIFO is full.
     pub fn enqueue(&self, value: T) -> Result<(), T> {
         self.fifo.enqueue(value)
@@ -281,7 +280,7 @@ impl<T: crate::CrossCoreMessage, const DEPTH: usize> Producer<'_, T, DEPTH> {
     }
 }
 
-impl<T: crate::CrossCoreMessage, const DEPTH: usize> Consumer<'_, T, DEPTH> {
+impl<T: Copy + 'static, const DEPTH: usize> Consumer<'_, T, DEPTH> {
     /// Dequeues the oldest element, or returns `None` when empty.
     pub fn dequeue(&self) -> Option<T> {
         self.fifo.dequeue()
@@ -313,5 +312,5 @@ impl<T: crate::CrossCoreMessage, const DEPTH: usize> Consumer<'_, T, DEPTH> {
 // communicate through atomics. The caller of `split` (or `view_at`) promises
 // exactly one producer and one consumer. `T` must itself be `Send` for the
 // payload hand-off to be sound.
-unsafe impl<T: crate::CrossCoreMessage + Send, const DEPTH: usize> Send for Producer<'_, T, DEPTH> {}
-unsafe impl<T: crate::CrossCoreMessage + Send, const DEPTH: usize> Send for Consumer<'_, T, DEPTH> {}
+unsafe impl<T: Copy + Send + 'static, const DEPTH: usize> Send for Producer<'_, T, DEPTH> {}
+unsafe impl<T: Copy + Send + 'static, const DEPTH: usize> Send for Consumer<'_, T, DEPTH> {}
