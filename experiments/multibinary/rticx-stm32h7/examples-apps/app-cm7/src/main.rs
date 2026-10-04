@@ -2,11 +2,11 @@
 //!
 //! Global core 0. The rticx-stm32h7 `#[app]` macro runs the core pass, the
 //! cross-binary pass and the software-tasks pass; the distribution's runtime
-//! backend initializes the shared ready/epoch state in D2 SRAM3, maps it
-//! Non-cacheable through the MPU and releases the Cortex-M4 by setting
-//! `RCC_GCR.BOOT_C2` (all inside the generated `init_shared` hook). The
-//! register access goes through the `stm32h7` PAC; the console is a
-//! `stm32-hal2` `Usart`.
+//! backend maps the shared D2 SRAM3 region Non-cacheable through the MPU, and
+//! its `post_init` hook (distribution-owned boot sequencing) clears the shared
+//! control area, releases the Cortex-M4 by setting `RCC_GCR.BOOT_C2` and then
+//! signals this core up. The register access goes through the `stm32h7` PAC;
+//! the console is a `stm32-hal2` `Usart`.
 //!
 //! The application declares a cross-binary receiver (`PongTask`, spawned by the
 //! M4 on global core 1). The pass therefore generates the complete transport
@@ -14,11 +14,11 @@
 //! `1 -> 0` read function and doorbell router bound to `HSEM0` (IRQ 125), and
 //! the USART3 line dispatcher.
 //!
-//! `idle` waits until the M4 has marked itself ready and then starts the
-//! cross-binary ping-pong by calling the generated `PingTask::cross_spawn`
-//! (M7-T2). Each handler logs its hop and spawns the next one through the other
-//! core, so a single `renode/run.sh` boot shows both directions executing
-//! through the generated dispatch path.
+//! `idle` waits until the M4 is up (the distribution's peer-up flag) and then
+//! starts the cross-binary ping-pong by calling the generated
+//! `PingTask::cross_spawn` (M7-T2). Each handler logs its hop and spawns the
+//! next one through the other core, so a single `renode/run.sh` boot shows both
+//! directions executing through the generated dispatch path.
 #![no_std]
 #![no_main]
 
@@ -90,10 +90,7 @@ pub mod app {
         let dp = pac::Peripherals::take().unwrap();
         let clocks = Clocks::default();
         let mut console = Usart::new(dp.USART1, 115_200, Default::default(), &clocks).unwrap();
-        let _ = writeln!(
-            console,
-            "[M7] boot; initializing shared IPC region and releasing the M4"
-        );
+        let _ = writeln!(console, "[M7] boot; initializing shared IPC region");
         (Shared { console }, TaskInits { idle: Idle })
     }
 
@@ -102,25 +99,22 @@ pub mod app {
 
     impl RticIdleTask for Idle {
         fn exec(&mut self) -> ! {
-            use rticx_stm32h7::export::xbin_rt::CrossBinBackend as _;
-
-            let backend = rticx_stm32h7::xbin::Backend;
             self.shared().console.lock(|console| {
                 let _ = writeln!(
                     console,
-                    "[M7] shared region ready, RCC_GCR.BOOT_C2 set; waiting for the M4"
+                    "[M7] shared region ready; waiting for the M4 to come up"
                 );
             });
 
-            // The M4 marks itself ready at the end of its `post_init`, so a
-            // spawn before that would return `Err(Some(input))`.
-            while !backend.is_ready(1) {
+            // The M4 signals that it is up at the end of its `post_init`; the
+            // distribution owns this peer-up handshake.
+            while !rticx_stm32h7::xbin::peer_is_up() {
                 core::hint::spin_loop();
             }
             self.shared().console.lock(|console| {
                 let _ = writeln!(
                     console,
-                    "[M7] Cortex-M4 marked itself ready; starting the M7 -> M4 ping (M7-T2)"
+                    "[M7] Cortex-M4 up; starting the M7 -> M4 ping (M7-T2)"
                 );
             });
 

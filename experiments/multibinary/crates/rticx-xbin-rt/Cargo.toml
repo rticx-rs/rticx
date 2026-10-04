@@ -24,12 +24,11 @@ rticx-spsc = { workspace = true }
 rticx-xbin-proto = { workspace = true }
 
 [features]
-# On by default: the ready bitmap and the epoch counter need
-# read-modify-write atomics (`fetch_or`/`fetch_and`/`fetch_add`), which
-# targets without native CAS (e.g. Cortex-M0 / thumbv6m, riscv32imc) can only
-# provide through `critical-section`. Targets with native CAS ignore the
-# fallback. Distributions on CAS-less targets must link a `critical-section`
+# On by default: on targets without native atomics (e.g. Cortex-M0 /
+# thumbv6m, riscv32imc) the FIFO indices fall back to `critical-section`
+# through `portable-atomic`. Targets with native atomics ignore the fallback.
+# Distributions on such targets must link a `critical-section`
 # implementation; builds using `default-features = false` must re-enable this
-# on such targets.
+# on those targets.
 default = ["atomic-critical-section"]
 atomic-critical-section = ["portable-atomic/critical-section"]

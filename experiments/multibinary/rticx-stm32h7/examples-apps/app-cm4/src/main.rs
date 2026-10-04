@@ -2,8 +2,8 @@
 //!
 //! Global core 1. The Cortex-M4 is held in hold-boot until the Cortex-M7 writes
 //! `RCC_GCR.BOOT_C2`; when it boots it maps the shared SRAM3 through the MPU,
-//! enables its HSEM receive interrupt (`HSEM1`, IRQ 126) and marks itself ready
-//! in the shared state (the generated `mark_ready` hook). It never releases a
+//! enables its HSEM receive interrupt (`HSEM1`, IRQ 126) and signals the
+//! distribution's peer-up flag in its `post_init` hook. It never releases a
 //! peer. The register access goes through the `stm32h7` PAC; the console is a
 //! `stm32-hal2` `Usart`.
 //!
@@ -80,7 +80,7 @@ pub mod app {
         let mut console = Usart::new(dp.USART2, 115_200, Default::default(), &clocks).unwrap();
         let _ = writeln!(
             console,
-            "[M4] released by RCC_GCR.BOOT_C2; mapping shared region and marking ready"
+            "[M4] released by RCC_GCR.BOOT_C2; mapping shared region"
         );
         (Shared { console }, TaskInits { idle: Idle })
     }
@@ -93,7 +93,7 @@ pub mod app {
             self.shared().console.lock(|console| {
                 let _ = writeln!(
                     console,
-                    "[M4] shared region mapped, HSEM1 receive enabled, ready bit set (M7-T1)"
+                    "[M4] shared region mapped, HSEM1 receive enabled; peer-up signalled (M7-T1)"
                 );
             });
             loop {

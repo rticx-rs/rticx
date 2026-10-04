@@ -1,8 +1,8 @@
 //! Mock distribution/backend for the RTICX multi-binary extension host tests.
 //!
 //! [`MockSystem`] owns the in-process stand-in for a project's
-//! shared-memory pools, doorbells and [`SharedState`]. Hand one
-//! [`MockBackend`] per simulated core to the test threads:
+//! shared-memory pools and doorbells. Hand one [`MockBackend`] per simulated
+//! core to the test threads:
 //!
 //! ```
 //! use rticx_xbin_mock::MockSystem;
@@ -39,16 +39,16 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use rticx_xbin_rt::FIFO_ALIGN;
 use rticx_xbin_rt::backend::{CrossBinBackend, IpcRegion};
-use rticx_xbin_rt::{FIFO_ALIGN, SharedState};
 
 const _: () = assert!(
     core::mem::align_of::<u64>() >= FIFO_ALIGN,
     "the pool backing array must be FIFO_ALIGN-aligned"
 );
 
-/// A project-wide mock: the shared pools, doorbells and ready/epoch state
-/// that every simulated core of one project sees in common.
+/// A project-wide mock: the shared pools and doorbells that every simulated
+/// core of one project sees in common.
 ///
 /// Configure the pools with [`MockSystem::add_pool`] *before* handing out
 /// any [`MockBackend`] ([`MockSystem::backend`]), because the pool table is
@@ -65,7 +65,6 @@ struct SystemInner {
     /// Per-`(source -> target)` pair message words of the M6.5 doorbell
     /// routers, keyed by `(source, target)`.
     pair_doorbells: Mutex<BTreeMap<(u32, u32), Arc<PairDoorbell>>>,
-    state: SharedState,
 }
 
 struct PoolBacking {
@@ -85,15 +84,13 @@ fn ordered_pair(first: u32, second: u32) -> (u32, u32) {
 }
 
 impl MockSystem {
-    /// Creates an empty mock system: no pools, no doorbells, a fresh
-    /// (initialized, empty) [`SharedState`].
+    /// Creates an empty mock system: no pools and no doorbells.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(SystemInner {
                 pools: BTreeMap::new(),
                 pair_doorbells: Mutex::new(BTreeMap::new()),
-                state: SharedState::new(),
             }),
         }
     }
@@ -138,11 +135,6 @@ impl MockSystem {
             },
         );
         Ok(())
-    }
-
-    /// Returns the shared ready/epoch state.
-    pub fn state(&self) -> &SharedState {
-        &self.inner.state
     }
 
     /// Returns a backend handle for the simulated global core `global_core_id`.
@@ -246,10 +238,6 @@ impl CrossBinBackend for MockBackend {
             .pools
             .get(&ordered_pair(source, target))
             .map(|pool| IpcRegion::new(pool.base, pool.base, pool.size))
-    }
-
-    fn shared_state(&self) -> &SharedState {
-        self.system.state()
     }
 }
 

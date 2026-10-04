@@ -99,6 +99,14 @@ impl CorePassBackend for Stm32H7Rtic {
         self.info_bus = Some(info_bus);
     }
 
+    /// Emits the per-interrupt NVIC configuration, the distribution-owned boot
+    /// release and the per-core "up" signal.
+    ///
+    /// Runs inside the initialization critical section after the user `init`
+    /// and the generated FIFO initialization. Boot sequencing is
+    /// distribution-owned: the Cortex-M7 (project owner) calls
+    /// `boot_release()` to clear the doorbells/boot flag and release the M4,
+    /// and every core then calls `signal_self_up()`.
     fn post_init(
         &self,
         app_args: &AppArgs,
@@ -146,11 +154,19 @@ impl CorePassBackend for Stm32H7Rtic {
             }
         }
 
+        // Boot sequencing is distribution-owned. The project owner clears the
+        // shared control area and releases the peer; every core then signals it
+        // is up. `boot_release` is compiled in only on the Cortex-M7.
+        let boot_release = (physical_core() == bindings::PHYSICAL_CM7)
+            .then(|| quote!(rticx_stm32h7::xbin::boot_release();));
+
         Some(quote! {
             let mut core = unsafe { rticx_stm32h7::export::Peripherals::steal() };
             unsafe {
                 #(#stmts)*
             }
+            #boot_release
+            rticx_stm32h7::xbin::signal_self_up();
         })
     }
 

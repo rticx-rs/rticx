@@ -157,8 +157,7 @@ impl<T: Copy + 'static, const DEPTH: usize> Fifo<T, DEPTH> {
     ///
     /// Must not run concurrently with a producer or consumer: the peer may
     /// otherwise observe an index pair that points at an uninitialized slot.
-    /// Call it on the owner core during `init_shared`, before publishing
-    /// ready.
+    /// Call it on the producer core before any spawn.
     pub unsafe fn init(&self) {
         self.head.value.store(0, Ordering::Relaxed);
         self.tail.value.store(0, Ordering::Relaxed);

@@ -17,8 +17,9 @@
 //! boot sequence (`init`, `post_init` init hooks, idle). The idle task then
 //! drives the cross-binary scenario:
 //!
-//! 1. it finishes the mock boot (each producer's `configure`/`init_shared`/
-//!    `init_fifos`/`mark_ready` hooks);
+//! 1. it finishes the mock boot (each producer's `configure` + `init_fifos`
+//!    hooks); boot sequencing between the simulated cores is
+//!    distribution-owned and is not exercised by the mock;
 //! 2. `Task::cross_spawn(input)` enqueues and rings the pair's doorbell; the
 //!    input is not executed until the pair's router runs;
 //! 3. calling the generated router ISR (`__xbin_router_{source}_1`) drains the
@@ -26,11 +27,7 @@
 //!    through the software pass's generated pend function, which runs the
 //!    dispatcher ISR synchronously, draining FIFOs and calling `exec`;
 //! 4. a full FIFO returns `Err(Some(input))`; draining frees it again;
-//! 5. repeated spawn/drain cycles wrap the ring and keep the order;
-//! 6. the M6-T2 ready/epoch scenario: a simulated receiver reset (ready bit
-//!    cleared, epoch bumped) makes `cross_spawn` return `Err(Some(input))`
-//!    without enqueueing, and the next spawn after the receiver re-marks
-//!    itself ready refreshes the spawner's cached epoch and executes.
+//! 5. repeated spawn/drain cycles wrap the ring and keep the order.
 //!
 //! The **two-app fixture** (`mock_runtime_spawn_reaches_the_receiver_dispatcher`)
 //! has one producer on global core 0 and one receiver on global core 1.
@@ -40,12 +37,12 @@
 //! nothing and receive their generated stubs, the receiver runs two line
 //! dispatchers from its `ipc_dispatchers` pool (one per `(source, priority)`
 //! line) behind two per-pair routers, each producer updates only its own
-//! FIFO, the non-owner producer initializes its own `(2 -> 1)` FIFO before
+//! FIFO, the producer on core 2 initializes its own `(2 -> 1)` FIFO before
 //! its `post_init`, and the two sources backpressure independently.
 //!
 //! All applications share one process-global [`MockSystem`] through
-//! `crate::backend_for`, so they see the same pools, doorbells and
-//! ready/epoch state, exactly like three cores in one project.
+//! `crate::backend_for`, so they see the same pools and doorbells, exactly
+//! like three cores in one project.
 //!
 //! [`MockSystem`]: rticx_xbin_mock::MockSystem
 
@@ -231,18 +228,8 @@ impl SwPassBackend for TestSwBackend {
 /// `__rticx_interrupt_free` (the pass generated `cross_spawn` calls it): the
 /// fixture supplies the host no-op itself, like a distribution would provide
 /// the target's critical section.
-fn producer_module(core: u32, owner: bool) -> syn::ItemMod {
+fn producer_module(core: u32) -> syn::ItemMod {
     let module = format_ident!("producer_{core}");
-    // Only the owner application generates `__rticx_xbin_init_shared`
-    // (M6-T1 keeps the FIFO initializers per producer, the shared state on the
-    // owner).
-    let init_shared = owner.then(|| {
-        quote! {
-            pub fn test_init_shared() {
-                __rticx_xbin_init_shared(&__rticx_xbin_backend());
-            }
-        }
-    });
     syn::parse_quote! {
         pub mod #module {
             fn __rticx_xbin_backend() -> rticx_xbin_mock::MockBackend {
@@ -257,14 +244,8 @@ fn producer_module(core: u32, owner: bool) -> syn::ItemMod {
                 __rticx_xbin_configure_shared_memory(&__rticx_xbin_backend());
             }
 
-            #init_shared
-
             pub fn test_init_fifos() {
                 __rticx_xbin_init_fifos_core0(&__rticx_xbin_backend());
-            }
-
-            pub fn test_mark_ready() {
-                __rticx_xbin_mark_ready_core0(&__rticx_xbin_backend());
             }
         }
     }
@@ -339,28 +320,20 @@ fn two_app_receiver_module() -> syn::ItemMod {
                 __rticx_xbin_configure_shared_memory(&__rticx_xbin_backend());
             }
 
-            pub fn test_mark_ready() {
-                __rticx_xbin_mark_ready_core0(&__rticx_xbin_backend());
-            }
-
             #[idle]
             struct Idle;
 
             impl RticIdleTask for Idle {
                 fn exec(&mut self) -> ! {
-                    // Complete the mock boot: global core 0 owns the shared
-                    // state and produces the task FIFO, so its hooks run here
-                    // (the receiver's own `configure` and `mark_ready` ran in
-                    // the generated entry).
+                    // Complete the mock boot: global core 0 produces the task
+                    // FIFO, so its FIFO initializer runs here (the receiver's
+                    // own `configure` ran in the generated entry). Boot
+                    // sequencing between the simulated cores is
+                    // distribution-owned and is not exercised by the mock.
                     crate::producer_0::test_configure();
-                    crate::producer_0::test_init_shared();
                     crate::producer_0::test_init_fifos();
-                    crate::producer_0::test_mark_ready();
-                    test_mark_ready();
 
                     let backend = __rticx_xbin_backend();
-                    assert!(backend.shared_state().is_ready(0), "the owner core is ready");
-                    assert!(backend.shared_state().is_ready(1), "the receiver core is ready");
 
                     // -- spawn enqueues and rings; the router wakes the line
                     // dispatcher, which executes the task
@@ -436,27 +409,6 @@ fn two_app_receiver_module() -> syn::ItemMod {
                         9,
                         "every spawn past the ring depth was executed"
                     );
-
-                    // -- M6-T2: a target that is not ready rejects the spawn
-                    // without enqueueing. Simulate a receiver reset: it clears
-                    // its own ready bit and bumps the epoch, as its boot
-                    // protocol requires.
-                    let state = backend.shared_state();
-                    state.clear_ready(1);
-                    state.bump_epoch();
-                    assert_eq!(
-                        crate::producer_0::EncryptTask::cross_spawn(request(20)),
-                        Err(Some(request(20))),
-                        "a spawn while the target is not ready returns the input"
-                    );
-
-                    // -- M6-T2: post-reset recovery. The receiver re-marks
-                    // itself ready; the next spawn refreshes the spawner's
-                    // stale epoch and executes through the dispatcher.
-                    state.mark_ready(1);
-                    crate::producer_0::EncryptTask::cross_spawn(request(21))
-                        .expect("the post-reset spawn enqueues");
-                    __xbin_router_0_1();
                     assert_eq!(
                         RECEIVED.lock().expect("the receiver log").as_slice(),
                         &[
@@ -469,9 +421,8 @@ fn two_app_receiver_module() -> syn::ItemMod {
                             request(13),
                             request(14),
                             request(15),
-                            request(21),
                         ],
-                        "the rejected spawn enqueued nothing and the post-reset spawn executed"
+                        "every spawn executed in order through the dispatcher"
                     );
 
                     println!("xbin: e2e ok");
@@ -562,10 +513,6 @@ fn three_app_receiver_module() -> syn::ItemMod {
                 }
             }
 
-            pub fn test_mark_ready() {
-                __rticx_xbin_mark_ready_core0(&__rticx_xbin_backend());
-            }
-
             #[idle]
             struct Idle;
 
@@ -573,15 +520,12 @@ fn three_app_receiver_module() -> syn::ItemMod {
                 fn exec(&mut self) -> ! {
                     let backend = __rticx_xbin_backend();
 
-                    // -- complete the mock boot. The owner core 0 publishes
-                    // the shared state; the non-owner producer core 2
-                    // initializes its own `(2 -> 1)` FIFO before its
-                    // `post_init` would spawn (M6-T1).
+                    // -- complete the mock boot. Each producer core
+                    // initializes its own FIFO before its `post_init` would
+                    // spawn (M6-T1); boot sequencing between the simulated
+                    // cores is distribution-owned.
                     crate::producer_0::test_configure();
-                    crate::producer_0::test_init_shared();
                     crate::producer_0::test_init_fifos();
-                    crate::producer_0::test_mark_ready();
-                    test_mark_ready();
 
                     // Dirty the `(2 -> 1)` FIFO through the receiver's view,
                     // then let its producer core initialize it: the topology
@@ -602,13 +546,8 @@ fn three_app_receiver_module() -> syn::ItemMod {
                     assert_eq!(
                         unsafe { (*sensor_fifo).len() },
                         0,
-                        "the non-owner producer initializes its own pool (M6-T1)"
+                        "the producer on core 2 initializes its own pool (M6-T1)"
                     );
-                    crate::producer_2::test_mark_ready();
-
-                    assert!(backend.shared_state().is_ready(0), "producer core 0 is ready");
-                    assert!(backend.shared_state().is_ready(1), "the receiver core is ready");
-                    assert!(backend.shared_state().is_ready(2), "producer core 2 is ready");
 
                     // -- first source: spawn -> ring -> its router -> its line
                     // dispatcher -> exec
@@ -732,7 +671,7 @@ fn three_app_receiver_args() -> TokenStream {
 fn two_app_system() -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     for (package, args, app_mod) in [
-        ("app-m7", &producer_args(0, 1), &producer_module(0, true)),
+        ("app-m7", &producer_args(0, 1), &producer_module(0)),
         (
             "app-m4",
             &two_app_receiver_args(),
@@ -894,8 +833,8 @@ fn three_app_system() -> String {
     ];
 
     for (package, args, app_mod) in [
-        ("app-m7", producer_args(0, 1), producer_module(0, true)),
-        ("app-m5", producer_args(2, 1), producer_module(2, false)),
+        ("app-m7", producer_args(0, 1), producer_module(0)),
+        ("app-m5", producer_args(2, 1), producer_module(2)),
         (
             "app-m4",
             three_app_receiver_args(),
@@ -914,17 +853,10 @@ fn three_app_system() -> String {
 }
 
 /// Expands a producer fixture through the cross-binary pass (no core pass).
-fn expand_producer(
-    system: &Path,
-    package: &str,
-    target: &str,
-    core: u32,
-    external: u32,
-    owner: bool,
-) -> String {
+fn expand_producer(system: &Path, package: &str, target: &str, core: u32, external: u32) -> String {
     let pass = XbinPass::with_system(system, package, target).with_backend(TestBackend);
     let (_, module) = pass
-        .run_pass(producer_args(core, external), producer_module(core, owner))
+        .run_pass(producer_args(core, external), producer_module(core))
         .expect("producer code generation succeeds");
     module.to_token_stream().to_string()
 }
@@ -1092,7 +1024,7 @@ fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
     let system_path = dir.path().join("system.json");
     std::fs::write(&system_path, two_app_system()).expect("system.json");
 
-    let sender = expand_producer(&system_path, "app-m7", "m7", 0, 1, true);
+    let sender = expand_producer(&system_path, "app-m7", "m7", 0, 1);
     assert!(
         !sender.contains("compile_error"),
         "sender code generation failed: {sender}"
@@ -1150,7 +1082,7 @@ fn three_applications_spawn_through_their_own_routers() {
     // Both producers declare nothing: their stubs and ring functions come
     // from the pass (M5.5). The second producer's stub is generated even
     // though the application never declares it.
-    let first = expand_producer(&system_path, "app-m7", "m7", 0, 1, true);
+    let first = expand_producer(&system_path, "app-m7", "m7", 0, 1);
     assert!(
         !first.contains("compile_error"),
         "first producer generation failed: {first}"
@@ -1160,7 +1092,7 @@ fn three_applications_spawn_through_their_own_routers() {
         "the first producer stub/ring is missing: {first}"
     );
 
-    let second = expand_producer(&system_path, "app-m5", "m5", 2, 1, false);
+    let second = expand_producer(&system_path, "app-m5", "m5", 2, 1);
     assert!(
         !second.contains("compile_error"),
         "second producer generation failed: {second}"
@@ -1171,11 +1103,7 @@ fn three_applications_spawn_through_their_own_routers() {
     );
     assert!(
         second.contains("__rticx_xbin_init_fifos_core0"),
-        "the non-owner producer does not initialize its pool: {second}"
-    );
-    assert!(
-        !second.contains("__rticx_xbin_init_shared"),
-        "a non-owner producer must not initialize the shared state: {second}"
+        "the producer on core 2 does not initialize its pool: {second}"
     );
 
     let receiver = expand_receiver(

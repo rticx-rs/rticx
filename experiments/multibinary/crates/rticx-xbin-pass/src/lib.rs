@@ -23,10 +23,7 @@
 //!   - sender side (M3-T1, M5.5, M6-T2): a generated sender stub
 //!     (`pub struct <Task>;`) plus FIFO views and `Task::cross_spawn` for
 //!     every view task whose `spawner_core` belongs to this application —
-//!     producer sources declare nothing. The spawn gates on the target's
-//!     readiness through a spawner-local cached epoch
-//!     (`rticx_xbin_rt::ReadyCache`), so a not-ready or just-reset target
-//!     returns `Err(Some(input))` without enqueueing;
+//!     producer sources declare nothing;
 //!   - receiver side (M3-T2, M5.5, M6.5-T3): FIFO views, the
 //!     `SpawnInput: CrossCoreMessage` const assertion, one generated **line
 //!     dispatcher** per `(source -> target, priority)` line bound to its
@@ -35,11 +32,10 @@
 //!     and the core `#[task(..)]` shape on the native receiver structs
 //!     themselves (see `crate::parse::inject_receiver_tasks`);
 //!   - init hooks (M3-T3, M6-T1): `__rticx_xbin_configure_shared_memory` on
-//!     every core, `__rticx_xbin_init_shared` on the application owning the
-//!     project's owner core, `__rticx_xbin_init_fifos_core<N>` on every core
-//!     producing cross-binary FIFOs, and `__rticx_xbin_mark_ready_core<N>` on
-//!     every local core, wired into the generated entry functions through
-//!     [`RticPass::main_injection`] (see `crate::codegen`);
+//!     every core and `__rticx_xbin_init_fifos_core<N>` on every core
+//!     producing cross-binary FIFOs, wired into the generated entry functions
+//!     through [`RticPass::main_injection`] (see `crate::codegen`). Boot
+//!     sequencing between cores is distribution-owned;
 //!   - freshness (M3-T4): the generated code embeds the synced
 //!     `__RTICX_XBIN_TOPOLOGY_HASH` and `include_str!`s the system view, so
 //!     rustc records it in dep-info and rebuilds the application when it

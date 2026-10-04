@@ -501,44 +501,25 @@ fn sender_codegen_ring_and_error_semantics() {
     );
 }
 
-/// The generated spawner gates on the target's readiness through a cached
-/// epoch (M6-T2): a spawn aimed at a not-ready or just-reset target returns
-/// the input without enqueueing.
+/// The generated spawner does not gate on the target's readiness: boot
+/// sequencing is distribution-owned, so `cross_spawn` only guards the caller's
+/// core, enqueues and rings.
 #[test]
-fn sender_codegen_ready_gate() {
+fn sender_codegen_has_no_target_ready_gate() {
     let (_dir, path) = write_sender_system();
     let generated = generate_ok(&path);
 
-    // One cache per spawner, declared inside `cross_spawn` so it cannot
-    // collide with a user item.
-    assert_section_present(
-        &generated,
-        quote! {
-            static __RTICX_XBIN_READY : rticx_xbin_rt :: ReadyCache =
-                rticx_xbin_rt :: ReadyCache :: new () ;
-        },
-        "spawner-local ready cache",
-    );
-
-    // The gate runs after the core guard and before the interrupt-free
-    // enqueue, and maps a not-ready target to `Err(Some(input))`.
-    assert_section_present(
-        &generated,
-        quote! {
-            if ! __RTICX_XBIN_READY . is_ready (
-                __rticx_xbin_backend . shared_state () ,
-                __RTICX_XBIN_TARGET_CORE ,
-            ) {
-                return Err (Some (input)) ;
-            }
-        },
-        "target-ready gate",
-    );
-
-    // The documented error case names the target.
     assert!(
-        generated.contains("the target core 1 has not marked itself ready"),
-        "the spawn documentation does not name the not-ready target: {generated}"
+        !generated.contains("ReadyCache") && !generated.contains("__RTICX_XBIN_READY"),
+        "the generated spawner still gates on target readiness: {generated}"
+    );
+    assert!(
+        !generated.contains("shared_state"),
+        "the generated spawner still consults the shared readiness state: {generated}"
+    );
+    assert!(
+        !generated.contains("has not marked itself ready"),
+        "the spawn documentation still names a not-ready target: {generated}"
     );
 }
 
@@ -1018,25 +999,6 @@ fn owner_codegen_init_hooks_snapshot() {
         "configure hook",
     );
 
-    // `app-m7` owns global core 0, the project's owner: it generates the
-    // shared-state initializer and its own mark-ready hook. The initializer
-    // only publishes the shared ready/epoch state (M6-T1): the FIFO indices
-    // are zeroed by each FIFO's producer core.
-    assert_section_present(
-        &generated,
-        quote! {
-            fn __rticx_xbin_init_shared (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend ,
-            )
-        },
-        "owner init header",
-    );
-    assert_section_present(
-        &generated,
-        quote! { __rticx_xbin_backend . init_shared () ; },
-        "owner init body",
-    );
-
     // `app-m7` produces the `0 -> 1` FIFO, so its core 0 gets its own
     // FIFO initializer, run before `post_init` (M6-T1).
     assert_section_present(
@@ -1071,25 +1033,11 @@ fn owner_codegen_init_hooks_snapshot() {
         },
         "producer FIFO zeroing",
     );
-    assert_section_present(
-        &generated,
-        quote! {
-            fn __rticx_xbin_mark_ready_core0 (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend
-            )
-        },
-        "owner mark-ready hook header",
-    );
     // No generated code arms doorbells (M6.5-T4): the router IRQs are
     // configured by the core pass's used-IRQ machinery.
     assert!(
         !generated.contains("doorbell_setup"),
         "the generated init hooks must not arm doorbells: {generated}"
-    );
-    assert_section_present(
-        &generated,
-        quote! { __rticx_xbin_backend . mark_ready (0u32) ; },
-        "owner mark-ready publication",
     );
 }
 
@@ -1098,9 +1046,8 @@ fn receiver_codegen_init_hooks_snapshot() {
     let (_dir, path) = write_receiver_system();
     let generated = generate_receiver_ok(&path);
 
-    // `app-m4` (global core 1) is not the owner, but still configures its
-    // region view and publishes its ready bit; no generated code arms the
-    // doorbell line (M6.5-T4).
+    // `app-m4` (global core 1) configures its region view; no generated code
+    // arms the doorbell line (M6.5-T4).
     assert!(
         !generated.contains("__rticx_xbin_init_shared"),
         "a non-owner application must not initialize the shared state: {generated}"
@@ -1116,23 +1063,9 @@ fn receiver_codegen_init_hooks_snapshot() {
         },
         "receiver configure hook",
     );
-    assert_section_present(
-        &generated,
-        quote! {
-            fn __rticx_xbin_mark_ready_core0 (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend
-            )
-        },
-        "receiver mark-ready hook header",
-    );
     assert!(
         !generated.contains("doorbell_setup"),
         "the generated init hooks must not arm doorbells: {generated}"
-    );
-    assert_section_present(
-        &generated,
-        quote! { __rticx_xbin_backend . mark_ready (1u32) ; },
-        "receiver mark-ready publication",
     );
 }
 
@@ -1154,39 +1087,37 @@ fn init_hooks_are_wired_into_the_entry_functions() {
         "configure injection",
     );
 
-    // The owner initializes the shared state before `post_init`, inside the
-    // interrupt-free critical section.
+    // The producing core zeroes the FIFOs it produces before `post_init`,
+    // inside the interrupt-free critical section.
     let before_post_init = pass
         .main_injection(&MainInjectionPoint::BeforePostInit, 0)
-        .expect("the owner runs `init_shared` before post_init");
+        .expect("the producer initializes its FIFOs before post_init");
     assert_section_present(
         &before_post_init.to_string(),
-        quote! { __rticx_xbin_init_shared (& __mock_xbin_backend ()) ; },
-        "owner init injection",
+        quote! { __rticx_xbin_init_fifos_core0 (& __mock_xbin_backend ()) ; },
+        "producer FIFO init injection",
     );
     assert!(
         pass.main_injection(&MainInjectionPoint::BeforePostInit, 1)
             .is_none(),
-        "only the owner core initializes the shared state"
+        "local core 1 does not exist in this application"
     );
 
-    // Every core marks itself ready before the idle loop.
-    let before_idle = pass
-        .main_injection(&MainInjectionPoint::BeforeIdle, 0)
-        .expect("every core marks itself ready before idle");
-    assert_section_present(
-        &before_idle.to_string(),
-        quote! { __rticx_xbin_mark_ready_core0 (& __mock_xbin_backend ()) ; },
-        "mark-ready injection",
+    // Boot sequencing is distribution-owned: no core signals readiness
+    // before the idle loop anymore.
+    assert!(
+        pass.main_injection(&MainInjectionPoint::BeforeIdle, 0)
+            .is_none(),
+        "the framework no longer injects a readiness hook at idle"
     );
     assert!(
         pass.main_injection(&MainInjectionPoint::BeforeIdle, 1)
             .is_none(),
-        "local core 1 does not exist in this application"
+        "no local core injects at idle"
     );
 
-    // The receiver application has no owner hook, but wires its own
-    // mark-ready function.
+    // The receiver application produces no FIFO, but wires its own configure
+    // hook.
     let receiver = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
     receiver
         .run_pass(receiver_args(), receiver_app())
@@ -1202,20 +1133,19 @@ fn init_hooks_are_wired_into_the_entry_functions() {
     assert!(
         receiver
             .main_injection(&MainInjectionPoint::BeforePostInit, 0)
-            .is_none()
+            .is_none(),
+        "a pure receiver produces no FIFO to initialize"
     );
-    let before_idle = receiver
-        .main_injection(&MainInjectionPoint::BeforeIdle, 0)
-        .expect("the receiver marks itself ready");
-    assert_section_present(
-        &before_idle.to_string(),
-        quote! { __rticx_xbin_mark_ready_core0 (& __mock_xbin_backend ()) ; },
-        "receiver mark-ready injection",
+    assert!(
+        receiver
+            .main_injection(&MainInjectionPoint::BeforeIdle, 0)
+            .is_none(),
+        "the receiver no longer signals readiness"
     );
 }
 
 #[test]
-fn the_owner_is_the_lowest_global_core_id() {
+fn fifo_init_follows_the_producing_core() {
     let receiver_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
             trait RticSwTask {
@@ -1249,8 +1179,9 @@ fn the_owner_is_the_lowest_global_core_id() {
         external_cores = [2]
     );
 
-    // app-m7 owns global core 5 and app-m4 owns global core 2: the owner is
-    // core 2 (the boot core), independently of the declaration order.
+    // app-m7 owns global core 5 and app-m4 owns global core 2: only the
+    // producer core 5 initializes the `5 -> 2` FIFO, independently of the
+    // global core ordering and of the declaration order (M6-T1).
     let view = system_with_patches(
         |view| {
             view["apps"][0]["core_ids"] = serde_json::json!([5]);
@@ -1279,17 +1210,20 @@ fn the_owner_is_the_lowest_global_core_id() {
     let (_, module) = receiver
         .run_pass(receiver_args, receiver_mod)
         .expect("the core-2 application generates code");
+    let receiver_tokens = module.to_token_stream().to_string();
     assert!(
-        module
-            .to_token_stream()
-            .to_string()
-            .contains("__rticx_xbin_init_shared"),
-        "the lowest global core id owns the shared state"
+        !receiver_tokens.contains("__rticx_xbin_init_shared"),
+        "the removed shared-state initializer is not generated: {receiver_tokens}"
+    );
+    assert!(
+        receiver_tokens.contains("__rticx_xbin_configure_shared_memory"),
+        "every application configures its shared-memory view: {receiver_tokens}"
     );
     assert!(
         receiver
             .main_injection(&MainInjectionPoint::BeforePostInit, 0)
-            .is_some()
+            .is_none(),
+        "the pure receiver produces no FIFO to initialize"
     );
 
     let sender = XbinPass::with_system(&path, "app-m7", "m7").with_backend(TestBackend);
@@ -1297,15 +1231,11 @@ fn the_owner_is_the_lowest_global_core_id() {
         .run_pass(sender_args, sender_mod)
         .expect("the core-5 application generates code");
     let sender_tokens = module.to_token_stream().to_string();
-    assert!(
-        !sender_tokens.contains("__rticx_xbin_init_shared"),
-        "a non-owner application must not initialize the shared state"
-    );
-    // The core-5 producer still initializes its own `5 -> 2` FIFO before its
-    // `post_init`, independently of the owner (M6-T1).
+    // The core-5 producer initializes its own `5 -> 2` FIFO before its
+    // `post_init`, independently of the global core ordering (M6-T1).
     assert!(
         sender_tokens.contains("__rticx_xbin_init_fifos_core0"),
-        "the non-owner producer must initialize its region: {sender_tokens}"
+        "the producer must initialize its region: {sender_tokens}"
     );
     let before_post_init = sender
         .main_injection(&MainInjectionPoint::BeforePostInit, 0)
@@ -1313,7 +1243,7 @@ fn the_owner_is_the_lowest_global_core_id() {
     assert_section_present(
         &before_post_init.to_string(),
         quote! { __rticx_xbin_init_fifos_core0 (& __mock_xbin_backend ()) ; },
-        "non-owner producer FIFO init injection",
+        "producer FIFO init injection",
     );
 }
 
@@ -1652,11 +1582,11 @@ fn applications_without_cross_declarations_still_load_the_view() {
     assert!(!generated.contains("cross_spawn"), "{generated}");
     assert!(
         generated.contains("__rticx_xbin_configure_shared_memory"),
-        "the init hooks are generated for every application: {generated}"
+        "the configure hook is generated for every application: {generated}"
     );
     assert!(
-        generated.contains("__rticx_xbin_mark_ready_core0"),
-        "every local core is marked ready: {generated}"
+        !generated.contains("__rticx_xbin_init_fifos_core0"),
+        "a non-producing application initializes no FIFO: {generated}"
     );
 }
 

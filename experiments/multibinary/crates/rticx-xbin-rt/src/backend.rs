@@ -9,8 +9,6 @@
 //!   direction ([`CrossBinBackend::ipc_region`]);
 //! - the identity of the running core
 //!   ([`CrossBinBackend::current_global_core_id`]);
-//! - the shared ready/epoch state ([`CrossBinBackend::shared_state`], which
-//!   the ready/epoch helper methods delegate to by default);
 //! - the shared-memory configuration and cache-maintenance hooks
 //!   ([`CrossBinBackend::configure_shared_memory`],
 //!   [`CrossBinBackend::clean_range`], [`CrossBinBackend::invalidate_range`]).
@@ -28,9 +26,9 @@
 //!
 //! **Device and Strongly-ordered memory is forbidden.** Atomics provide
 //! ordering, not cache flushing: the `Release`/`Acquire` pairs of
-//! [`crate::Fifo`] and [`crate::SharedState`] order accesses to the shared
-//! region, but they do not clean or invalidate a data cache. On a core whose
-//! data cache covers the region, correctness requires either the
+//! [`crate::Fifo`] order accesses to the shared region, but they do not
+//! clean or invalidate a data cache. On a core whose data cache covers the
+//! region, correctness requires either the
 //! non-cacheable mapping above or explicit maintenance through
 //! [`CrossBinBackend::clean_range`] / [`CrossBinBackend::invalidate_range`]
 //! around every shared access. Device/Strongly-ordered mappings break the
@@ -39,23 +37,31 @@
 //!
 //! # Boot protocol
 //!
-//! The distribution owns the boot sequencing (the H7 release of the M4 core,
-//! for example). The generated code calls, through the backend:
+//! Boot sequencing is **distribution-owned**. The runtime defines no
+//! ready/epoch handshake: a distribution must guarantee that every peer core
+//! it communicates with is booted and has its router IRQs enabled before it
+//! relies on IPC. The intended injection point is
+//! `CorePassBackend::post_init` (the RP2040 and STM32H7 distributions wake
+//! their secondary core there), or a distribution's own `RticPass`
+//! `main_injection`.
+//!
+//! Generated code calls, through the backend or directly, only:
 //!
 //! 1. [`CrossBinBackend::configure_shared_memory`] on every core, at the
 //!    start of its entry: MPU/MMU attributes are per-core, so each core maps
 //!    its own view of the regions before any shared access;
-//! 2. [`CrossBinBackend::init_shared`] on the owner core (the lowest global
-//!    core id), which also zeroes the per-task FIFO indices, before any peer
-//!    can observe the shared memory;
-//! 3. on every core, [`CrossBinBackend::mark_ready`] at the end of its
-//!    `post_init`; the router IRQs are enabled and prioritized by the core
-//!    pass's used-IRQ machinery, so no per-line arming step remains;
-//! 4. the target-ready gate in `cross_spawn`, which reports
-//!    `Err(Some(input))` while the target core is not ready: the generated
-//!    code checks [`crate::ReadyCache::is_ready`], a spawner-local cache of
-//!    the epoch that refreshes whenever a reset or reinitialization
-//!    invalidates it (M6-T2).
+//! 2. the generated `__rticx_xbin_init_fifos_core<N>`, which zeroes the
+//!    per-task FIFO indices a core produces, before that core's `post_init`.
+//!
+//! # Distribution contract
+//!
+//! A distribution owns the boot handshake. Relying on this is safe while the
+//! doorbell **latches** (the H7 HSEM status does) and the target FIFO lives
+//! in shared memory: a spawn that arrives before the consumer's router IRQ is
+//! enabled is delivered once the consumer starts servicing the latched
+//! doorbell. A distribution that does not handle a peer reset may consume
+//! stale FIFO state; detecting and recovering from resets is therefore a
+//! distribution responsibility, not a framework one.
 //!
 //! # Doorbell transport
 //!
@@ -66,8 +72,6 @@
 //! pair's doorbell word and triggers the target's router IRQ; the router pends
 //! the line dispatcher from the application's `ipc_dispatchers` pool through
 //! the software pass's pend function.
-
-use crate::SharedState;
 
 /// One dual's shared IPC pool, as seen through a `(source -> target)`
 /// direction.
@@ -145,48 +149,6 @@ pub trait CrossBinBackend {
     /// Normal, Non-cacheable, Shareable memory carrying the FIFOs of **both**
     /// directions (see the [module documentation](self)).
     fn ipc_region(&self, source: u32, target: u32) -> Option<IpcRegion>;
-
-    /// Returns the shared ready/epoch state.
-    ///
-    /// The default implementations of [`Self::init_shared`],
-    /// [`Self::mark_ready`], [`Self::is_ready`] and [`Self::epoch`] delegate
-    /// here.
-    fn shared_state(&self) -> &SharedState;
-
-    /// Initializes the shared ready/epoch state on the owner core, before any
-    /// peer can observe the shared memory.
-    ///
-    /// The default implementation calls [`SharedState::init`]: clear every
-    /// ready bit, bump the epoch and publish the magic. Region contents
-    /// (FIFO indices) are initialized separately by the generated code, which
-    /// is the only side that knows the per-task FIFO offsets.
-    fn init_shared(&self) {
-        self.shared_state().init();
-    }
-
-    /// Marks global core `core` ready and publishes its FIFO state.
-    ///
-    /// Called at the end of the core's `post_init`. The default implementation
-    /// delegates to [`SharedState::mark_ready`].
-    fn mark_ready(&self, core: u32) {
-        self.shared_state().mark_ready(core);
-    }
-
-    /// Returns whether global core `core` is ready.
-    ///
-    /// The default implementation delegates to [`SharedState::is_ready`];
-    /// spawn paths go through [`crate::ReadyCache`], which adds the cached
-    /// epoch and the refresh-on-reset check (M6-T2).
-    fn is_ready(&self, core: u32) -> bool {
-        self.shared_state().is_ready(core)
-    }
-
-    /// Returns the current shared epoch.
-    ///
-    /// The default implementation delegates to [`SharedState::epoch`].
-    fn epoch(&self) -> u32 {
-        self.shared_state().epoch()
-    }
 
     /// Configures every IPC pool as Normal, Non-cacheable, Shareable
     /// memory.

@@ -24,10 +24,9 @@
 //!     - `Ok(())`: the input is enqueued and the target router was notified;
 //!     - `Err(None)`: the input is enqueued, but the notification failed
 //!       (do not retry the enqueue; re-notify the target);
-//!     - `Err(Some(input))`: nothing was enqueued (the FIFO is full, the caller
-//!       does not run on the expected core, or the target has not marked itself
-//!       ready — including after a peer reset, which the spawner detects
-//!       through its cached epoch, M6-T2); retry later or raise `capacity`.
+//!     - `Err(Some(input))`: nothing was enqueued (the FIFO is full or the
+//!       caller does not run on the expected core); retry later or raise
+//!       `capacity`.
 //! - for every native `#[sw_task]` cross-binary receiver of this application
 //!   (M3-T2, M5.5, M6.5-T3):
 //!   - a hidden **FIFO view** helper like the sender's, but resolving the
@@ -67,24 +66,16 @@
 //!     of its entry (`MainInjectionPoint::BeforeInit`, before the user
 //!     `init`): MPU/MMU attributes are per-core, so each core maps its own
 //!     view of the IPC pools Normal, Non-cacheable, Shareable;
-//!   - `__rticx_xbin_init_shared` is generated for the application owning the
-//!     project's **owner core** (the lowest global core id, i.e. the boot
-//!     core) and runs `init_shared()` at `BeforePostInit`, before the owner's
-//!     `mark_ready`;
 //!   - `__rticx_xbin_init_fifos_core<N>` is generated for every local core
 //!     that produces cross-binary tasks and runs at `BeforePostInit`: it
 //!     zeroes the ring indices of the core's own FIFOs, so a topology whose
 //!     owner core is not an endpoint of a pool initializes correctly
-//!     (M6-T1). The producer is always an endpoint of its pool;
-//!   - `__rticx_xbin_mark_ready_core<N>` runs on every core at the end of its
-//!     `post_init` (`MainInjectionPoint::BeforeIdle`): it calls
-//!     `mark_ready(core)`. The router IRQs are enabled and prioritized by the
-//!     core pass's used-IRQ machinery through the generated router `#[task]`,
-//!     so no per-line arming step remains (M6.5-T4).
+//!     (M6-T1). The producer is always an endpoint of its pool.
 //!
-//!   Boot sequencing itself stays distribution-owned (for example the H7
-//!   release of the M4 core): the owner must run its init before peers rely
-//!   on the shared state.
+//!   Boot sequencing itself is distribution-owned (for example the H7
+//!   release of the M4 core), typically through
+//!   `CorePassBackend::post_init`: the distribution guarantees its peers are
+//!   up before IPC or the router interrupts are used.
 //!
 //! The enqueue happens inside `__rticx_interrupt_free`, the v1 sender-side
 //! lock: the transport itself is kept independent of the lock mechanism, so a
@@ -252,9 +243,6 @@ pub(crate) struct InitHooks {
 /// Per-core init plan of one application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HookPlan {
-    /// Local core index running `__rticx_xbin_init_shared`, when this
-    /// application owns the project's owner core.
-    owner_local: Option<u32>,
     /// Global core id of each local core index (`core_ids[local]`).
     global_ids: Vec<u32>,
     /// Local cores that produce at least one view task, running
@@ -281,30 +269,17 @@ impl HookPlan {
             }
             rticx_core::MainInjectionPoint::BeforePostInit => {
                 self.global_ids.get(core as usize)?;
-                let backend_expr = backend.backend();
-                let mut statements = TokenStream::new();
-                if self.owner_local == Some(core) {
-                    statements.extend(quote! {
-                        __rticx_xbin_init_shared(&#backend_expr);
-                    });
-                }
                 if self.fifo_locals.contains(&core) {
                     // Each FIFO's indices are zeroed by its producer core,
                     // before its `post_init` can spawn (M6-T1).
+                    let backend_expr = backend.backend();
                     let init_fn = format_ident!("__rticx_xbin_init_fifos_core{core}");
-                    statements.extend(quote! {
+                    Some(quote! {
                         #init_fn(&#backend_expr);
-                    });
+                    })
+                } else {
+                    None
                 }
-                (!statements.is_empty()).then_some(statements)
-            }
-            rticx_core::MainInjectionPoint::BeforeIdle => {
-                self.global_ids.get(core as usize)?;
-                let mark_ready_fn = format_ident!("__rticx_xbin_mark_ready_core{core}");
-                let backend_expr = backend.backend();
-                Some(quote! {
-                    #mark_ready_fn(&#backend_expr);
-                })
             }
             _ => None,
         }
@@ -879,34 +854,26 @@ fn local_pend_fn_ident(core: u32, cores: u32) -> Ident {
 }
 
 /// Generates the init hooks of one application (M3-T3, M6-T1): the per-core
-/// `__rticx_xbin_configure_shared_memory`, the owner's
-/// `__rticx_xbin_init_shared`, one `__rticx_xbin_init_fifos_core<N>` per
-/// producing core and the per-core `__rticx_xbin_mark_ready_core<N>`.
+/// `__rticx_xbin_configure_shared_memory` and one
+/// `__rticx_xbin_init_fifos_core<N>` per producing core.
 ///
 /// The returned [`HookPlan`] is stashed by the pass and consulted from
 /// [`rticx_core::RticPass::main_injection`] to wire the hooks into the
 /// generated entry functions. All hooks go through the distribution backend;
-/// no target-specific code is generated here.
+/// no target-specific code is generated here. Boot coordination between cores
+/// is distribution-owned and is not emitted here.
 pub(crate) fn generate_init_hooks(
     view: &SystemView,
     application: &AppEntry,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<InitHooks> {
     let rt_path = backend.rt_path();
-    let owner = owner_core(view);
-    let owner_local = owner.and_then(|owner| {
-        application
-            .core_ids
-            .iter()
-            .position(|&global| global == owner)
-            .map(|local| local as u32)
-    });
 
     // MPU/MMU attributes are per-core: every core configures its own view of
     // the pools before any shared access (before the user `init` runs).
     let configure_doc = "Configures this core's view of the IPC pools as Normal, Non-cacheable, \
          Shareable before any shared access (M3-T3).";
-    let mut items = Vec::with_capacity(application.core_ids.len() + 2);
+    let mut items = Vec::with_capacity(application.core_ids.len() + 1);
     items.push(syn::parse_quote! {
         #[doc = #configure_doc]
         #[doc(hidden)]
@@ -917,43 +884,6 @@ pub(crate) fn generate_init_hooks(
             __rticx_xbin_backend.configure_shared_memory();
         }
     });
-
-    for (local, &global) in application.core_ids.iter().enumerate() {
-        let mark_ready_doc = format!(
-            "Marks this core (global core {global}) ready at the end of its `post_init` (M3-T3). \
-             The router IRQs are enabled and prioritized by the core pass's used-IRQ machinery, so \
-             no per-line doorbell arming step remains (M6.5-T4)."
-        );
-        let mark_ready_fn = format_ident!("__rticx_xbin_mark_ready_core{local}");
-        items.push(syn::parse_quote! {
-            #[doc = #mark_ready_doc]
-            #[doc(hidden)]
-            #[allow(non_snake_case)]
-            fn #mark_ready_fn(__rticx_xbin_backend: &impl #rt_path::CrossBinBackend) {
-                __rticx_xbin_backend.mark_ready(#global);
-            }
-        });
-    }
-
-    if let Some(owner) = owner
-        && owner_local.is_some()
-    {
-        let init_doc = format!(
-            "Initializes the shared ready/epoch state on the owner core (global core {owner}); runs \
-             before the owner is marked ready (M3-T3). The per-task FIFO indices are zeroed by \
-             each FIFO's producer core, in its own `__rticx_xbin_init_fifos_core<N>` (M6-T1)."
-        );
-        items.push(syn::parse_quote! {
-            #[doc = #init_doc]
-            #[doc(hidden)]
-            #[allow(non_snake_case)]
-            fn __rticx_xbin_init_shared(
-                __rticx_xbin_backend: &impl #rt_path::CrossBinBackend,
-            ) {
-                __rticx_xbin_backend.init_shared();
-            }
-        });
-    }
 
     // Every core zeroes the FIFOs it produces, before its `post_init` can
     // spawn. The producer is always an endpoint of its region, so a topology
@@ -985,7 +915,6 @@ pub(crate) fn generate_init_hooks(
     Ok(InitHooks {
         items,
         plan: HookPlan {
-            owner_local,
             global_ids: application.core_ids.clone(),
             fifo_locals,
         },
@@ -1136,16 +1065,6 @@ fn generate_fifo_inits(
         });
     }
     Ok(blocks)
-}
-
-/// Returns the project's owner core: the lowest global core id, i.e. the boot
-/// core (CM7 on the H7 acceptance target).
-///
-/// The owner runs `init_shared` before the other cores rely on the shared
-/// memory. The distribution owns the boot sequencing that guarantees it.
-// TODO(M6): let a distribution or `rticx.toml` designate a different owner.
-fn owner_core(view: &SystemView) -> Option<u32> {
-    view.cores.iter().map(|core| core.global_id).min()
 }
 
 /// One receiver declaration resolved against the system view.
@@ -1485,8 +1404,7 @@ pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::R
 
 /// Generates the sender stub of one view task: the `pub struct <Task>;` the
 /// producer's source does not declare (M5.5), its FIFO view and its
-/// `cross_spawn` impl, including the cached-epoch target-ready gate
-/// (M6-T2).
+/// `cross_spawn` impl.
 fn generate_sender(
     view: &SystemView,
     task: &TaskEntry,
@@ -1528,9 +1446,8 @@ fn generate_sender(
          - `Ok(())`: the input is enqueued and the target router was notified;\n\
          - `Err(None)`: the input is enqueued, but the notification failed. Do **not** \
          retry the spawn; re-notify the target instead;\n\
-         - `Err(Some(input))`: nothing was enqueued (the FIFO is full, the caller does not \
-         run on global core {source}, or the target core {target_core} has not marked itself \
-         ready). Retry later or raise `capacity`.",
+         - `Err(Some(input))`: nothing was enqueued (the FIFO is full or the caller does not \
+         run on global core {source}). Retry later or raise `capacity`.",
         task.name
     );
     let stub_doc = format!(
@@ -1592,15 +1509,7 @@ fn generate_sender(
                     use #rt_path::CrossBinBackend as _;
 
                     const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
-                    const __RTICX_XBIN_TARGET_CORE: u32 = #target_core;
                     const __RTICX_XBIN_TASK_ID: u32 = #task_id;
-
-                    // Last shared epoch this spawner observed with the target
-                    // ready. A peer reset or a reinitialization moves the epoch
-                    // on, so the cache refreshes once and the spawn is rejected
-                    // until the target re-marks itself ready in the new epoch
-                    // (M6-T2).
-                    static __RTICX_XBIN_READY: #rt_path::ReadyCache = #rt_path::ReadyCache::new();
 
                     const _: () = assert!(
                         core::mem::size_of::<#input_ty>() == #elem_size,
@@ -1613,15 +1522,6 @@ fn generate_sender(
 
                     let __rticx_xbin_backend = #backend_expr;
                     if __rticx_xbin_backend.current_global_core_id() != __RTICX_XBIN_SOURCE_CORE {
-                        return Err(Some(input));
-                    }
-                    if !__RTICX_XBIN_READY.is_ready(
-                        __rticx_xbin_backend.shared_state(),
-                        __RTICX_XBIN_TARGET_CORE,
-                    ) {
-                        // The target has not marked itself ready yet, or it
-                        // reset without re-marking: return the input without
-                        // enqueueing (M6-T2).
                         return Err(Some(input));
                     }
 

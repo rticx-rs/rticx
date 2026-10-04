@@ -1,10 +1,9 @@
 //! Host tests for the mock cross-binary backend.
 //!
 //! Covers the pool table, the per-handle core identity, the pair doorbell
-//! message word, the ready/epoch defaults and the no-op cache hooks, plus the
-//! M2-T3 acceptance case: two threads spawn and drain through a raw `Fifo`
-//! placed in a mock pool, notified through the pair doorbell, and the M6-T2
-//! peer-reset recovery path (`ReadyCache` against a reset target).
+//! message word and the no-op cache hooks, plus the M2-T3 acceptance case:
+//! two threads spawn and drain through a raw `Fifo` placed in a mock pool,
+//! notified through the pair doorbell.
 
 use std::mem::size_of;
 use std::thread;
@@ -12,7 +11,7 @@ use std::time::Duration;
 
 use rticx_xbin_mock::{MockError, MockSystem};
 use rticx_xbin_rt::backend::CrossBinBackend;
-use rticx_xbin_rt::{CrossCoreMessage, FIFO_ALIGN, FIFO_HEADER, Fifo, ReadyCache};
+use rticx_xbin_rt::{CrossCoreMessage, FIFO_ALIGN, FIFO_HEADER, Fifo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,62 +154,6 @@ fn pair_doorbell_wakes_a_waiting_router() {
         source.doorbell_send(0, 1, 7).unwrap();
         waiter.join().unwrap();
     });
-}
-
-#[test]
-fn ready_and_epoch_delegate_to_the_shared_state() {
-    let system = MockSystem::new();
-    let core0 = system.backend(0);
-    let core1 = system.backend(1);
-
-    core0.init_shared();
-    assert_eq!(core0.epoch(), 1);
-    assert!(!core0.is_ready(1));
-
-    core1.mark_ready(1);
-    assert!(core0.is_ready(1));
-    assert_eq!(system.state().ready_mask(), 1 << 1);
-    assert!(system.state().is_ready_at(1, core0.epoch()));
-
-    core1.init_shared();
-    assert_eq!(core1.epoch(), 2);
-    assert_eq!(system.state().ready_mask(), 0);
-}
-
-/// The M6-T2 peer-reset recovery path through the mock: the spawner's cached
-/// epoch gate rejects spawn attempts while the peer is reset and recovers
-/// once the peer re-marks itself ready in the new epoch.
-#[test]
-fn ready_cache_gates_spawns_across_a_peer_reset() {
-    let system = MockSystem::new();
-    let producer = system.backend(0);
-    let consumer = system.backend(1);
-    let ready = ReadyCache::new();
-
-    // Boot: the owner publishes the shared state, then the target marks
-    // itself ready. The spawner's first check adopts the boot epoch.
-    producer.init_shared();
-    assert!(!ready.is_ready(producer.shared_state(), 1));
-    consumer.mark_ready(1);
-    assert!(ready.is_ready(producer.shared_state(), 1));
-
-    // Peer reset: the target clears its own bit and bumps the epoch before
-    // re-initializing, which makes the spawner's cached epoch stale.
-    let state = producer.shared_state();
-    state.clear_ready(1);
-    state.bump_epoch();
-    assert!(
-        !ready.is_ready(state, 1),
-        "the reset target rejects spawns until it re-marks ready"
-    );
-
-    // Recovery: the target re-marks ready and the next spawn attempt
-    // refreshes the cached epoch.
-    state.mark_ready(1);
-    assert!(
-        ready.is_ready(state, 1),
-        "the refresh recovers readiness after the reset"
-    );
 }
 
 #[test]

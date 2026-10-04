@@ -5,10 +5,11 @@ runs its own binary; cross-binary software-task spawns travel through a shared
 D2 SRAM3 pool with HSEM doorbells, reusing the RTICX task/dispatcher model of
 the multi-binary extension (`experiments/multibinary`).
 
-This is the M7 acceptance distribution: the Cortex-M7 initializes the shared
-region and releases the Cortex-M4 through `RCC_GCR.BOOT_C2`; both cores map the
-shared pool through the MPU and mark themselves ready in the shared state. The
-cross-binary transport is bound and generated, and the demo runs an M7↔M4
+This is the M7 acceptance distribution: boot sequencing is distribution-owned.
+The distribution's `post_init` hook clears the shared control area, releases the
+Cortex-M4 through `RCC_GCR.BOOT_C2` and then signals each core up through a
+distribution-owned boot flag; both cores map the shared pool through the MPU.
+The cross-binary transport is bound and generated, and the demo runs an M7↔M4
 software-task ping-pong through the generated `cross_spawn` stubs (M7-T2).
 
 ## Features
@@ -46,7 +47,7 @@ binding as the `h7-sram3` dual:
 
 | Offset | Contents |
 |---|---|
-| `+0x0000` | shared ready/epoch state (`rticx_xbin_rt::SharedState`) |
+| `+0x0000` | distribution-owned boot flag (peer-up handshake) |
 | `+0x0200` | one doorbell word per `(source, target)` direction |
 | `+0x1000` | the IPC pool: both directions of the dual, 4096-byte budget |
 
@@ -90,11 +91,11 @@ cargo xbin build --verify-elf
 The M7 prints on USART1 and the M4 on USART2:
 
 ```text
-[M7] boot; initializing shared IPC region and releasing the M4
-[M7] shared region ready, RCC_GCR.BOOT_C2 set; waiting for the M4
-[M4] released by RCC_GCR.BOOT_C2; mapping shared region and marking ready
-[M7] Cortex-M4 marked itself ready; starting the M7 -> M4 ping (M7-T2)
-[M4] shared region mapped, HSEM1 receive enabled, ready bit set (M7-T1)
+[M7] boot; initializing shared IPC region
+[M7] shared region ready; waiting for the M4 to come up
+[M4] released by RCC_GCR.BOOT_C2; mapping shared region
+[M7] Cortex-M4 up; starting the M7 -> M4 ping (M7-T2)
+[M4] shared region mapped, HSEM1 receive enabled; peer-up signalled (M7-T1)
 [M4] rx ping seq=1 value=0x00004d37
 [M7] rx pong seq=2 value=0x00004d38
 [M4] rx ping seq=3 value=0x00004d39

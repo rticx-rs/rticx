@@ -7,10 +7,6 @@
 //! - [`Fifo`] — the atomic SPSC ring placed at fixed addresses inside the
 //!   IPC pools, with its [`Producer`]/[`Consumer`] endpoints. See
 //!   [`fifo`] for the in-region image and the memory/ordering rules;
-//! - [`SharedState`] — the shared ready bitmap and epoch word used for boot
-//!   coordination and peer-reset detection, plus [`ReadyCache`], the
-//!   spawner-side cached-epoch check the generated `cross_spawn` gates on
-//!   (M6-T2). See [`state`] for the protocol;
 //! - [`Queue`] — the core-local SPSC queue behind the generated line ready
 //!   queues: the target's router produces task notifications, its line
 //!   dispatcher consumes them (M6.5-T3). It is the same queue type the
@@ -21,17 +17,20 @@
 //!   in-tree `rticx-xbin-mock` implements it for host tests. The doorbell
 //!   transport itself lives in the generated ring/read functions (M6.5), so
 //!   the trait carries no per-line doorbell methods.
+//!
+//! Boot coordination between cores is **distribution-owned**: the runtime
+//! defines no ready/epoch handshake. Each distribution guarantees that its
+//! peers are booted before interrupts/IPC are used, for example through
+//! `CorePassBackend::post_init` or its own pass injection points.
 
 #![no_std]
 
 pub mod backend;
 pub mod fifo;
-pub mod state;
 
 pub use backend::{CrossBinBackend, IpcRegion};
 pub use fifo::{Consumer, FIFO_ALIGN, FIFO_HEADER, FIFO_INDEX_STRIDE, Fifo, Producer};
 pub use rticx_spsc::Queue;
-pub use state::{MAX_CORES, ReadyCache, SharedState};
 
 /// Marker trait for data types that may travel through cross-core shared
 /// memory.

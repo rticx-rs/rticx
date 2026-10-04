@@ -474,20 +474,16 @@ fn receiver_fixture_expands_and_compiles() {
         "the receiver's shared resource was dropped: {expanded}"
     );
 
-    // The init hooks are wired into the generated entry function: the
-    // receiver is not the owner, so it only marks itself ready (M3-T3); no
+    // The configure init hook is wired into the generated entry function; the
+    // receiver produces no FIFO, so it has no FIFO initializer, and no
     // generated code arms doorbells (M6.5-T4).
     assert!(
-        expanded.contains("fn __rticx_xbin_mark_ready_core0"),
-        "the mark-ready hook is missing: {expanded}"
-    );
-    assert!(
         !expanded.contains("__rticx_xbin_init_shared"),
-        "a non-owner application must not initialize the shared state: {expanded}"
+        "the removed shared-state initializer must not be generated: {expanded}"
     );
     assert!(
-        expanded.contains("__rticx_xbin_mark_ready_core0 (& __rticx_xbin_backend ()) ;"),
-        "the mark-ready hook is not injected into the entry function: {expanded}"
+        !expanded.contains("__rticx_xbin_init_fifos_core0"),
+        "a pure receiver initializes no FIFO: {expanded}"
     );
     assert!(
         expanded.contains("__rticx_xbin_configure_shared_memory (& __rticx_xbin_backend ()) ;"),

@@ -42,7 +42,7 @@ Renode does **not** need to be rebuilt; any v1.16.x install works.
 * **Cores.** CPU0 = `cortex-m7` boots from flash bank 1 (`0x0800_0000`);
   CPU1 = `cortex-m4` starts halted with `VTOR = 0x0810_0000` and is released
   only when the M7 writes `RCC_GCR.BOOT_C2`. This is the boot handshake the
-  distribution's `CrossBinBackend`/`init_shared` sequencing relies on.
+  distribution's `post_init` boot release relies on.
 * **Execution.** `Machine SetSerialExecution True` keeps both cores
   deterministic (also used for race-free IPC tests).
 * **Shared memory.** AXI SRAM (`0x2400_0000`), SRAM1–3 (`0x3000_0000`,

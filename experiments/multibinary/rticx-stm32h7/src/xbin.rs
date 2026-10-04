@@ -7,16 +7,20 @@
 //!   is reported by the compile-time capability binding
 //!   (`rticx-stm32h7-bindings`). The M7 sees it at `0x3004_0000` and the M4
 //!   through the hardware alias `0x1004_0000`; the FIFO area is at `+ 0x1000`,
-//!   the ready/epoch state at `+ 0x0000` and the doorbell words at `+ 0x0200`.
+//!   the boot-flag word at `+ 0x0000` and the doorbell words at `+ 0x0200`.
 //!   MPU region 15 (M7) / 7 (M4) maps the whole 32 KiB block Normal,
 //!   Non-cacheable, Shareable, so the runtime's atomics are correct on silicon;
 //!   Renode does not model the D-cache, so a green run validates the transport,
 //!   not the cache policy. All HSEM/RCC register access goes through the
 //!   `stm32h7` PAC (selected by the `cm7`/`cm4` feature), not raw addresses.
-//! - **Boot release.** The M7 owns the shared state: [`CrossBinBackend::init_shared`]
-//!   initializes it and *then* writes `RCC_GCR.BOOT_C2`, releasing the M4 from
-//!   hold-boot. The M4 boots from flash bank 2 once released and only marks
-//!   itself ready.
+//! - **Boot sequencing (distribution-owned).** The framework does not define a
+//!   ready/epoch protocol. The distribution's `post_init` hook runs
+//!   [`boot_release`] on the Cortex-M7 (the project owner): it clears the
+//!   doorbell words and the boot-flag word and *then* writes `RCC_GCR.BOOT_C2`,
+//!   releasing the M4 from hold-boot. Every core subsequently calls
+//!   [`signal_self_up`] to set its own bit in the boot-flag word; [`peer_is_up`]
+//!   is the demo's peer handshake, not a framework guarantee. The M4 boots from
+//!   flash bank 2 once released.
 //! - **Doorbells.** The generated ring/read functions call [`doorbell_send`] /
 //!   [`doorbell_take`]: a per-`(source, target)` shared atomic word carries the
 //!   task id and the HSEM block raises the target's interrupt (`HSEM0` IRQ 125
@@ -31,7 +35,6 @@ use core::sync::atomic::Ordering;
 
 use portable_atomic::AtomicU32;
 use rticx_stm32h7_bindings as bindings;
-use rticx_xbin_rt::SharedState;
 use rticx_xbin_rt::backend::{CrossBinBackend, IpcRegion};
 
 /// `stm32h7` PAC device module for this binary's core, selected by the distro
@@ -110,6 +113,60 @@ const fn rx_sem_of(target: u32) -> u32 {
     } else {
         bindings::RX_SEM_CM4
     }
+}
+
+/// The other endpoint of the `{M7, M4}` dual.
+#[inline]
+const fn peer_of(core: u32) -> u32 {
+    if core == bindings::PHYSICAL_CM7 {
+        bindings::PHYSICAL_CM4
+    } else {
+        bindings::PHYSICAL_CM7
+    }
+}
+
+/// The distribution-owned boot-flag word: bit `p` is set once physical core `p`
+/// has signalled that it is up.
+///
+/// This is the demo's peer-up handshake, not a framework protocol. It lives in
+/// the reserved SRAM3 control area so both cores can observe each other's boot
+/// progress; the framework no longer provides a ready/epoch state.
+#[inline]
+fn up_flag() -> &'static AtomicU32 {
+    // SAFETY: the word lives in the reserved SRAM3 control area, is 4-byte
+    // aligned, is never overlapped by an allocated section (the linker scripts
+    // keep SRAM3 out of MEMORY) and is shared between the two cores through
+    // their respective views of SRAM3.
+    unsafe { &*((SRAM3_BASE + bindings::BOOT_FLAG_OFFSET) as *const AtomicU32) }
+}
+
+/// Releases the peer and arms the shared control area (Cortex-M7 only).
+///
+/// Called from the distribution's `post_init` on the project owner. It clears
+/// the doorbell words and the boot-flag word, then releases the Cortex-M4 from
+/// hold-boot, so the peer can never observe a half-initialized control area.
+pub fn boot_release() {
+    clear_doorbells();
+    up_flag().store(0, Ordering::Relaxed);
+    release_secondary_core();
+}
+
+/// Marks this core as up in the distribution-owned boot-flag word.
+///
+/// Called from the distribution's `post_init` on every core, once the control
+/// area is configured and this core's doorbell router is armed.
+pub fn signal_self_up() {
+    up_flag().fetch_or(1 << CURRENT_CORE, Ordering::Release);
+}
+
+/// Returns whether physical core `physical` has signalled [`signal_self_up`].
+pub fn core_is_up(physical: u32) -> bool {
+    up_flag().load(Ordering::Acquire) & (1 << physical) != 0
+}
+
+/// Returns whether this core's peer has signalled [`signal_self_up`].
+pub fn peer_is_up() -> bool {
+    core_is_up(peer_of(CURRENT_CORE))
 }
 
 /// Returns the shared atomic word of the `(source -> target)` doorbell.
@@ -225,8 +282,8 @@ fn configure_mpu() {
     }
 }
 
-/// Reinitializes the doorbell words (owner core only; shared state is reset
-/// separately).
+/// Reinitializes the doorbell words (owner core only; the boot-flag word is
+/// cleared separately by [`boot_release`]).
 fn clear_doorbells() {
     for source in 0..bindings::MAX_PHYSICAL_CORES as u32 {
         for target in 0..bindings::MAX_PHYSICAL_CORES as u32 {
@@ -283,23 +340,6 @@ impl CrossBinBackend for Backend {
             (view(target) + bindings::POOL_OFFSET) as usize,
             bindings::POOL_BUDGET as usize,
         ))
-    }
-
-    fn shared_state(&self) -> &SharedState {
-        // SAFETY: the ready/epoch state lives in the reserved SRAM3 control
-        // area, is 4-byte aligned, is never overlapped by an allocated section
-        // (the linker scripts keep SRAM3 out of MEMORY) and is shared between
-        // the two cores through their respective views of SRAM3.
-        unsafe { &*((SRAM3_BASE + bindings::SHARED_STATE_OFFSET) as *const SharedState) }
-    }
-
-    fn init_shared(&self) {
-        // Owner boot sequence: publish the ready/epoch state, clear the
-        // doorbell words, *then* release the peer so it can never observe a
-        // half-initialized control area.
-        self.shared_state().init();
-        clear_doorbells();
-        release_secondary_core();
     }
 
     fn configure_shared_memory(&self) {

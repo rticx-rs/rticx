@@ -1,8 +1,8 @@
 //! Shared STM32H7 dual-core geometry for the `rticx-stm32h7` distribution.
 //!
 //! The distribution and its proc-macro crate must agree, to the byte, on where
-//! the cross-binary IPC pool, the shared ready/epoch state and the doorbell
-//! words live. The distribution (`rticx-stm32h7`) implements the runtime half
+//! the cross-binary IPC pool, the boot-flag word and the doorbell words live.
+//! The distribution (`rticx-stm32h7`) implements the runtime half
 //! (`rticx_xbin_rt::CrossBinBackend`); the proc-macro crate
 //! (`rticx-stm32h7-macro`) reports the same pool through the compile-time
 //! capability binding (`XbinPassBackend::ipc_pools`). Neither can depend on the
@@ -19,7 +19,7 @@
 //! Cortex-M7 and its `0x1004_0000` alias from the Cortex-M4):
 //!
 //! ```text
-//! SRAM3 + 0x0000   shared ready/epoch state (`rticx_xbin_rt::SharedState`)
+//! SRAM3 + 0x0000   distribution-owned boot flag (peer-up handshake)
 //! SRAM3 + 0x0200   doorbell words, one per `(source, target)` direction
 //! SRAM3 + 0x1000   IPC pool, both directions, `POOL_BUDGET` bytes
 //! ```
@@ -46,8 +46,11 @@ pub const SRAM3_FROM_CM7: u32 = 0x3004_0000;
 /// D2 SRAM3 as seen from the Cortex-M4 (hardware alias of the same memory).
 pub const SRAM3_FROM_CM4: u32 = 0x1004_0000;
 
-/// Offset of the shared ready/epoch state inside SRAM3.
-pub const SHARED_STATE_OFFSET: u32 = 0x0000;
+/// Offset of the distribution-owned boot-flag word inside SRAM3.
+///
+/// Bit `p` is set once physical core `p` has booted; it is the demo's peer-up
+/// handshake, not a framework protocol.
+pub const BOOT_FLAG_OFFSET: u32 = 0x0000;
 /// Offset of the doorbell words inside SRAM3.
 pub const DOORBELL_OFFSET: u32 = 0x0200;
 /// Offset of the IPC pool inside SRAM3.
@@ -138,7 +141,7 @@ mod tests {
     #[test]
     fn control_area_precedes_the_pool() {
         const { assert!(DOORBELL_OFFSET + MAX_PHYSICAL_CORES as u32 * 4 <= POOL_OFFSET) };
-        const { assert!(SHARED_STATE_OFFSET + 12 <= DOORBELL_OFFSET) };
+        const { assert!(BOOT_FLAG_OFFSET + 4 <= DOORBELL_OFFSET) };
     }
 
     /// The pool fits the reserved SRAM3 block (32 KiB).

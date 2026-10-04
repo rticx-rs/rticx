@@ -212,8 +212,8 @@ pass; on each core its entries must be unique and disjoint from that core's
 software `dispatchers` entries.
 
 At runtime a spawn travels through the M6.5 dispatch chain: `cross_spawn`
-first rejects a target that is not ready (M6-T2, see below), then enqueues the
-input in the task's FIFO and calls the generated per-pair ring function, which
+checks the caller's core, enqueues the input in the task's FIFO and calls the
+generated per-pair ring function, which
 publishes the task id on the pair's doorbell word and triggers the target's
 **doorbell router**; the router enqueues the task in its line's ready queue and
 pends the line's **line dispatcher** from the pool, whose `exec` drains the
@@ -228,8 +228,9 @@ pass also rejects a cross receiver that shares its priority with a core-local
 `#[sw_task]`/`#[async_task]` or with an in-app `spawn_by` task of the
 receiving application, naming the conflicting task. Receivers from the same
 producer may share a line. The FIFO indices of each task are initialized by
-its producer core before that core's `post_init`, so the boot order and the
-owner core's location do not matter.
+its producer core before that core's `post_init`, so a topology whose owner
+core is not an endpoint of a pool still initializes correctly; releasing and
+waking the cores is the distribution's responsibility (section 7.3).
 
 Producer binary (declares nothing; the pass generates the stub from the
 synced system view):
@@ -266,25 +267,7 @@ error semantics match the single-binary `cross_spawn`:
 |---|---|
 | `Ok(())` | input enqueued, target doorbell rung |
 | `Err(None)` | input enqueued, but the doorbell could not be rung; re-notify the target |
-| `Err(Some(input))` | nothing enqueued (FIFO full, wrong core, target not ready); retry later or raise `capacity` |
-
-### Ready state and peer reset
-
-A spawn is rejected with `Err(Some(input))` while the target core has not
-marked itself ready — including after the target resets: a resetting peer
-clears its own ready bit and bumps the shared epoch before re-initializing, so
-the spawner notices that its cached epoch is stale. The generated
-`cross_spawn` keeps one `ReadyCache` per task: while the epoch is unchanged,
-the readiness check costs two atomic loads (the target's ready bit and the
-epoch); after a reset the cache refreshes the epoch on the next attempt and
-only lets the spawn through once the target has re-marked itself ready in the
-new epoch.
-
-Inputs enqueued before a target reset are not lost: they stay in the FIFO and
-the next router run after recovery drains them, because every line dispatcher
-drains its FIFOs until empty. A reset of a **producer** core discards that
-core's pending inputs, since its boot sequence re-zeroes the FIFO indices it
-owns.
+| `Err(Some(input))` | nothing enqueued (FIFO full or wrong core); retry later or raise `capacity` |
 
 ### `#[app]` arguments
 
@@ -536,15 +519,14 @@ From the view, the pass generated inside the `#[app]` modules:
   `#[task(priority = 3, task_trait = RticSwTask, init = generated)]`, the FIFO
   view, the `SpawnInput: CrossCoreMessage` assertion, the `EncryptTask` line
   dispatcher bound to `XBIN_IPC_LINE_0`, and the `0->1` doorbell router;
-- in both: the ready/epoch entry hooks (`configure_shared_memory` on every
-  core, `init_shared` on the owner core 0, `init_fifos` on core 0 as the
-  producer, `mark_ready` on every core) and the `__RTICX_XBIN_TOPOLOGY_HASH`
-  freshness anchor.
+- in both: the entry hooks (`configure_shared_memory` on every core and
+  `init_fifos` on core 0 as the producer, with the distribution owning the boot
+  handshake) and the `__RTICX_XBIN_TOPOLOGY_HASH` freshness anchor.
 
 **Step 7 — run it.** `cargo xbin build` compiles the host binaries but does
 not run them. The end-to-end behaviour (spawn → ring function → router →
-line dispatcher → `exec`, backpressure and the ready/epoch path) is driven by
-the in-tree harness, which expands both applications into one process over a
+line dispatcher → `exec`, backpressure) is driven by the in-tree harness, which
+expands both applications into one process over a
 shared mock system. Back in `experiments/multibinary/`:
 
 ```bash
@@ -674,26 +656,24 @@ the runtime harnesses exercise the generated code (section 7.6). The
 out-of-tree STM32H7 acceptance demo (M7) is the reference for a real
 M7+M4/Renode setup.
 
-### 7.3 Expected boot order and readiness
+### 7.3 Expected boot order
 
-Boot sequencing is **distribution-owned**; the generated code only relies on
-the ready/epoch protocol:
+Boot sequencing is **distribution-owned**; the generated code only configures
+shared memory and zeroes the FIFOs each core produces:
 
 1. the distribution releases the cores (H7: the CM7 initializes shared memory
-   and then releases the CM4 from reset);
-2. the **owner core** — the lowest global core id — runs
-   `__rticx_xbin_init_shared`: `init_shared()` sets the magic word, bumps the
-   epoch and clears every ready bit;
-3. **every core** runs `__rticx_xbin_configure_shared_memory` before its user
+   and then releases the CM4 from reset, from the distribution's `post_init`);
+2. **every core** runs `__rticx_xbin_configure_shared_memory` before its user
    `init`, and every core that produces cross-binary tasks zeroes the ring
    indices of exactly the FIFOs it produces at `BeforePostInit`, before its
    `post_init` can spawn;
-4. at the end of its `post_init` (`BeforeIdle`) every core calls
-   `mark_ready(core)`;
-5. a producer that spawns early gets `Err(Some(input))` until the target has
-   marked itself ready, so boot order does not matter. After a peer reset the
-   same protocol re-synchronizes the producers (section 5, "Ready state and
-   peer reset"; [architecture §8](architecture.md#8-boot-readyepoch-and-reset)).
+3. the distribution guarantees its peers are up before IPC or the router
+   interrupts are relied on. Spawning before the consumer's router IRQ is
+   enabled is safe while the doorbell latches (the H7 HSEM status does) and the
+   FIFO lives in shared memory; otherwise the distribution must order the boot
+   itself. Handling a reset is likewise a distribution responsibility, not a
+   framework one
+   ([architecture §8](architecture.md#8-boot-sequencing-distribution-owned-and-reset)).
 
 ### 7.4 Cache and MPU checklist
 
@@ -821,7 +801,7 @@ build instead of corrupting IPC at runtime.
   behaviour; from `experiments/multibinary/`:
 
   ```bash
-  cargo test -p rticx-xbin-pass --test e2e_runtime    # two-app spawn/dispatch/ready-epoch
+  cargo test -p rticx-xbin-pass --test e2e_runtime    # two-app spawn/dispatch
   cargo test -p rticx-xbin-pass --test priority_lines # build-phase priority-line errors
   cargo test -p rticx-xbin-driver --test e2e          # `cargo xbin build` over fixtures/e2e
   cargo test -p rticx-xbin-driver --test three_app    # multi-source fixture
@@ -898,7 +878,6 @@ host fixtures in section 7.6 cannot reproduce them.
 |---|---|---|
 | inputs arrive corrupted, or a receiver sees a stale/zeroed value | pool not cache-coherent: cacheable mapping without maintenance, or wrong base alias | map the pool Normal, Non-cacheable, Shareable; reconcile the capability binding's `base_local`/`base_peer` with the MPU view; see section 7.4 |
 | a hard fault or bus error on the first spawn | pool in Device/Strongly-ordered memory (exclusive atomics invalid), or the MPU denies access to one core | map Normal memory and grant both cores the MPU region |
-| `cross_spawn` always returns `Err(Some(input))` although the target booted | target never ran `mark_ready` (owner `init_shared` missing, boot released the core but its entry did not run), or its ready bit is not in the shared pool | check the generated init hooks and the distribution's boot release; inspect `system.json`/the ready bitmap |
 | `Ok(())` but the receiver's `exec` never runs | router or dispatcher IRQ not enabled/mapped, or `ipc_dispatchers` order does not match the view's ascending `(source, priority)` lines | map every pool entry and pair IRQ in the distribution; re-run `cargo xbin sync` and compare `doorbells`/`line` with `ipc_dispatchers` |
 | FIFO stays full while the receiver is idle | dispatcher bound to a line whose IRQ never fires; router read the id but the pend is lost | same IRQ mapping check as above; duplicate notifications are harmless (the dispatcher drains until empty) |
 | `Err(None)` repeatedly | the input is enqueued but the doorbell notification fails (IRQ masked, doorbell word not shareable) | fix the pair IRQ/word mapping; the enqueued input is drained by the next successful notification |
@@ -907,6 +886,6 @@ Every generated application embeds the `__RTICX_XBIN_TOPOLOGY_HASH` it was
 built from and `include_str!`s the system view, so rustc's dep-info rebuilds
 the application when `target/rticx-xbin/system.json` changes.
 
-Runtime semantics are covered above: a not-ready target (including after a
-peer reset) returns `Err(Some(input))` without enqueueing, and a failed
-doorbell ring returns `Err(None)` with the input already enqueued (M6-T2).
+Runtime semantics are covered above: a full FIFO or a caller on the wrong core
+returns `Err(Some(input))` without enqueueing, and a failed doorbell ring
+returns `Err(None)` with the input already enqueued.
