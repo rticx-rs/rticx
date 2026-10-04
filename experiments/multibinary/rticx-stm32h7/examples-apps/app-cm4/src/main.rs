@@ -35,10 +35,6 @@ pub mod app {
     use stm32_hal2::{clocks::Clocks, pac, usart::Usart};
 
     /// Cross-binary hops the demo runs before it stops; see the M7 side.
-    ///
-    /// `allow(dead_code)`: during the phase-1 metadata check the receiver is
-    /// not yet a task, so the only user of the constant is dead code.
-    #[allow(dead_code)]
     const PING_PONG_LIMIT: u32 = 4;
 
     /// Console shared (under the SRP lock) by `init`, `PingTask` and `Idle`.
@@ -48,7 +44,6 @@ pub mod app {
     }
 
     /// Cross-binary receiver: the M7 (global core 0) spawns a ping here.
-    #[allow(dead_code)]
     #[sw_task(priority = 3, capacity = 2, spawn_by = 0, shared = [console])]
     struct PingTask;
 

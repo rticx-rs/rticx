@@ -10,7 +10,11 @@
 //!   (physical core id and reachable IPC pools, M6.9-T2). The driver
 //!   (`cargo xbin`) sets the variable for the
 //!   `cargo check` invocation it runs per application, so the manifest is
-//!   always written by the application's own macro expansion (M1-T2);
+//!   always written by the application's own macro expansion (M1-T2). The
+//!   pass then **terminates the compilation**: phase 1 does not parse,
+//!   analyze or type-check the application, because RTICX allows task bodies
+//!   in modules the `#[app]` macro cannot see and the real, typed code is
+//!   generated and checked in phase 2;
 //! - **codegen mode** (phase 2): it reads the driver-generated `system.json`
 //!   (from `RTICX_XBIN_SYSTEM`, or the default
 //!   `<project root>/target/rticx-xbin/system.json`), filters it by this
@@ -55,9 +59,10 @@
 //! their generated stubs and every application needs its init hooks (M5.5).
 //!
 //! Metadata mode wins when both environments are configured, so the
-//! `cargo check` runs of `cargo xbin sync` never generate code. Code
-//! generation needs a distribution backend ([`XbinPassBackend`]): a
-//! distribution binds it with [`XbinPass::with_backend`].
+//! `cargo check` runs of `cargo xbin sync` never generate code and end right
+//! after the manifest is on disk. Code generation needs a distribution backend
+//! ([`XbinPassBackend`]): a distribution binds it with
+//! [`XbinPass::with_backend`].
 //!
 //! The pass is bound **before** `rticx-sw-pass` and requires the
 //! distribution's `swtasks` feature: the software pass emits the generated
@@ -87,7 +92,6 @@ mod binding;
 mod codegen;
 mod parse;
 mod priority;
-mod shim;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -110,7 +114,6 @@ use crate::parse::{
     strip_receiver_tasks, validate_ipc_dispatchers,
 };
 use crate::priority::validate_priority_lines;
-use crate::shim::generate_sender_shims;
 
 /// Re-export of the pass trait, so that distributions and fixtures binding
 /// [`XbinPass`] need not depend on `rticx-core` directly.
@@ -165,6 +168,13 @@ struct MetaMode {
     package: Option<String>,
     /// `CARGO_BIN_NAME` of the application being compiled.
     target: Option<String>,
+    /// Whether to terminate the compiler once the manifest is written.
+    ///
+    /// Set for [`XbinPass::from_env`] — the real `cargo check` of
+    /// `cargo xbin sync` only needs the macro to run, and phase 1 must not
+    /// type-check the application. Cleared by [`XbinPass::with_manifest`] so
+    /// tests and tooling can keep driving the pass in-process.
+    halt: bool,
 }
 
 /// Codegen-mode configuration resolved at pass construction.
@@ -192,7 +202,9 @@ impl std::fmt::Debug for XbinPass {
 impl XbinPass {
     /// Creates the pass, detecting its mode from the environment:
     ///
-    /// - [`META_OUT_ENV`] set: **metadata mode** (phase 1);
+    /// - [`META_OUT_ENV`] set: **metadata mode** (phase 1). The pass writes
+    ///   the manifest and then terminates the compiler process, so the
+    ///   application is never parsed, analyzed or type-checked;
     /// - otherwise [`SYSTEM_ENV`] set, or a `rticx.toml` discovered above
     ///   `CARGO_MANIFEST_DIR`: **codegen mode** (phase 2). The view is loaded
     ///   for every application listed in it; a missing file is the documented
@@ -213,6 +225,7 @@ impl XbinPass {
                     out_dir,
                     package: non_empty_env("CARGO_PKG_NAME"),
                     target: non_empty_env("CARGO_BIN_NAME"),
+                    halt: true,
                 }),
                 system: None,
                 backend: None,
@@ -240,6 +253,11 @@ impl XbinPass {
     /// Creates a metadata-mode pass with an explicit output directory,
     /// package and target (used by tests and tooling that drive the pass
     /// directly).
+    ///
+    /// Unlike [`XbinPass::from_env`], this constructor never terminates the
+    /// compiler: [`RticPass::run_pass`] writes the manifest and returns the
+    /// stripped module, so callers stay in-process (the real `cargo xbin sync`
+    /// path ends the compilation after the manifest is written).
     pub fn with_manifest(
         out_dir: impl Into<PathBuf>,
         package: impl Into<String>,
@@ -250,6 +268,7 @@ impl XbinPass {
                 out_dir: out_dir.into(),
                 package: Some(package.into()),
                 target: Some(target.into()),
+                halt: false,
             }),
             system: None,
             backend: None,
@@ -340,18 +359,21 @@ impl RticPass for XbinPass {
             write_manifest(meta, &manifest)?;
 
             // Metadata mode does not run the software pass: strip the parsed
-            // cross-receiver attributes so the emitted module only keeps the
+            // cross-receiver attributes so the returned module only keeps the
             // struct and its `impl RticSwTask` block; the manifest already
-            // recorded the task.
+            // recorded the task. The stripped module is what
+            // `with_manifest`-driven tests inspect; the `from_env` path ends
+            // the compilation below before anything consumes it.
             strip_receiver_tasks(&mut app_mod, &decls.receivers);
 
-            // M7-T2: the real sender stubs are generated in phase 2 from the
-            // synced view, which does not exist yet. Emit permissive shims for
-            // the `Task::cross_spawn` targets this source mentions so the
-            // metadata `cargo check` type-checks; phase 2 replaces them with
-            // the typed, view-derived stubs.
-            let shims = generate_sender_shims(&app_mod);
-            append_items(&mut app_mod, shims);
+            // The manifest is all phase 1 needs. Terminate the compilation so
+            // the core pass never parses, analyzes or type-checks the
+            // application: RTICX allows task bodies in modules the `#[app]`
+            // macro cannot see, and the real, typed code is generated and
+            // checked in phase 2.
+            if meta.halt {
+                halt_compilation();
+            }
         }
 
         if let Some(system) = &self.system {
@@ -633,6 +655,21 @@ fn write_manifest(meta: &MetaMode, manifest: &AppManifest) -> syn::Result<()> {
             path.display()
         ))
     })
+}
+
+/// Terminates the metadata `cargo check` once `<target>.xbin.json` is on disk.
+///
+/// `cargo xbin sync` only needs the `#[app]` macro to run and write this
+/// application's part of the system view. Everything rustc would do after the
+/// pass — the core parse, analysis, code generation and the type-check of the
+/// application — is neither needed nor meaningful in phase 1: RTICX allows task
+/// bodies to live in modules the `#[app]` macro cannot see. Phase 2 generates
+/// the typed code from the synced view and is where all checking happens.
+///
+/// Exiting with success is deliberate: the metadata `cargo check` is a vessel
+/// for the macro side effect, not a correctness gate.
+fn halt_compilation() -> ! {
+    std::process::exit(0);
 }
 
 /// Deterministic, proc-macro-host-independent hash of the macro arguments and

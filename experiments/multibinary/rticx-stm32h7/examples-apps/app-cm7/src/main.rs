@@ -38,10 +38,6 @@ pub mod app {
 
     /// Cross-binary hops the demo runs before it stops; the ping-pong
     /// alternates M7 -> M4 -> M7 ..., so four hops show both directions twice.
-    ///
-    /// `allow(dead_code)`: during the phase-1 metadata check the receiver is
-    /// not yet a task, so the only user of the constant is dead code.
-    #[allow(dead_code)]
     const PING_PONG_LIMIT: u32 = 4;
 
     /// Console shared (under the SRP lock) by `init`, `PongTask` and `Idle`.
@@ -53,7 +49,6 @@ pub mod app {
     /// Cross-binary receiver: the M4 (global core 1) spawns a pong here. The
     /// M7 source never declares the `PingTask` sender stub; the cross-binary
     /// pass generates it from the synced system view.
-    #[allow(dead_code)]
     #[sw_task(priority = 3, capacity = 2, spawn_by = 1, shared = [console])]
     struct PongTask;
 

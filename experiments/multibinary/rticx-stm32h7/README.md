@@ -113,9 +113,9 @@ that run the receiver tasks.
 - Async cross-binary tasks are out of scope (the extension's v1 scope).
 - Renode models neither the M7 D-cache nor clock gating; the MPU configuration
   is verified statically, not simulated.
-- Phase 1's metadata `cargo check` sees a permissive shim of a sender stub
-  instead of the real one; the typed stub is checked at `cargo xbin build`
-  (M7-T2).
+- Phase 1 (`cargo xbin sync`) does not type-check the applications: the pass
+  terminates the compilation right after writing its manifest, and the typed
+  sender stubs are generated and checked at `cargo xbin build` (M7-T2).
 
 ## License
 

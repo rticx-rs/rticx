@@ -255,11 +255,12 @@ generated `ipc-types` crate as a dependency. A generated stub name colliding
 with a user item is a dedicated compile error.
 
 Because the real stub only exists once `system.json` does, phase 1
-(`cargo xbin sync`) cannot type-check a `cross_spawn` call against it. Metadata
-mode therefore treats the call with a permissive shim (`pub struct <Task>;`
-plus a generic `cross_spawn`); `cargo xbin build` replaces it with the typed,
-view-derived stub, so a misspelled task or a wrong input type is still a hard
-build error. The error semantics match the single-binary `cross_spawn`:
+(`cargo xbin sync`) does not type-check the application at all: after writing
+its manifest, metadata mode terminates the compiler, so a `cross_spawn` call —
+and any external task body the `#[app]` macro cannot see — is accepted as-is.
+`cargo xbin build` generates the typed, view-derived stub from the synced view,
+so a misspelled task or a wrong input type is still a hard build error. The
+error semantics match the single-binary `cross_spawn`:
 
 | Result | Meaning |
 |---|---|

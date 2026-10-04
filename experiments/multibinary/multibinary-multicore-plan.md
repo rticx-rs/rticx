@@ -10,7 +10,8 @@ verification, pool-panel visualization, docs and fixtures), **M7-T1**
 (cross-binary M7↔M4 ping-pong under Renode) complete.
 Remaining work: **M7-T3** (extraction), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-04 (M7-T2; Renode cross-binary ping-pong demo).
+**Last updated:** 2026-10-04 (M7-T2; Renode demo; phase 1 halts instead of
+shimming sender stubs).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
@@ -195,7 +196,6 @@ the root generation.
 | | `hash.rs` | Deterministic FNV-1a 64-bit hash (source/layout/topology) |
 | `rticx-xbin-pass` | `lib.rs` | `XbinPass`: mode detection (`RTICX_XBIN_META_OUT` / `RTICX_XBIN_SYSTEM`), view load, pass orchestration |
 | | `parse.rs` | `#[app]` args (`external_cores`, `ipc_dispatchers`; reads `core_ids`), native `#[sw_task]` receiver extraction + `spawn_by` resolution, receiver injection/strip |
-| | `shim.rs` | Metadata-mode (phase-1) permissive sender shims for `Task::cross_spawn` targets the source mentions, so `cargo xbin sync`'s `cargo check` type-checks before `system.json` exists (M7-T2) |
 | | `codegen.rs` | Sender stubs, receiver FIFO views, line dispatchers, doorbell routers, ring/read functions, init hooks, freshness anchors, `XbinPassBackend` |
 | | `priority.rs` | Build-phase priority-line validation over raw sw/async declarations + view receivers |
 | `rticx-xbin-rt` | `fifo.rs` | Atomic SPSC ring (`Fifo`), producer/consumer split, `view_at` placement |
@@ -409,13 +409,14 @@ Producer binary (no declaration; phase 2 generates the stub from `system.json`):
 EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
 ```
 
-> **Metadata-mode shim (M7-T2).** Phase 1's `cargo check` runs before
-> `system.json` exists, so it cannot generate the real stub. Metadata mode emits
-> a permissive shim (`pub struct <Task>;` plus a generic `cross_spawn`) for every
-> `Task::cross_spawn` target the source mentions, only so the check
-> type-checks. Phase 2 never emits the shim; it generates the typed,
-> view-derived stub, so a missing or misspelled task (or a wrong input type) is
-> still a hard `cargo xbin build` / `cargo build` error.
+> **Phase 1 never type-checks the call (M7-T2).** Phase 1's `cargo check` runs
+> before `system.json` exists, so the real stub cannot be generated yet. Metadata
+> mode therefore writes its manifest and then **terminates the compilation**: the
+> application is not parsed, analyzed, code-generated or type-checked, so a
+> producer source that calls a phase-2-only stub (and any external task body the
+> `#[app]` macro cannot see) is accepted as-is. Phase 2 generates the typed,
+> view-derived stub from the synced view, so a missing or misspelled task (or a
+> wrong input type) is still a hard `cargo xbin build` / `cargo build` error.
 
 - Cross-binary receivers are **ordinary native software tasks**: a `#[sw_task]`
   struct plus `impl RticSwTask` with `SpawnInput`. There are no xbin-specific
@@ -473,7 +474,13 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
      priorities, capacities, and the per-local-core distro capability binding
      (physical core id + IPC pools; M6.9-T2). There are no sender declarations:
      the driver infers each task's single producer application from the
-     receivers' `spawn_by`.
+     receivers' `spawn_by`;
+   - the pass then terminates the compiler: the metadata `cargo check` is a
+     vessel for the macro side effect, not a correctness gate. The application
+     is never parsed, analyzed, code-generated or type-checked in phase 1 —
+     RTICX allows task bodies in modules the `#[app]` macro cannot see, and a
+     producer source may call a phase-2-only sender stub. All checking happens
+     in phase 2 from the synced view.
 3. Parse `ipc-types.toml`; compute canonical layout; validate the type subset.
 4. Merge manifests and validate:
    - every receiver's `spawn_by` names a single existing producer in another
@@ -997,10 +1004,12 @@ distro may use them internally, but no new framework mechanism).
       `[M7] rx pong seq=2` / `[M7] rx pong seq=4`, then
       `[M7] cross-binary ping-pong complete after 4 hops (M7-T2)`. The remaining
       work was making the phase-1 metadata `cargo check` accept a source that
-      calls a phase-2-generated sender stub: metadata mode now emits a
-      permissive shim for every `Task::cross_spawn` target the source mentions
-      (phase 2 still generates the typed, view-derived stub, so missing or
-      misspelled tasks remain hard build errors).
+      calls a phase-2-generated sender stub: metadata mode now terminates the
+      compilation right after writing its manifest, so phase 1 never
+      type-checks the application at all (phase 2 still generates the typed,
+      view-derived stub, so missing or misspelled tasks remain hard build
+      errors). The driver `fixtures/metadata` sync test pins the halt: its
+      producer calls a stub that does not exist in phase 1.
 - [ ] **M7-T3** Extract `experiments/multibinary` into its own repository; resolve
       and remove `TODO(extract)` markers; add CI there.
 

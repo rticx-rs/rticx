@@ -391,28 +391,16 @@ fn env_detection_switches_on_metadata_mode() {
         ("CARGO_PKG_NAME", "fixture-pkg".to_string()),
         ("CARGO_BIN_NAME", "fixture-bin".to_string()),
     ]);
-    let pass = XbinPass::from_env();
-    assert!(pass.is_metadata_mode(), "detected at the macro level");
+    assert!(
+        XbinPass::from_env().is_metadata_mode(),
+        "detected at the macro level"
+    );
 
-    let (_, _) = pass
-        .run_pass(
-            quote!(
-                device = mypac,
-                core_ids = [1],
-                external_cores = [0],
-                ipc_dispatchers = [IRQ0]
-            ),
-            receiver_app(),
-        )
-        .expect("pass succeeds");
-
-    let manifest = AppManifest::from_json(
-        &std::fs::read_to_string(dir.path().join("fixture-bin.xbin.json"))
-            .expect("manifest named after CARGO_BIN_NAME"),
-    )
-    .expect("parse");
-    assert_eq!(manifest.package, "fixture-pkg");
-    assert_eq!(manifest.target.name, "fixture-bin");
+    // The pass is deliberately not run here: a `from_env` metadata-mode pass
+    // terminates the compiler once the manifest is written, which would kill
+    // the test harness. The real `cargo check` path — including the manifest
+    // naming from `CARGO_PKG_NAME`/`CARGO_BIN_NAME` — is covered end to end by
+    // the driver's `fixtures/metadata` sync test (M7-T2).
 }
 
 #[test]
