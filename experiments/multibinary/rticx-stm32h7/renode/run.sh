@@ -18,8 +18,10 @@ if [ "$#" -lt 2 ]; then
 fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-m7_elf="$1"
-m4_elf="$2"
+# Resolve the images to absolute paths *before* changing directory below:
+# Renode would otherwise look them up relative to this script's directory.
+m7_elf="$(readlink -f "$1")"
+m4_elf="$(readlink -f "$2")"
 run_seconds="${3:-3}"
 
 for elf in "$m7_elf" "$m4_elf"; do

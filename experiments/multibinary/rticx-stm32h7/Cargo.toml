@@ -1,0 +1,51 @@
+# STM32H7 (Cortex-M7 + Cortex-M4) cross-binary distribution.
+#
+# Member of the experimental multi-binary workspace
+# (`experiments/multibinary/Cargo.toml`), like the mock distribution: its
+# proc-macro half resolves the root crates and the `rticx-xbin-*` crates through
+# the single workspace. The `no_std` library itself only compiles for the
+# Cortex-M targets, so it is excluded from the workspace's default members;
+# build it with `--target thumbv7em-none-eabi[f]` and exactly one of the
+# `cm7`/`cm4` features. Intended to be extracted into its own repository with
+# the rest of the extension once M7-T1/M7-T2 are done (M7-T3).
+
+[package]
+name = "rticx-stm32h7"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "RTICX distribution for the dual-core STM32H7 (Cortex-M7 + Cortex-M4) with cross-binary IPC"
+keywords = ["rtic", "rticx", "stm32h7", "cortex-m", "multicore"]
+categories = ["no-std", "embedded"]
+readme = "README.md"
+build = "build.rs"
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+# Hardware dependencies are declared here, not in the workspace's shared
+# `[workspace.dependencies]` (which stays generic). Mirrors the root workspace,
+# where `distributions/rticx-cortex-m` declares `cortex-m` inline.
+cortex-m = "0.7.9"
+portable-atomic = { version = "1.15.0", default-features = false }
+rticx-stm32h7-bindings = { path = "rticx-stm32h7-bindings" }
+rticx-stm32h7-macro = { path = "rticx-stm32h7-macro" }
+rticx-spsc = { workspace = true }
+rticx-xbin-rt = { workspace = true }
+# The PAC the distribution uses for HSEM/RCC access. The device variant is
+# selected by the `cm7`/`cm4` features below; `rt` is supplied by the
+# application.
+stm32h7 = { version = "0.16", default-features = false }
+
+[features]
+# Exactly one of `cm7` / `cm4` must be selected: it picks the core this binary
+# runs on, and therefore the HSEM receive interrupt, the MPU region number and
+# the pool base view, as well as the `stm32h7` PAC device variant used for the
+# HSEM/RCC register access.
+cm7 = ["rticx-stm32h7-macro/cm7", "stm32h7/stm32h747cm7"]
+cm4 = ["rticx-stm32h7-macro/cm4", "stm32h7/stm32h747cm4"]

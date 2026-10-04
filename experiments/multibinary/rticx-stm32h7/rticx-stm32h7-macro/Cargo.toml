@@ -1,0 +1,28 @@
+[package]
+name = "rticx-stm32h7-macro"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Proc-macro crate for the RTICX STM32H7 (Cortex-M7 + Cortex-M4) distribution"
+keywords = ["rtic", "rticx", "stm32h7", "proc-macro", "embedded"]
+categories = ["no-std", "embedded"]
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+rticx-core = { workspace = true }
+rticx-stm32h7-bindings = { path = "../rticx-stm32h7-bindings" }
+rticx-sw-pass = { workspace = true }
+rticx-xbin-pass = { workspace = true }
+syn = { workspace = true }
+
+[features]
+cm7 = []
+cm4 = []

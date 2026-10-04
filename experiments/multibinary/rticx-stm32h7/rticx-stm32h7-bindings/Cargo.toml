@@ -1,0 +1,10 @@
+[package]
+name = "rticx-stm32h7-bindings"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Shared STM32H7 IPC pool geometry and HSEM semaphore vocabulary for the rticx-stm32h7 distribution"
+
+[lib]
+test = true
+bench = false

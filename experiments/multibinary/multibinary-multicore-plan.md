@@ -5,11 +5,12 @@ native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
 routing, multi-source, ready/epoch, docs), **M6.9-T1..T9** (distro capability
 binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
 budget, `system.json` schema 2, pool-aware codegen/runtime, linked-ELF
-verification, pool-panel visualization, docs and fixtures) complete. Remaining
-work: **M7** (STM32H7
-acceptance + extraction) and **M8-T1** (advisory CI), see
+verification, pool-panel visualization, docs and fixtures) and **M7-T1**
+(in-tree STM32H7 M7+M4 distribution, Renode boot acceptance) complete.
+Remaining work: **M7-T2** (cross-binary spawn demo), **M7-T3/M7-T4**
+(extraction and follow-ups), see
 [§13](#13-remaining-milestones).
-**Last updated:** 2026-10-04 (M6.9-T9; docs and fixtures).
+**Last updated:** 2026-10-04 (M7-T1; in-tree STM32H7 distribution and Renode boot).
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
@@ -229,22 +230,47 @@ verification over `fixtures/e2e`: clean pass, injected pool overlap, standalone
 proto `tests/{idl,layout,generate,generate_compile,alloc,merge,project,system,hash}.rs`,
 rt `tests/{fifo,state}.rs`, mock `tests/backend.rs`.
 
-### 5.4 Renode acceptance harness (`renode/`)
+### 5.4 Renode acceptance harness (`rticx-stm32h7/renode/`)
 
 The harness the H7 distribution is validated with, in-tree until the M7-T3
-extraction:
+extraction. It lives inside the distribution directory (moved there when
+`rticx-stm32h7` was created):
 
 | Item | Path | Notes |
 |---|---|---|
-| Platform | `renode/platforms/cpus/stm32h7_dualcore.repl` | Self-contained: RCC (`RCC_GCR.BOOT_C2`), PWR, HSEM and EXTI models embedded between `// >>> pydev:` markers; no C#/Renode build required |
-| Startup script | `renode/scripts/single-node/stm32h7_dualcore.resc` | Loads the M7 image on `cpu0`, the M4 image on `cpu1`, runs `machine Reset` |
-| Launcher | `renode/run.sh <cm7.elf> <cm4.elf> [seconds]` | Headless (`--console --disable-gui`), routes USART1 (M7) and USART2 (M4) to the log, runs, quits |
-| Notes | `renode/README.md` | Provenance, memory map, doorbell paths, limitations |
+| Platform | `rticx-stm32h7/renode/platforms/cpus/stm32h7_dualcore.repl` | Self-contained: RCC (`RCC_GCR.BOOT_C2`), PWR, HSEM and EXTI models embedded between `// >>> pydev:` markers; no C#/Renode build required |
+| Startup script | `rticx-stm32h7/renode/scripts/single-node/stm32h7_dualcore.resc` | Loads the M7 image on `cpu0`, the M4 image on `cpu1`, runs `machine Reset` |
+| Launcher | `rticx-stm32h7/renode/run.sh <cm7.elf> <cm4.elf> [seconds]` | Headless (`--console --disable-gui`), resolves both images to absolute paths, routes USART1 (M7) and USART2 (M4) to the log, runs, quits |
+| Notes | `rticx-stm32h7/renode/README.md` | Provenance, memory map, doorbell paths, limitations |
 
 Provenance: copied from the standalone simulation repository
 `/home/zakaria/stm32-renode` (commit `c7caf8c`), which keeps the canonical
 Peripheral-Script sources, the `sync_pydev_into_repl.py` regenerator, the known-bug
 log and the Python/Robot suites. Installed Renode is v1.16.1.
+
+### 5.5 STM32H7 distribution (`rticx-stm32h7/`, M7-T1)
+
+In-tree implementation of the M7-T1 out-of-tree distribution, kept inside the
+experimental workspace until the M7-T3 extraction. It is a member of
+`experiments/multibinary` (its macro half resolves the root and `rticx-xbin-*`
+crates through the single workspace) whose `no_std` library is excluded from
+the workspace's default members (it only compiles for Cortex-M).
+
+| Crate / item | Path | Purpose |
+|---|---|---|
+| `rticx-stm32h7` | `rticx-stm32h7/` | Distribution library: `CrossBinBackend` runtime (`xbin.rs`), BASEPRI locking (`export.rs`), the generated `memory.x` (`build.rs`, `linker/`) |
+| `rticx-stm32h7-macro` | `rticx-stm32h7/rticx-stm32h7-macro/` | `#[app]` macro: core pass backend + `XbinPassBackend` + software pass, with the reserved-HSEM validation |
+| `rticx-stm32h7-bindings` | `rticx-stm32h7/rticx-stm32h7-bindings/` | Shared SRAM3 IPC pool geometry and HSEM semaphore vocabulary both halves must agree on (hardware registers come from the `stm32h7` PAC) |
+| Acceptance demo | `rticx-stm32h7/examples-apps/` | A `cargo xbin` project (`app-cm7`/`app-cm4`) booting under `renode/run.sh`; each app declares a cross-binary receiver, so the full transport codegen is compiled |
+
+Layout decisions: one `h7-sram3` pool per the `{cm7, cm4}` dual (`0x3004_0000`
+from the M7, `0x1004_0000` from the M4), shared state at `+0x0000`, doorbell
+words at `+0x0200`, FIFOs at `+0x1000` with a 4096-byte budget; the M7 is global
+core 0 and releases the M4 through `RCC_GCR.BOOT_C2` in `init_shared`; the M7
+receives on `HSEM0` (IRQ 125) and the M4 on `HSEM1` (IRQ 126), both reserved and
+rejected for user tasks/dispatchers. The distribution's `build.rs` generates
+each core's `memory.x` and exports the `__rticx_xbin_pool_h7_sram3_start/_end`
+symbols the ELF verifier checks.
 
 
 ---
@@ -615,8 +641,8 @@ external `task_trait` paths, so no core changes are required.
 
 ## 10. Distribution/backend contract
 
-Owned by the extension; implemented by the out-of-tree H7 distribution and by the
-mock backend.
+Owned by the extension; implemented by the in-tree STM32H7 distribution
+(`rticx-stm32h7`, M7-T1) and by the mock backend.
 
 **Runtime half — `rticx_xbin_rt::backend::CrossBinBackend`:**
 
@@ -685,11 +711,12 @@ The router IRQ is enabled/prioritized by the core pass's used-IRQ machinery (no
   FIFOs and per-source backpressure. The single-pair harness additionally drives the
   full path `cross_spawn` → ring function → router ISR → pended line dispatcher →
   `exec`, including coalesced notifications.
-- **Acceptance (out-of-tree):** STM32H7 M7+M4 distribution under the in-tree
-  Renode harness (§11.1) with a real doorbell (HSEM/EXTI) and non-cacheable
-  shared SRAM.
-- **CI:** separate advisory workflow for `experiments/multibinary` (fmt, clippy,
-  tests, mock e2e), M8-T1. Root CI untouched.
+- **Acceptance (STM32H7):** the in-tree `rticx-stm32h7` M7+M4 distribution
+  under the Renode harness (§11.1) with a real doorbell (HSEM) and
+  non-cacheable shared SRAM; M7-T1 boots both cores and reports them ready,
+  and `cargo xbin build --verify-elf` checks the linked images against the
+  `h7-sram3` pool.
+
 
 ### 11.1 Renode acceptance harness (STM32H7 M7+M4)
 
@@ -939,26 +966,25 @@ distro may use them internally, but no new framework mechanism).
 
 ### M7 — STM32H7 acceptance and extraction (separate effort, out-of-tree)
 
-- [ ] **M7-T1** Out-of-tree STM32H7 (M7+M4) distribution implementing
+- [x] **M7-T1** STM32H7 (M7+M4) distribution implementing
       `CrossBinBackend` (non-cacheable shared region, boot release) and the
-      `XbinPassBackend` doorbell bindings (ring/read/router IRQ).
+      `XbinPassBackend` doorbell bindings (ring/read/router IRQ). Landed
+      in-tree under `experiments/multibinary/rticx-stm32h7` (member of the
+      experimental workspace); extraction is M7-T3.
       *Acceptance:* the M7 and M4 example binaries boot under
-      `experiments/multibinary/renode/run.sh` (§11.1): the M7 initializes the
-      shared region, releases the M4 through `RCC_GCR.BOOT_C2`, and both cores
-      mark themselves ready.
+      `rticx-stm32h7/renode/run.sh` (§11.1): the M7 initializes the shared
+      region, releases the M4 through `RCC_GCR.BOOT_C2`, and both cores mark
+      themselves ready. Met: the demo prints both cores ready and the linked
+      ELFs pass `cargo xbin build --verify-elf`.
 - [ ] **M7-T2** Renode acceptance demo: cross-binary spawn M7→M4 and M4→M7.
       *Acceptance:* `renode/run.sh <m7.elf> <m4.elf>` shows both cross-binary
       directions executing (console output and/or a shared result word) through
-      the generated dispatch path.
+      the generated dispatch path. The transport is already generated and
+      compiled by the demo (both receivers + ring/read/router); the remaining
+      work is triggering `cross_spawn` from a producer, which needs the phase-1
+      metadata `cargo check` to accept a generated sender stub.
 - [ ] **M7-T3** Extract `experiments/multibinary` into its own repository; resolve
       and remove `TODO(extract)` markers; add CI there.
-- [ ] **M7-T4** Optional: re-evaluate promoting reimplemented internals into a shared
-      RTICX crate, and the `Producer`-as-shared-resource API with SRP locking.
-
-### M8 — CI
-
-- [ ] **M8-T1** Separate advisory CI workflow for the experimental workspace.
-      *Acceptance:* fmt, clippy, tests, mock e2e green.
 
 ---
 
@@ -1046,5 +1072,5 @@ distro may use them internally, but no new framework mechanism).
   (identity by default).
 - **Epoch** — shared counter used to detect peer reset and re-synchronize FIFOs.
 - **Renode harness** — the dual-core STM32H7 platform, startup script and
-  `run.sh` launcher under `experiments/multibinary/renode/` used as the M7
-  acceptance target (§11.1).
+  `run.sh` launcher under `experiments/multibinary/rticx-stm32h7/renode/` used
+  as the M7 acceptance target (§11.1).

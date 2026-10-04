@@ -1,0 +1,25 @@
+[package]
+name = "app-cm7"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Cortex-M7 side of the rticx-stm32h7 acceptance demo (M7-T1)"
+
+[[bin]]
+name = "cm7"
+path = "src/main.rs"
+
+[dependencies]
+# `critical-section-single-core` provides the `_critical_section_1_0_*`
+# symbols `pac::Peripherals::take()` needs; each core runs its own binary.
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.6"
+embedded-io = "0.6"
+ipc-types = { path = "../ipc-types" }
+panic-halt = "0.2"
+rticx-stm32h7 = { path = "../..", features = ["cm7"] }
+# `stm32-hal2` provides the `Usart` console; its H7 features only spell the
+# H747 variants, so the PAC device feature must match (the H7 variant is
+# irrelevant for the peripherals this demo uses).
+stm32-hal2 = { version = "2.1.10", default-features = false, features = ["h747cm7", "embedded_hal"] }
+stm32h7 = { version = "0.16", default-features = false, features = ["rt", "stm32h747cm7"] }

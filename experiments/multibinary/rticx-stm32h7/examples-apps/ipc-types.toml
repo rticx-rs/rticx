@@ -1,0 +1,4 @@
+schema = 1
+
+[message.PingMsg]
+fields = { seq = "u32", value = "u32" }

@@ -1,0 +1,14 @@
+# Linker flags for the STM32H7 acceptance demo.
+#
+# `cortex-m-rt`'s `link.x` is the entry point of the linker script; it does
+# `INCLUDE memory.x`, which the rticx-stm32h7 distribution generates into its
+# `OUT_DIR` and adds to the link search path. No per-app `memory.x` is needed.
+#
+# The target is not set here: the two applications use different triples and
+# `cargo xbin` (or the Makefile) always passes `--target` explicitly.
+
+[target.thumbv7em-none-eabihf]
+rustflags = ["-C", "link-arg=-Tlink.x"]
+
+[target.thumbv7em-none-eabi]
+rustflags = ["-C", "link-arg=-Tlink.x"]

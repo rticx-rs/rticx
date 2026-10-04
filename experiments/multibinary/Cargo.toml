@@ -20,6 +20,30 @@ members = [
     "crates/mock/xbin-mock-capability",
     "crates/mock/xbin-mock-distro",
     "crates/mock/xbin-mock-runtime",
+    # STM32H7 (Cortex-M7 + Cortex-M4) cross-binary distribution (M7-T1). Its
+    # `no_std` library only compiles for the Cortex-M targets, so it is a
+    # member (its macro/bindings share the workspace) but not a default member:
+    # build it with `--target` and exactly one of `cm7`/`cm4`.
+    "rticx-stm32h7/rticx-stm32h7-bindings",
+    "rticx-stm32h7/rticx-stm32h7-macro",
+    "rticx-stm32h7",
+]
+
+# Everything except the STM32H7 `no_std` library, which cannot be built for
+# the host (BASEPRI/MPU are ARMv7-M only); mirrors the root workspace's
+# treatment of `rticx-cortex-m`.
+default-members = [
+    "crates/rticx-xbin-proto",
+    "crates/rticx-xbin-pass",
+    "crates/rticx-xbin-rt",
+    "crates/rticx-xbin-driver",
+    "crates/rticx-xbin-mock",
+    "crates/mock/mock-pac",
+    "crates/mock/xbin-mock-capability",
+    "crates/mock/xbin-mock-distro",
+    "crates/mock/xbin-mock-runtime",
+    "rticx-stm32h7/rticx-stm32h7-bindings",
+    "rticx-stm32h7/rticx-stm32h7-macro",
 ]
 
 [workspace.package]

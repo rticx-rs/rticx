@@ -1,0 +1,5 @@
+/target
+# The acceptance project is its own workspace; ignore its build output (the
+# generated `ipc-types/` crate is checked in, like the fixtures).
+examples-apps/target
+examples-apps/**/target

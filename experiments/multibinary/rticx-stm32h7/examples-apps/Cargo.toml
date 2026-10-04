@@ -1,0 +1,29 @@
+# Standalone `cargo xbin` project for the STM32H7 acceptance demo (M7-T1).
+#
+# Deliberately its own workspace (outside the experimental workspace): the two
+# applications select mutually exclusive cores (`cm7` / `cm4`) and `stm32h7`
+# PAC device features, and cargo feature unification would otherwise enable both
+# at once. `cargo xbin` builds them one at a time with `--package --bin
+# --target` (the triples are pinned in `rticx.toml`), so each invocation sees a
+# single core.
+#
+# The M7 (global core 0) initializes the shared region, releases the M4 through
+# `RCC_GCR.BOOT_C2`, and both cores mark themselves ready.
+
+[workspace]
+resolver = "2"
+members = ["app-cm7", "app-cm4"]
+
+[workspace.package]
+edition = "2024"
+authors = ["Zakaria Madaoui"]
+license = "MIT"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+debug = true

@@ -1,0 +1,19 @@
+# Project topology of the STM32H7 acceptance demo (M7-T1).
+#
+# `app-cm7` owns global core 0 and boots from flash bank 1
+# (`thumbv7em-none-eabihf`); `app-cm4` owns global core 1, is released by the
+# M7 through `RCC_GCR.BOOT_C2` and boots from flash bank 2
+# (`thumbv7em-none-eabi`). The distribution owns the IPC memory: the
+# capability binding maps physical core 0 (Cortex-M7) to physical core 1
+# (Cortex-M4) through the `h7-sram3` pool, and the linker scripts reserve it.
+schema = 1
+
+[[application]]
+package = "app-cm7"
+target = { kind = "bin", name = "cm7", triple = "thumbv7em-none-eabihf" }
+core_ids = [0]
+
+[[application]]
+package = "app-cm4"
+target = { kind = "bin", name = "cm4", triple = "thumbv7em-none-eabi" }
+core_ids = [1]

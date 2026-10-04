@@ -277,14 +277,15 @@ fn collect_manifest(
 
     // `RTICX_XBIN_META_OUT` is invisible to Cargo's fingerprints, so cached
     // artifacts from an earlier run (with a different output directory) must
-    // not be reused.
-    run_cargo(
-        project_root,
-        &argv(&["clean", "--package", package]),
-        &[],
-        &[],
-        output,
-    )?;
+    // not be reused. A `--target`-specific application (the STM32H7 cores) only
+    // has artifacts under that triple's target directory, so the clean must
+    // name it too or the `cargo check` below is a cached no-op that never reruns
+    // the `#[app]` macro and never writes the manifest.
+    let mut clean = argv(&["clean", "--package", package]);
+    if let Some(triple) = application.target().triple() {
+        clean.extend(argv(&["--target", triple]));
+    }
+    run_cargo(project_root, &clean, &[], &[], output)?;
 
     // Never read a manifest left over from a previous run: the pass must
     // write it for *this* check.
