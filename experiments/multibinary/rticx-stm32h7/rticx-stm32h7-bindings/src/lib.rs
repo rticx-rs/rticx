@@ -132,15 +132,18 @@ mod tests {
     }
 
     /// The reserved control area never overlaps the pool.
+    ///
+    /// These are compile-time layout invariants, so the checks run in `const`
+    /// blocks (clippy's `assertions_on_constants`).
     #[test]
     fn control_area_precedes_the_pool() {
-        assert!(DOORBELL_OFFSET + MAX_PHYSICAL_CORES as u32 * 4 <= POOL_OFFSET);
-        assert!(SHARED_STATE_OFFSET + 12 <= DOORBELL_OFFSET);
+        const { assert!(DOORBELL_OFFSET + MAX_PHYSICAL_CORES as u32 * 4 <= POOL_OFFSET) };
+        const { assert!(SHARED_STATE_OFFSET + 12 <= DOORBELL_OFFSET) };
     }
 
     /// The pool fits the reserved SRAM3 block (32 KiB).
     #[test]
     fn pool_fits_sram3() {
-        assert!(POOL_OFFSET + POOL_BUDGET <= 0x8000);
+        const { assert!(POOL_OFFSET + POOL_BUDGET <= 0x8000) };
     }
 }
