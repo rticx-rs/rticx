@@ -1,27 +1,26 @@
 //! Per-application metadata manifest, `<target>.xbin.json`.
 //!
-//! The compilation pass writes one manifest per application during phase 1
-//! (`cargo xbin sync`, see `multibinary-multicore-plan.md` §7.1). The driver
-//! then merges all manifests, validates the cross-application topology and
-//! emits the single `system.json` system view.
+//! The compilation pass writes one manifest per application during phase 1.
+//! The driver then merges all manifests, validates the cross-application 
+//! topology and emits the single `system.json` system view.
 //!
 //! A manifest records:
 //!
 //! - package and Cargo target (`<target>.xbin.json` is named after the target);
 //! - a [`Hash64`] of the application source as the pass saw it, used by the
-//!   phase-2 freshness check (§7.3);
+//!   phase-2 freshness check;
 //! - the local core count plus the local -> global `core_ids` mapping (the
 //!   identity `0..cores` when the application does not declare the key) and
-//!   the `external_cores` visible to this application (§6.4);
+//!   the `external_cores` visible to this application;
 //! - the native `#[sw_task]` cross-binary receivers declared by this
-//!   application (§6.5), including the full `SpawnInput` paths. There are no
-//!   sender declarations (M5.5): the driver infers each task's single producer
+//!   application, including the full `SpawnInput` paths. There are no
+//!   sender declarations: the driver infers each task's single producer
 //!   application from the receivers' `spawn_by`;
-//! - the **distro capability binding** (M6.9-T2): per local core, the physical
+//! - the **distro capability binding**: per local core, the physical
 //!   core it runs on and the IPC pools that physical core can reach
 //!   ([`CoreCapability`]). The distro owns the pool addresses and the shared
 //!   per-dual budget; the driver matches the two endpoints' entries when it
-//!   merges the manifests (M6.9-T4).
+//!   merges the manifests.
 //!
 //! Like `system.json`, the manifest is JSON with a `schema_version` and is
 //! serialized deterministically: declarations are sorted by task name, the
@@ -209,7 +208,8 @@ pub enum PoolCachePolicy {
     /// Normal, Non-cacheable, Shareable — the supported v1 policy.
     NormalNonCacheableShareable,
     /// Normal, cacheable, Shareable: requires explicit cache maintenance
-    /// around every shared access (the runtime backend's cache hooks).
+    /// around every shared access (the generated transport owns any
+    /// maintenance).
     NormalCacheableShareable,
 }
 

@@ -281,12 +281,20 @@ impl CorePassBackend for Stm32H7Rtic {
 struct Stm32H7XbinBackend;
 
 impl XbinPassBackend for Stm32H7XbinBackend {
-    fn backend(&self) -> syn::Expr {
-        parse_quote!(rticx_stm32h7::xbin::Backend)
-    }
-
     fn rt_path(&self) -> syn::Path {
         parse_quote!(rticx_stm32h7::export::xbin_rt)
+    }
+
+    fn current_global_core_id(&self) -> syn::Expr {
+        // Each binary is single-core, so the core guard folds away to this
+        // binary's physical core id (D5).
+        parse_quote!(rticx_stm32h7::xbin::CURRENT_CORE)
+    }
+
+    fn configure_shared_memory(&self, _local_core: u32) -> Option<TokenStream2> {
+        // Each binary runs one physical core, so `local_core` is always 0:
+        // the MPU mapping and the HSEM receive interrupt are per-core (D1).
+        Some(quote!(rticx_stm32h7::xbin::configure_shared_memory();))
     }
 
     fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
@@ -365,6 +373,8 @@ impl SwPassBackend for SwPassBackendImpl {
 
 #[cfg(test)]
 mod tests {
+    use quote::ToTokens;
+
     use super::*;
 
     /// The capability binding reports exactly the `h7-sram3` dual from this
@@ -413,6 +423,44 @@ mod tests {
                 .doorbell_interrupt(bindings::PHYSICAL_CM4, bindings::PHYSICAL_CM7)
                 .to_string(),
             "HSEM1"
+        );
+    }
+
+    /// The core guard folds to this binary's physical core id: a single-core
+    /// binary has no runtime core lookup (D5).
+    #[test]
+    fn current_global_core_id_is_the_binarys_constant_core() {
+        assert_eq!(
+            Stm32H7XbinBackend
+                .current_global_core_id()
+                .to_token_stream()
+                .to_string(),
+            "rticx_stm32h7 :: xbin :: CURRENT_CORE"
+        );
+    }
+
+    /// The generated entry configures this core's MPU view and enables its
+    /// HSEM receive interrupt before the user `init` (D1); the physical cores
+    /// use the same free function.
+    #[test]
+    fn configure_shared_memory_emits_the_distro_free_function() {
+        let tokens = Stm32H7XbinBackend
+            .configure_shared_memory(0)
+            .expect("the H7 configures the shared memory on every core")
+            .to_string();
+        assert_eq!(
+            tokens,
+            "rticx_stm32h7 :: xbin :: configure_shared_memory () ;"
+        );
+    }
+
+    /// The H7 pools are at the synced fixed addresses, so the distribution
+    /// never overrides the base (D3).
+    #[test]
+    fn ipc_base_override_stays_unset() {
+        assert!(
+            Stm32H7XbinBackend.ipc_base_override(0, 0, 1).is_none(),
+            "a real fixed-address distribution uses the synced literals"
         );
     }
 }

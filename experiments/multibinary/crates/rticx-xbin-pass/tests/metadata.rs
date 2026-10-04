@@ -99,8 +99,9 @@ fn run_manifest_with_backend<B: XbinPassBackend + 'static>(
 /// inert lets the capability tests implement only the two queries of M6.9-T2.
 macro_rules! inert_bindings {
     () => {
-        fn backend(&self) -> syn::Expr {
-            syn::parse_quote!(backend())
+        fn current_global_core_id(&self) -> syn::Expr {
+            // Never reached: metadata mode halts before any code generation.
+            syn::parse_quote!(unreachable!())
         }
 
         fn rt_path(&self) -> syn::Path {

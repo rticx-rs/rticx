@@ -1,7 +1,6 @@
 //! `rticx.toml` parsing and validation.
 //!
-//! The project manifest is the single source of project topology (see
-//! `multibinary-multicore-plan.md` §6.1): which binaries (applications) exist
+//! The project manifest is the single source of project topology: which binaries (applications) exist
 //! and how each application maps its *local* core indices to *globally unique*
 //! core ids.
 //!

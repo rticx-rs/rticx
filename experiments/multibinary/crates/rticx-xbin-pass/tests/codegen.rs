@@ -144,15 +144,25 @@ const SYSTEM_JSON: &str = r#"{
 "#;
 
 /// The code-generation backend used by the snapshots.
+///
+/// The snapshots are never compiled, so `current_global_core_id` and
+/// `configure_shared_memory` emit inspectable expressions; `ipc_base_override`
+/// stays unset, exercising the literal synced-address path (D3).
 struct TestBackend;
 
 impl XbinPassBackend for TestBackend {
-    fn backend(&self) -> syn::Expr {
-        syn::parse_quote!(__mock_xbin_backend())
-    }
-
     fn rt_path(&self) -> syn::Path {
         syn::parse_quote!(rticx_xbin_rt)
+    }
+
+    fn current_global_core_id(&self) -> syn::Expr {
+        syn::parse_quote!(__mock_xbin_backend().global_core_id())
+    }
+
+    fn configure_shared_memory(&self, _local_core: u32) -> Option<TokenStream> {
+        Some(quote! {
+            __mock_xbin_configure();
+        })
     }
 
     fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
@@ -400,12 +410,12 @@ fn sender_codegen_snapshot() {
     );
 
     // ---- FIFO view ----
+    // The view is argument-less and bakes the synced pool base literal (the
+    // backend leaves `ipc_base_override` unset, D3).
     assert_section_present(
         &generated,
         quote! {
-            fn __rticx_xbin_fifo_EncryptTask (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend ,
-            ) -> * mut rticx_xbin_rt :: Fifo < ipc_types :: EncryptReq , 3usize >
+            fn __rticx_xbin_fifo_EncryptTask () -> * mut rticx_xbin_rt :: Fifo < ipc_types :: EncryptReq , 3usize >
         },
         "FIFO view signature",
     );
@@ -418,9 +428,14 @@ fn sender_codegen_snapshot() {
         },
         "FIFO view constants",
     );
-    assert!(
-        generated.contains("`cargo xbin sync` allocated the `(0 -> 1)` IPC pool"),
-        "{generated}"
+    assert_section_present(
+        &generated,
+        quote! {
+            rticx_xbin_rt :: Fifo :: < ipc_types :: EncryptReq , 3usize > :: view_at (
+                0x30040000usize + __RTICX_XBIN_FIFO_OFFSET ,
+            )
+        },
+        "literal synced pool base",
     );
 
     // The FIFO is pinned to its distro pool: the id and shared budget are
@@ -466,24 +481,23 @@ fn sender_codegen_ring_and_error_semantics() {
     let (_dir, path) = write_sender_system();
     let generated = generate_ok(&path);
 
-    // The backend expression and the trait import make the runtime calls
-    // resolvable without user imports.
-    assert_section_present(
-        &generated,
-        quote! { use rticx_xbin_rt :: CrossBinBackend as _ ; },
-        "backend trait import",
+    // The generated code no longer threads a runtime backend value: it calls
+    // the argument-less FIFO view and the backend's core-id expression
+    // directly (D4, D5).
+    assert!(
+        !generated.contains("CrossBinBackend"),
+        "the runtime trait must not appear in generated code: {generated}"
     );
-    assert_section_present(
-        &generated,
-        quote! { let __rticx_xbin_backend = __mock_xbin_backend () ; },
-        "backend expression",
+    assert!(
+        !generated.contains("let __rticx_xbin_backend"),
+        "the generated spawner must not bind a backend value: {generated}"
     );
 
     // Global-core guard and interrupt-free enqueue.
     assert_section_present(
         &generated,
         quote! {
-            if __rticx_xbin_backend . current_global_core_id () != __RTICX_XBIN_SOURCE_CORE {
+            if __mock_xbin_backend () . global_core_id () != __RTICX_XBIN_SOURCE_CORE {
                 return Err (Some (input)) ;
             }
         },
@@ -494,6 +508,11 @@ fn sender_codegen_ring_and_error_semantics() {
             "__rticx_interrupt_free (| | -> Result < () , Option < ipc_types :: EncryptReq > > {"
         ),
         "missing interrupt-free section:\n{generated}"
+    );
+    assert_section_present(
+        &generated,
+        quote! { let __rticx_xbin_fifo = __rticx_xbin_fifo_EncryptTask () ; },
+        "argument-less FIFO view call",
     );
     assert_section_present(
         &generated,
@@ -789,9 +808,7 @@ fn receiver_codegen_snapshot() {
     assert_section_present(
         &generated,
         quote! {
-            fn __rticx_xbin_fifo_EncryptTask (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend ,
-            ) -> * mut rticx_xbin_rt :: Fifo < ipc_types :: EncryptReq , 3usize >
+            fn __rticx_xbin_fifo_EncryptTask () -> * mut rticx_xbin_rt :: Fifo < ipc_types :: EncryptReq , 3usize >
         },
         "receiver FIFO view signature",
     );
@@ -825,14 +842,14 @@ fn receiver_codegen_snapshot() {
         quote! { impl RticTask for __RticxXbinDispatcher0To1P3 },
         "dispatcher exec header",
     );
-    assert_section_present(
-        &generated,
-        quote! { let __rticx_xbin_backend = __mock_xbin_backend(); },
-        "dispatcher backend expression",
+    assert!(
+        !generated.contains("let __rticx_xbin_backend"),
+        "the generated dispatcher must not bind a backend value: {generated}"
     );
 
     // The dispatcher drains its ready queue, then the FIFO of each popped
-    // task until empty (a duplicate notification is a no-op).
+    // task until empty (a duplicate notification is a no-op). The FIFO view is
+    // argument-less and bakes the synced address.
     assert_section_present(
         &generated,
         quote! {
@@ -840,7 +857,7 @@ fn receiver_codegen_snapshot() {
             while let Some(__rticx_xbin_task) = __rticx_xbin_ready.dequeue() {
                 match __rticx_xbin_task {
                     __RticxXbinLine0To1P3::EncryptTask => {
-                        let __rticx_xbin_fifo = __rticx_xbin_fifo_EncryptTask(&__rticx_xbin_backend);
+                        let __rticx_xbin_fifo = __rticx_xbin_fifo_EncryptTask();
                         unsafe {
                             while let Some(input) = (*__rticx_xbin_fifo).dequeue() {
                                 ENCRYPT_TASK.assume_init_mut().exec(input);
@@ -1109,29 +1126,18 @@ fn owner_codegen_init_hooks_snapshot() {
     let (_dir, path) = write_sender_system();
     let generated = generate_ok(&path);
 
-    // Every core configures its own view of the regions before any shared
-    // access.
-    assert_section_present(
-        &generated,
-        quote! {
-            fn __rticx_xbin_configure_shared_memory (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend ,
-            ) {
-                __rticx_xbin_backend . configure_shared_memory () ;
-            }
-        },
-        "configure hook",
+    // The configure hook is inlined at `BeforeInit`, not a generated function
+    // (D1); only the per-core FIFO initializer is emitted.
+    assert!(
+        !generated.contains("__rticx_xbin_configure_shared_memory"),
+        "the configure wrapper function must be gone: {generated}"
     );
 
     // `app-m7` produces the `0 -> 1` FIFO, so its core 0 gets its own
-    // FIFO initializer, run before `post_init` (M6-T1).
+    // argument-less FIFO initializer, run before `post_init` (M6-T1).
     assert_section_present(
         &generated,
-        quote! {
-            fn __rticx_xbin_init_fifos_core0 (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend
-            )
-        },
+        quote! { fn __rticx_xbin_init_fifos_core0 () },
         "producer FIFO init header",
     );
     assert!(
@@ -1151,7 +1157,7 @@ fn owner_codegen_init_hooks_snapshot() {
         &generated,
         quote! {
             (* rticx_xbin_rt :: Fifo :: < ipc_types :: EncryptReq , 3usize > :: view_at (
-                __rticx_xbin_base + __RTICX_XBIN_FIFO_OFFSET ,
+                0x30040000usize + __RTICX_XBIN_FIFO_OFFSET ,
             ))
             . init () ;
         },
@@ -1170,22 +1176,16 @@ fn receiver_codegen_init_hooks_snapshot() {
     let (_dir, path) = write_receiver_system();
     let generated = generate_receiver_ok(&path);
 
-    // `app-m4` (global core 1) configures its region view; no generated code
-    // arms the doorbell line (M6.5-T4).
+    // `app-m4` (global core 1) has no generated configure function: the
+    // distribution tokens are inlined at `BeforeInit` (D1), and no generated
+    // code arms the doorbell line (M6.5-T4).
     assert!(
         !generated.contains("__rticx_xbin_init_shared"),
         "a non-owner application must not initialize the shared state: {generated}"
     );
-    assert_section_present(
-        &generated,
-        quote! {
-            fn __rticx_xbin_configure_shared_memory (
-                __rticx_xbin_backend : & impl rticx_xbin_rt :: CrossBinBackend ,
-            ) {
-                __rticx_xbin_backend . configure_shared_memory () ;
-            }
-        },
-        "receiver configure hook",
+    assert!(
+        !generated.contains("__rticx_xbin_configure_shared_memory"),
+        "the configure wrapper function must be gone: {generated}"
     );
     assert!(
         !generated.contains("doorbell_setup"),
@@ -1201,13 +1201,14 @@ fn init_hooks_are_wired_into_the_entry_functions() {
     pass.run_pass(sender_args(), sender_app())
         .expect("sender code generation succeeds");
 
-    // Every core configures its region view before the user `init` runs.
+    // Every core configures its region view before the user `init` runs: the
+    // distribution's tokens are inlined (D1).
     let before_init = pass
         .main_injection(&MainInjectionPoint::BeforeInit, 0)
         .expect("every core configures the shared memory before init");
     assert_section_present(
         &before_init.to_string(),
-        quote! { __rticx_xbin_configure_shared_memory (& __mock_xbin_backend ()) ; },
+        quote! { __mock_xbin_configure () ; },
         "configure injection",
     );
 
@@ -1218,7 +1219,7 @@ fn init_hooks_are_wired_into_the_entry_functions() {
         .expect("the producer initializes its FIFOs before post_init");
     assert_section_present(
         &before_post_init.to_string(),
-        quote! { __rticx_xbin_init_fifos_core0 (& __mock_xbin_backend ()) ; },
+        quote! { __rticx_xbin_init_fifos_core0 () ; },
         "producer FIFO init injection",
     );
     assert!(
@@ -1251,7 +1252,7 @@ fn init_hooks_are_wired_into_the_entry_functions() {
         .expect("the receiver configures the shared memory before init");
     assert_section_present(
         &before_init.to_string(),
-        quote! { __rticx_xbin_configure_shared_memory (& __mock_xbin_backend ()) ; },
+        quote! { __mock_xbin_configure () ; },
         "receiver configure injection",
     );
     assert!(
@@ -1340,8 +1341,8 @@ fn fifo_init_follows_the_producing_core() {
         "the removed shared-state initializer is not generated: {receiver_tokens}"
     );
     assert!(
-        receiver_tokens.contains("__rticx_xbin_configure_shared_memory"),
-        "every application configures its shared-memory view: {receiver_tokens}"
+        !receiver_tokens.contains("__rticx_xbin_configure_shared_memory"),
+        "the configure wrapper function must be gone: {receiver_tokens}"
     );
     assert!(
         receiver
@@ -1366,7 +1367,7 @@ fn fifo_init_follows_the_producing_core() {
         .expect("the producer core initializes its FIFO before post_init");
     assert_section_present(
         &before_post_init.to_string(),
-        quote! { __rticx_xbin_init_fifos_core0 (& __mock_xbin_backend ()) ; },
+        quote! { __rticx_xbin_init_fifos_core0 () ; },
         "producer FIFO init injection",
     );
 }
@@ -1634,6 +1635,27 @@ fn a_task_in_an_unknown_pool_is_rejected() {
 }
 
 #[test]
+fn a_view_without_a_pool_needs_a_base_override() {
+    // A project without a capability table (no `pools[]`, no task pool id)
+    // cannot bake a literal address and the distribution provides no override,
+    // so the pass must fail with the sync hint instead of emitting a view into
+    // memory the distribution never reserved (D3).
+    let stale = system_with(|view| {
+        view["tasks"][0]["fifo"]["pool"] = serde_json::Value::Null;
+        view["pools"] = serde_json::json!([]);
+    });
+    let (_dir, path) = write_system(&stale);
+    let error = generate(&path)
+        .expect_err("a pool-less view without an override must be rejected")
+        .to_string();
+    assert!(
+        error.contains("has no IPC pool for the `(0 -> 1)` direction"),
+        "{error}"
+    );
+    assert!(error.contains("cargo xbin sync"), "{error}");
+}
+
+#[test]
 fn a_receiver_without_doorbell_is_rejected() {
     let stale = system_with(|view| {
         view["doorbells"] = serde_json::json!([]);
@@ -1705,8 +1727,8 @@ fn applications_without_cross_declarations_still_load_the_view() {
     let generated = module.to_token_stream().to_string();
     assert!(!generated.contains("cross_spawn"), "{generated}");
     assert!(
-        generated.contains("__rticx_xbin_configure_shared_memory"),
-        "the configure hook is generated for every application: {generated}"
+        !generated.contains("__rticx_xbin_configure_shared_memory"),
+        "the configure tokens are inlined at `BeforeInit`, not a generated function (D1): {generated}"
     );
     assert!(
         !generated.contains("__rticx_xbin_init_fifos_core0"),

@@ -1,7 +1,7 @@
-//! STM32H7 runtime half of the cross-binary distribution contract.
+//! STM32H7 hardware support for the cross-binary distribution contract.
 //!
-//! [`Backend`] implements [`rticx_xbin_rt::CrossBinBackend`] for the single
-//! `{Cortex-M7, Cortex-M4}` dual:
+//! This module is the H7 half of the compile-time `XbinPassBackend` binding
+//! for the single `{Cortex-M7, Cortex-M4}` dual:
 //!
 //! - **Shared memory.** Both directions share the D2 SRAM3 pool whose geometry
 //!   is reported by the compile-time capability binding
@@ -28,14 +28,16 @@
 //!   and the M4 on semaphore 1; these two interrupts are reserved by the
 //!   distribution and rejected for user tasks/dispatchers.
 //!
-//! The runtime trait carries no doorbell methods; the generated code is the
-//! transport, and this module provides its H7 body.
+//! [`CURRENT_CORE`] is the executing core's id the pass inlines into the
+//! generated `cross_spawn` guard, and [`configure_shared_memory`] is the free
+//! function the pass injects at `BeforeInit` (D1). The pass emits the pool base
+//! as the literal `system.json` address, so this module needs no runtime
+//! address lookup (D3).
 
 use core::sync::atomic::Ordering;
 
 use portable_atomic::AtomicU32;
 use rticx_stm32h7_bindings as bindings;
-use rticx_xbin_rt::backend::{CrossBinBackend, IpcRegion};
 
 /// `stm32h7` PAC device module for this binary's core, selected by the distro
 /// feature. All memory-mapped register access below goes through it.
@@ -310,40 +312,14 @@ fn release_secondary_core() {
 #[cfg(feature = "cm4")]
 fn release_secondary_core() {}
 
-/// Zero-sized runtime backend of the STM32H7 distribution.
+/// Configures this core's view of the IPC pools and enables its cross-binary
+/// receive interrupt (D1).
 ///
-/// The generated code constructs it with `rticx_stm32h7::xbin::Backend` (see
-/// the macro's `XbinPassBackend::backend`).
-pub struct Backend;
-
-impl CrossBinBackend for Backend {
-    fn current_global_core_id(&self) -> u32 {
-        CURRENT_CORE
-    }
-
-    fn ipc_region(&self, source: u32, target: u32) -> Option<IpcRegion> {
-        let cm7_to_cm4 = source == bindings::PHYSICAL_CM7 && target == bindings::PHYSICAL_CM4;
-        let cm4_to_cm7 = source == bindings::PHYSICAL_CM4 && target == bindings::PHYSICAL_CM7;
-        if !cm7_to_cm4 && !cm4_to_cm7 {
-            return None;
-        }
-
-        let view = |core: u32| {
-            if core == bindings::PHYSICAL_CM7 {
-                bindings::SRAM3_FROM_CM7
-            } else {
-                bindings::SRAM3_FROM_CM4
-            }
-        };
-        Some(IpcRegion::new(
-            (view(source) + bindings::POOL_OFFSET) as usize,
-            (view(target) + bindings::POOL_OFFSET) as usize,
-            bindings::POOL_BUDGET as usize,
-        ))
-    }
-
-    fn configure_shared_memory(&self) {
-        configure_mpu();
-        hsem_enable_rx();
-    }
+/// The generated entry calls this before the user `init`, so the D2 SRAM3
+/// pool is mapped Normal, Non-cacheable, Shareable and the HSEM receive bank
+/// is enabled before any shared access. The macro injects the call through
+/// `XbinPassBackend::configure_shared_memory`.
+pub fn configure_shared_memory() {
+    configure_mpu();
+    hsem_enable_rx();
 }

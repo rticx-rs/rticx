@@ -3,9 +3,10 @@
 //! RTICX distribution for the dual-core STM32H7 (Cortex-M7 + Cortex-M4).
 //!
 //! One binary per core, each selecting its core with exactly one of the `cm7`
-//! / `cm4` features. The distribution implements the runtime half of the
-//! cross-binary contract ([`xbin::Backend`]) and binds the cross-binary
-//! compilation pass in its `#[app]` macro; see `README.md`.
+//! / `cm4` features. The distribution binds the cross-binary compilation pass
+//! in its `#[app]` macro and provides the H7 hardware support the generated
+//! code calls into (core id, MPU configuration of the shared pool and the HSEM
+//! doorbell transport) in [`xbin`]; see `README.md`.
 
 #[cfg(all(feature = "cm7", feature = "cm4"))]
 compile_error!(

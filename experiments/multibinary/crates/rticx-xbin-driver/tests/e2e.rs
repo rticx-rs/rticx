@@ -3,7 +3,8 @@
 //!
 //! `crates/mock/fixtures/e2e` is a standalone workspace whose `#[app]` macro is provided
 //! by its own mock distribution: the full core pass runs on `MockCoreBackend`
-//! and the cross-binary pass generates against a mock `CrossBinBackend`, so
+//! and the cross-binary pass generates against a mock `XbinPassBackend` with a
+//! runtime pool-base override, so
 //! the sender and receiver applications build and link on the host. The
 //! generated code is the real phase-2 output (FIFO views, `cross_spawn`,
 //! doorbell router, line dispatcher, init hooks); only the hardware bindings
@@ -76,15 +77,13 @@ fn cargo_xbin_build_builds_the_fixture_applications() {
         );
     }
 
-    // Phase 2 really ran: the sender's generated FIFO view diagnostic and the
+    // Phase 2 really ran: the sender's generated FIFO initializer and the
     // receiver's generated router/dispatcher task statics both leave their
-    // traces in the linked binaries.
+    // traces in the linked binaries. Neither name exists in the fixture
+    // sources, so finding one proves the generated code was linked.
     assert!(
-        binary_contains(
-            &binaries.join("m7"),
-            "`cargo xbin sync` allocated the `(0 -> 1)` IPC pool",
-        ),
-        "the sender binary does not contain the generated FIFO view"
+        binary_contains(&binaries.join("m7"), "__rticx_xbin_init_fifos_core0"),
+        "the sender binary does not contain the generated FIFO initializer"
     );
     assert!(
         binary_contains(&binaries.join("m4"), "RTICX_XBIN_ROUTER0_TO1")

@@ -1,7 +1,7 @@
 //! `cargo-xbin` driver for the RTICX multi-binary extension.
 //!
 //! The driver is the single merger and address allocator of the multi-binary
-//! pipeline (see `multibinary-multicore-plan.md` §7 and §8):
+//! pipeline:
 //!
 //! - `cargo xbin sync`: phase 1 -- collect per-application metadata, merge
 //!   and validate the system view (M1-T5), allocate the per-task FIFO

@@ -6,17 +6,16 @@
 //! allocations and their pool ids, copies the matched distro pools, assigns
 //! the doorbell lines, sets the IDL `layout_hash` and seals the topology hash.
 //!
-//! Determinism is a hard requirement (see `multibinary-multicore-plan.md`
-//! §7.1): the merged project is deterministic, the doorbell assignment below
+//! Determinism is a hard requirement:
+//! the merged project is deterministic, the doorbell assignment below
 //! is sorted, and [`SystemView`] serializes canonically, so identical inputs
 //! produce byte-identical `system.json`.
 //!
 //! Doorbells: one line per distinct `(source, target, priority)` task line
 //! (tasks of one source sharing a priority share a line). Line indices are
 //! unique per target core and assigned in `(source, priority)` order starting
-//! at 0, so the target binary can map every line to exactly one doorbell ISR
-//! (`multibinary-multicore-plan.md` §8/§10). The emitted vector is sorted by
-//! `(source, target, priority)`.
+//! at 0, so the target binary can map every line to exactly one doorbell ISR.
+//! The emitted vector is sorted by `(source, target, priority)`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

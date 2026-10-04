@@ -2,7 +2,7 @@
 //! declarations (M5.5).
 //!
 //! This module owns the syntax that the multi-binary extension adds on top of
-//! the core RTIC syntax (see `multibinary-multicore-plan.md` §6.4 and §6.5):
+//! the core RTIC syntax:
 //!
 //! - `#[app(core_ids = [..], external_cores = [..], ipc_dispatchers = [..])]`:
 //!   `core_ids` is read through the core parser (`rticx_core` owns the key

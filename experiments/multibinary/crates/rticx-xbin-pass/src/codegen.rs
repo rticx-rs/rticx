@@ -2,7 +2,7 @@
 //! (M3-T1 sender side, M3-T2 receiver side).
 //!
 //! In codegen mode the pass has loaded the driver-generated `system.json`
-//! (see `multibinary-multicore-plan.md` §8) and emits code from it:
+//! and emits code from it:
 //!
 //! - for every view task whose `spawner_core` belongs to this application
 //!   (M5.5: the producer declares nothing; the stubs are generated):
@@ -12,12 +12,13 @@
 //!     generates only the documented signature; the body is the distribution's
 //!     transport, filled through [`XbinPassBackend::ring_doorbell_fn`]
 //!     (M6.5-T2);
-//!   - a hidden **FIFO view** helper returning the fixed-address
-//!     `rticx_xbin_rt::Fifo` of the task at
-//!     `pool.base_for(this_core, source, target) + offset`, where the pool
-//!     comes from the distribution's runtime backend and the offset, depth and
-//!     element layout come from the system view (const addresses, no local input
-//!     queue, no forwarder);
+//!   - a hidden, argument-less **FIFO view** helper returning the
+//!     `rticx_xbin_rt::Fifo` of the task at its synced address: the literal
+//!     pool base recorded in `system.json` plus the task offset, or the
+//!     distribution's [`XbinPassBackend::ipc_base_override`] when it needs a
+//!     runtime lookup (host/mock backends whose pools are not at the synced
+//!     addresses). The offset, depth and element layout come from the system
+//!     view (const addresses, no local input queue, no forwarder);
 //!   - the task struct itself (`pub struct <Task>;`, the generated sender
 //!     stub) and `Task::cross_spawn(input)`, matching the error semantics of
 //!     the single-binary `cross_spawn`:
@@ -59,12 +60,12 @@
 //! task static, runs the user's `impl RticSwTask`, and checks the trait
 //! implementation — no core-pass changes are required.
 //!
-//! - **Init hooks** (M3-T3, M6-T1): codegen mode also emits the hook functions
-//!   and wires them into the generated entry functions through
-//!   [`rticx_core::RticPass::main_injection`]:
-//!   - `__rticx_xbin_configure_shared_memory` runs on every core at the start
-//!     of its entry (`MainInjectionPoint::BeforeInit`, before the user
-//!     `init`): MPU/MMU attributes are per-core, so each core maps its own
+//! - **Init hooks** (M3-T3, M6-T1): codegen mode wires the shared-memory
+//!   configuration and the FIFO initializers into the generated entry
+//!   functions through [`rticx_core::RticPass::main_injection`]:
+//!   - [`XbinPassBackend::configure_shared_memory`] is inlined on every core at
+//!     the start of its entry (`MainInjectionPoint::BeforeInit`, before the
+//!     user `init`): MPU/MMU attributes are per-core, so each core maps its own
 //!     view of the IPC pools Normal, Non-cacheable, Shareable;
 //!   - `__rticx_xbin_init_fifos_core<N>` is generated for every local core
 //!     that produces cross-binary tasks and runs at `BeforePostInit`: it
@@ -88,8 +89,6 @@
 //! (`__rticx_interrupt_free`, `main_injection`), the injected `ipc_types`
 //! module and the distribution's re-export of `rticx-xbin-rt`, so no
 //! root-workspace API changes are required.
-//!
-//! [`CrossBinBackend`]: rticx_xbin_rt::backend::CrossBinBackend
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -108,29 +107,21 @@ use crate::parse::AppExtensions;
 
 /// Code-generation configuration of the cross-binary extension.
 ///
-/// A distribution that binds [`crate::XbinPass`] implements this trait to tell
-/// the pass how the generated code reaches the distribution's runtime backend
-/// and the `rticx-xbin-rt` items it re-exports. It is the code-generation
-/// counterpart of `rticx_xbin_rt::CrossBinBackend`.
+/// A distribution that binds [`crate::XbinPass`] implements this trait to
+/// describe, at compile time, how the generated code reaches the
+/// distribution's runtime: the doorbell transport bodies, the shared-memory
+/// configuration, the current core's identity and the addresses of the IPC
+/// pools. It is the single code-generation contract: the generated code no
+/// longer threads a runtime backend value through the helpers, so everything
+/// it reads at runtime is resolved here or baked from the synced
+/// `system.json`.
 pub trait XbinPassBackend {
-    /// Expression evaluating to the distribution's runtime backend.
+    /// Path to the `rticx-xbin-rt` items (`Fifo`, `FIFO_ALIGN`, …) as
+    /// re-exported by the distribution.
     ///
-    /// The expression must yield a **value** (not a reference) implementing
-    /// `rticx_xbin_rt::CrossBinBackend`; generated code does
-    /// `let backend = <expression>;` and then calls its methods. Typical
-    /// implementations name a stateless unit struct
-    /// (`parse_quote!(rticx_h7::xbin::Backend)`) or call a constructor
-    /// (`parse_quote!(rticx_h7::xbin::backend())`). The expression is expanded
-    /// **inside the `#[app]` module**, so it may rely on the application's
-    /// imports but not on private items of the distribution macro.
-    fn backend(&self) -> syn::Expr;
-
-    /// Path to the `rticx-xbin-rt` items (`Fifo`, `CrossBinBackend`,
-    /// `FIFO_ALIGN`, …) as re-exported by the distribution.
-    ///
-    /// The generated code expands to `#rt_path::Fifo` and
-    /// `#rt_path::CrossBinBackend`, so distributions normally re-export the
-    /// runtime crate (for example `rticx_h7::export::xbin_rt`).
+    /// The generated code expands to `#rt_path::Fifo`, so distributions
+    /// normally re-export the runtime crate (for example
+    /// `rticx_h7::export::xbin_rt`).
     fn rt_path(&self) -> syn::Path;
 
     /// Path to the generated `ipc_types` module as seen by applications.
@@ -144,6 +135,54 @@ pub trait XbinPassBackend {
     /// default.
     fn ipc_types_path(&self) -> syn::Path {
         syn::parse_quote!(ipc_types)
+    }
+
+    /// Expression of the global core id of the core executing the generated
+    /// code (D5). Required.
+    ///
+    /// `cross_spawn` compares it with the task's synced `source` core and
+    /// returns `Err(Some(input))` when they differ, so a multi-core
+    /// application never enqueues from the wrong core. The expression is
+    /// expanded **inside the `#[app]` module** and must evaluate to `u32`.
+    ///
+    /// Single-core binaries typically return a constant (for example the
+    /// STM32H7's `CURRENT_CORE`), so the guard folds away; the mock returns a
+    /// runtime lookup (`__rticx_xbin_backend().global_core_id()`).
+    fn current_global_core_id(&self) -> syn::Expr;
+
+    /// Statement(s) configuring local core `local_core`'s view of every IPC
+    /// pool before any shared access (D1).
+    ///
+    /// MPU/MMU attributes are per-core, so each core maps its own view of the
+    /// pools Normal, Non-cacheable, Shareable. The pass inlines the returned
+    /// tokens at [`rticx_core::MainInjectionPoint::BeforeInit`], before the
+    /// user `init`, so the pool is mapped before the first shared write (the
+    /// generated `__rticx_xbin_init_fifos_core{N}` runs later, at
+    /// `BeforePostInit`).
+    ///
+    /// **Device and Strongly-ordered memory is forbidden:** exclusive accesses
+    /// (`ldrex`/`strex` on Cortex-M) are not valid there, so the pool's
+    /// atomics would fault or lose atomicity.
+    ///
+    /// The default is `None` (nothing), which is correct on hosts and targets
+    /// whose data cache does not cover the pool.
+    fn configure_shared_memory(&self, _local_core: u32) -> Option<TokenStream> {
+        None
+    }
+
+    /// Overrides the pool base address of the `(source -> target)` direction
+    /// as seen by endpoint `view_core` (D3).
+    ///
+    /// The default is `None`: the pass emits the literal address recorded in
+    /// `system.json`, which is what a real fixed-address distribution (the
+    /// STM32H7) needs. The expression must evaluate to `usize` and is expanded
+    /// **inside the `#[app]` module**.
+    ///
+    /// This exists **only for host/mock backends** whose pools are not at the
+    /// synced addresses (heap-backed test pools). A real fixed-address
+    /// distribution never overrides it.
+    fn ipc_base_override(&self, _view_core: u32, _source: u32, _target: u32) -> Option<syn::Expr> {
+        None
     }
 
     /// Emits the producer-side ring function of the `(source -> target)`
@@ -160,8 +199,13 @@ pub trait XbinPassBackend {
     /// distribution's transport: publish `task_id` to the pair's doorbell (a
     /// per-pair shared atomic word is the portable choice) and trigger the
     /// router interrupt. `Err(())` reports a notification that could not be
-    /// delivered; the spawn input is already enqueued, so `cross_spawn` maps
-    /// it to `Err(None)`.
+    /// delivered; the spawn input is **already enqueued** in the shared pool,
+    /// so `cross_spawn` maps it to `Err(None)` (D2).
+    ///
+    /// The transport body owns any cache maintenance a cacheable pool mapping
+    /// needs: v1 requires a Normal, Non-cacheable, Shareable pool, so a
+    /// cacheable mapping is unsupported until a distribution appears that
+    /// maintains the caches explicitly around every shared access (D2).
     fn ring_doorbell_fn(&self, source: u32, target: u32, template: syn::ItemFn) -> syn::ItemFn;
 
     /// Identifier of the interrupt handler bound to the `(source -> target)`
@@ -257,7 +301,7 @@ pub(crate) struct HookPlan {
 
 impl HookPlan {
     /// Returns the tokens to inject at `point` for the entry function of the
-    /// local `core`, using `backend` as the runtime backend expression.
+    /// local `core`, using `backend` for the shared-memory configuration (D1).
     pub(crate) fn injection(
         &self,
         point: &rticx_core::MainInjectionPoint,
@@ -267,20 +311,18 @@ impl HookPlan {
         match point {
             rticx_core::MainInjectionPoint::BeforeInit => {
                 self.global_ids.get(core as usize)?;
-                let backend_expr = backend.backend();
-                Some(quote! {
-                    __rticx_xbin_configure_shared_memory(&#backend_expr);
-                })
+                // The distribution's configuration tokens are inlined: there
+                // is no generated wrapper function anymore (D1).
+                backend.configure_shared_memory(core)
             }
             rticx_core::MainInjectionPoint::BeforePostInit => {
                 self.global_ids.get(core as usize)?;
                 if self.fifo_locals.contains(&core) {
                     // Each FIFO's indices are zeroed by its producer core,
                     // before its `post_init` can spawn (M6-T1).
-                    let backend_expr = backend.backend();
                     let init_fn = format_ident!("__rticx_xbin_init_fifos_core{core}");
                     Some(quote! {
-                        #init_fn(&#backend_expr);
+                        #init_fn();
                     })
                 } else {
                     None
@@ -625,7 +667,6 @@ fn generate_line_items(
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<Vec<Item>> {
     let rt_path = backend.rt_path();
-    let backend_expr = backend.backend();
     let task_trait = format_ident!("{HWT_TRAIT_TY}");
     let line_ty = line.enum_ident();
     let ready_queue = line.ready_queue_ident();
@@ -648,7 +689,7 @@ fn generate_line_items(
         variants.push(task_ident.clone());
         arms.push(quote! {
             #line_ty::#task_ident => {
-                let __rticx_xbin_fifo = #fifo_fn(&__rticx_xbin_backend);
+                let __rticx_xbin_fifo = #fifo_fn();
                 // SAFETY: this dispatcher is the single consumer of the FIFO
                 // (one producer core, one consumer dispatcher) and the FIFO
                 // lives at its synced, aligned address inside the region.
@@ -704,7 +745,6 @@ fn generate_line_items(
     items.push(syn::parse_quote! {
         impl #task_trait for #dispatcher_ty {
             fn exec(&mut self) {
-                let __rticx_xbin_backend = #backend_expr;
                 // SAFETY: the router (the only producer) runs at a priority
                 // at least as high as this dispatcher, so the enqueue and the
                 // dequeue never overlap on this core.
@@ -858,42 +898,27 @@ fn local_pend_fn_ident(core: u32, cores: u32) -> Ident {
     }
 }
 
-/// Generates the init hooks of one application (M3-T3, M6-T1): the per-core
-/// `__rticx_xbin_configure_shared_memory` and one
-/// `__rticx_xbin_init_fifos_core<N>` per producing core.
+/// Generates the init hooks of one application (M3-T3, M6-T1): one
+/// argument-less `__rticx_xbin_init_fifos_core<N>` per producing core, whose
+/// body bakes the synced pool addresses.
 ///
-/// The returned [`HookPlan`] is stashed by the pass and consulted from
-/// [`rticx_core::RticPass::main_injection`] to wire the hooks into the
-/// generated entry functions. All hooks go through the distribution backend;
-/// no target-specific code is generated here. Boot coordination between cores
-/// is distribution-owned and is not emitted here.
+/// The shared-memory configuration is not a generated function: the pass
+/// inlines [`XbinPassBackend::configure_shared_memory`] at
+/// [`rticx_core::MainInjectionPoint::BeforeInit`] (D1). The returned
+/// [`HookPlan`] is stashed by the pass and consulted from
+/// [`rticx_core::RticPass::main_injection`] to wire both into the generated
+/// entry functions. Boot coordination between cores is distribution-owned and
+/// is not emitted here.
 pub(crate) fn generate_init_hooks(
     view: &SystemView,
     application: &AppEntry,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<InitHooks> {
-    let rt_path = backend.rt_path();
-
-    // MPU/MMU attributes are per-core: every core configures its own view of
-    // the pools before any shared access (before the user `init` runs).
-    let configure_doc = "Configures this core's view of the IPC pools as Normal, Non-cacheable, \
-         Shareable before any shared access (M3-T3).";
-    let mut items = Vec::with_capacity(application.core_ids.len() + 1);
-    items.push(syn::parse_quote! {
-        #[doc = #configure_doc]
-        #[doc(hidden)]
-        #[allow(non_snake_case)]
-        fn __rticx_xbin_configure_shared_memory(
-            __rticx_xbin_backend: &impl #rt_path::CrossBinBackend,
-        ) {
-            __rticx_xbin_backend.configure_shared_memory();
-        }
-    });
-
     // Every core zeroes the FIFOs it produces, before its `post_init` can
     // spawn. The producer is always an endpoint of its region, so a topology
     // whose owner core is not an endpoint still initializes correctly
     // (M6-T1).
+    let mut items = Vec::with_capacity(application.core_ids.len());
     let mut fifo_locals = Vec::new();
     for (local, &global) in application.core_ids.iter().enumerate() {
         let zero_fifos = generate_fifo_inits(view, global, backend)?;
@@ -911,7 +936,7 @@ pub(crate) fn generate_init_hooks(
             #[doc = #init_doc]
             #[doc(hidden)]
             #[allow(non_snake_case)]
-            fn #init_fn(__rticx_xbin_backend: &impl #rt_path::CrossBinBackend) {
+            fn #init_fn() {
                 #(#zero_fifos)*
             }
         });
@@ -946,6 +971,62 @@ fn pool_of<'a>(view: &'a SystemView, task: &TaskEntry) -> syn::Result<Option<&'a
                 task.name
             ))
         })
+}
+
+/// Base address of `pool` as seen by endpoint `view_core`, or `None` when
+/// `view_core` is not one of the pool's endpoints (read from the synced
+/// pool entry's two endpoint views).
+///
+/// The pool records both endpoint views (`base_from_a`/`base_from_b`) keyed by
+/// the ascending global core ids `core_a`/`core_b`, so the view of a core is
+/// independent of the `(source -> target)` direction it participates in.
+fn pool_endpoint_base(pool: &PoolEntry, view_core: u32) -> Option<u32> {
+    if view_core == pool.core_a {
+        Some(pool.base_from_a)
+    } else if view_core == pool.core_b {
+        Some(pool.base_from_b)
+    } else {
+        None
+    }
+}
+
+/// Renders `base` as a `usize` literal expression for the generated code.
+fn base_literal(base: u32) -> syn::Expr {
+    let lit = LitInt::new(&format!("0x{base:08x}usize"), Span::call_site());
+    syn::parse_quote!(#lit)
+}
+
+/// Resolves the base-address expression of the `(source -> target)` pool as
+/// seen by endpoint `view_core`.
+///
+/// A distribution override wins (D3: only host/mock backends need one, because
+/// their pools are not at the synced addresses); otherwise the pass emits the
+/// literal address recorded in `system.json`. A view with neither a pool nor an
+/// override cannot be generated and is a hard `cargo xbin sync` error.
+fn pool_base_expr(
+    backend: &dyn XbinPassBackend,
+    view_core: u32,
+    source: u32,
+    target: u32,
+    pool: Option<&PoolEntry>,
+) -> syn::Result<syn::Expr> {
+    if let Some(expr) = backend.ipc_base_override(view_core, source, target) {
+        return Ok(expr);
+    }
+    let pool = pool.ok_or_else(|| {
+        error(format!(
+            "the synced system view has no IPC pool for the `({source} -> {target})` direction \
+             and the distribution provides no base override; run `cargo xbin sync`"
+        ))
+    })?;
+    let base = pool_endpoint_base(pool, view_core).ok_or_else(|| {
+        error(format!(
+            "global core {view_core} is not an endpoint of the `({source} -> {target})` IPC \
+             pool `{}`; run `cargo xbin sync`",
+            pool.id
+        ))
+    })?;
+    Ok(base_literal(base))
 }
 
 /// Pins a task FIFO to its distro pool (M6.9-T6).
@@ -991,9 +1072,10 @@ fn pool_consts(pool: Option<&PoolEntry>, task: &TaskEntry) -> syn::Result<TokenS
 /// Generates the FIFO-zeroing blocks of the `producer` core's initializer.
 ///
 /// The producer of a FIFO is an endpoint of its `(source -> target)` pool by
-/// construction, so [`rticx_xbin_rt::backend::IpcRegion::base_for`] always
-/// resolves; a topology whose owner core is not an endpoint of the pool
-/// initializes correctly (M6-T1).
+/// construction, so the synced pool address always resolves; a topology whose
+/// owner core is not an endpoint of the pool initializes correctly (M6-T1).
+/// The base is baked (literal, or the distribution override for host pools),
+/// so the generated initializer is argument-less.
 fn generate_fifo_inits(
     view: &SystemView,
     producer: u32,
@@ -1015,15 +1097,10 @@ fn generate_fifo_inits(
         let depth = task.fifo.depth as usize;
         let elem_size = task.fifo.elem_size as usize;
         let elem_align = input_align(view, task)? as usize;
-        let pool = pool_consts(pool_of(view, task)?, task)?;
+        let pool = pool_of(view, task)?;
+        let pool_consts = pool_consts(pool, task)?;
+        let base = pool_base_expr(backend, producer, source, target, pool)?;
 
-        let missing_pool = format!(
-            "`cargo xbin sync` allocated the `({source} -> {target})` IPC pool; re-run it \
-             after changing `rticx.toml`"
-        );
-        let wrong_core = format!(
-            "the producer core is not an endpoint of the `({source} -> {target})` IPC pool"
-        );
         blocks.push(quote! {
             {
                 const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
@@ -1042,27 +1119,17 @@ fn generate_fifo_inits(
                     core::mem::align_of::<#ipc_types::#type_ident>() == #elem_align,
                     "the IDL layout of the spawn input changed; run `cargo xbin sync`",
                 );
-                #pool
-
-                let __rticx_xbin_region = __rticx_xbin_backend
-                    .ipc_region(__RTICX_XBIN_SOURCE_CORE, __RTICX_XBIN_TARGET_CORE)
-                    .expect(#missing_pool);
-                let __rticx_xbin_base = __rticx_xbin_region
-                    .base_for(
-                        __rticx_xbin_backend.current_global_core_id(),
-                        __RTICX_XBIN_SOURCE_CORE,
-                        __RTICX_XBIN_TARGET_CORE,
-                    )
-                    .expect(#wrong_core);
+                #pool_consts
 
                 // SAFETY: `system.json` places the FIFO at `offset`, aligned,
                 // inside the pool; the producer core runs this before its
                 // `post_init` can spawn and no consumer acts before a
                 // notification, and `Fifo::init` documents why it must not
-                // race one.
+                // race one. The base is the literal synced address, or the
+                // distribution's override for host/mock pools (D3).
                 unsafe {
                     (*#rt_path::Fifo::<#ipc_types::#type_ident, #depth>::view_at(
-                        __rticx_xbin_base + __RTICX_XBIN_FIFO_OFFSET,
+                        #base + __RTICX_XBIN_FIFO_OFFSET,
                     ))
                     .init();
                 }
@@ -1200,8 +1267,9 @@ fn resolve_receiver<'a>(
     })
 }
 
-/// Generates the hidden FIFO view of one resolved receiver, mirroring the
-/// sender-side helper but resolving the `base_from_target` view of the pool.
+/// Generates the hidden, argument-less FIFO view of one resolved receiver,
+/// mirroring the sender-side helper but resolving the consumer endpoint's view
+/// of the pool.
 fn generate_receiver_fifo_view(
     resolved: &ResolvedReceiver<'_>,
     backend: &dyn XbinPassBackend,
@@ -1216,7 +1284,8 @@ fn generate_receiver_fifo_view(
     let depth = task.fifo.depth as usize;
     let elem_size = task.fifo.elem_size as usize;
     let elem_align = resolved.elem_align as usize;
-    let pool = pool_consts(resolved.pool, task)?;
+    let pool_consts = pool_consts(resolved.pool, task)?;
+    let base = pool_base_expr(backend, target_core, source, target_core, resolved.pool)?;
 
     let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
     let fifo_doc = format!(
@@ -1224,21 +1293,12 @@ fn generate_receiver_fifo_view(
          {target_core})` pool offset from `system.json`.",
         task.name
     );
-    let missing_pool = format!(
-        "`cargo xbin sync` allocated the `({source} -> {target_core})` IPC pool; re-run it \
-         after changing `rticx.toml`"
-    );
-    let wrong_core = format!(
-        "the current core is not an endpoint of the `({source} -> {target_core})` IPC pool"
-    );
 
     Ok(syn::parse_quote! {
         #[doc = #fifo_doc]
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        fn #fifo_fn(
-            __rticx_xbin_backend: &impl #rt_path::CrossBinBackend,
-        ) -> *mut #rt_path::Fifo<#input_ty, #depth> {
+        fn #fifo_fn() -> *mut #rt_path::Fifo<#input_ty, #depth> {
             const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
             const __RTICX_XBIN_TARGET_CORE: u32 = #target_core;
             const __RTICX_XBIN_FIFO_OFFSET: usize = #offset;
@@ -1255,26 +1315,17 @@ fn generate_receiver_fifo_view(
                 core::mem::align_of::<#input_ty>() == #elem_align,
                 "the IDL layout of the spawn input changed; run `cargo xbin sync`",
             );
-            #pool
-
-            let __rticx_xbin_region = __rticx_xbin_backend
-                .ipc_region(__RTICX_XBIN_SOURCE_CORE, __RTICX_XBIN_TARGET_CORE)
-                .expect(#missing_pool);
-            let __rticx_xbin_base = __rticx_xbin_region
-                .base_for(
-                    __rticx_xbin_backend.current_global_core_id(),
-                    __RTICX_XBIN_SOURCE_CORE,
-                    __RTICX_XBIN_TARGET_CORE,
-                )
-                .expect(#wrong_core);
+            #pool_consts
 
             // SAFETY: `system.json` places the FIFO at `offset`, 8-byte
             // aligned, inside the pool; `view_at` documents the remaining
             // requirements (one producer, one consumer, initialized memory),
-            // which the doorbell/dispatcher protocol upholds.
+            // which the doorbell/dispatcher protocol upholds. The base is the
+            // literal synced address, or the distribution's override for
+            // host/mock pools (D3).
             unsafe {
                 #rt_path::Fifo::<#input_ty, #depth>::view_at(
-                    __rticx_xbin_base + __RTICX_XBIN_FIFO_OFFSET,
+                    #base + __RTICX_XBIN_FIFO_OFFSET,
                 )
             }
         }
@@ -1581,7 +1632,7 @@ fn generate_sender(
     let task_ident = ident(&task.name)?;
     let input_ty = input_type(task, backend)?;
     let rt_path = backend.rt_path();
-    let backend_expr = backend.backend();
+    let current_core = backend.current_global_core_id();
 
     let source = task.fifo.source;
     let target_core = task.fifo.target;
@@ -1590,7 +1641,9 @@ fn generate_sender(
     let depth = task.fifo.depth as usize;
     let elem_size = task.fifo.elem_size as usize;
     let elem_align = input_align(view, task)? as usize;
-    let pool = pool_consts(pool_of(view, task)?, task)?;
+    let pool = pool_of(view, task)?;
+    let pool_consts = pool_consts(pool, task)?;
+    let base = pool_base_expr(backend, source, source, target_core, pool)?;
 
     let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
     let ring_fn = format_ident!("__rticx_xbin_ring_{source}_{target_core}");
@@ -1598,13 +1651,6 @@ fn generate_sender(
         "Returns this application's view of the `{}` FIFO, placed at its `({source} -> \
          {target_core})` pool offset from `system.json`.",
         task.name
-    );
-    let missing_pool = format!(
-        "`cargo xbin sync` allocated the `({source} -> {target_core})` IPC pool; re-run it \
-         after changing `rticx.toml`"
-    );
-    let wrong_core = format!(
-        "the current core is not an endpoint of the `({source} -> {target_core})` IPC pool"
     );
 
     let spawn_doc = format!(
@@ -1633,9 +1679,7 @@ fn generate_sender(
             #[doc = #fifo_doc]
             #[doc(hidden)]
             #[allow(non_snake_case)]
-            fn #fifo_fn(
-                __rticx_xbin_backend: &impl #rt_path::CrossBinBackend,
-            ) -> *mut #rt_path::Fifo<#input_ty, #depth> {
+            fn #fifo_fn() -> *mut #rt_path::Fifo<#input_ty, #depth> {
                 const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
                 const __RTICX_XBIN_TARGET_CORE: u32 = #target_core;
                 const __RTICX_XBIN_FIFO_OFFSET: usize = #offset;
@@ -1644,26 +1688,17 @@ fn generate_sender(
                     __RTICX_XBIN_FIFO_OFFSET % #rt_path::FIFO_ALIGN == 0,
                     "`cargo xbin sync` allocated a misaligned FIFO offset",
                 );
-                #pool
-
-                let __rticx_xbin_region = __rticx_xbin_backend
-                    .ipc_region(__RTICX_XBIN_SOURCE_CORE, __RTICX_XBIN_TARGET_CORE)
-                    .expect(#missing_pool);
-                let __rticx_xbin_base = __rticx_xbin_region
-                    .base_for(
-                        __rticx_xbin_backend.current_global_core_id(),
-                        __RTICX_XBIN_SOURCE_CORE,
-                        __RTICX_XBIN_TARGET_CORE,
-                    )
-                    .expect(#wrong_core);
+                #pool_consts
 
                 // SAFETY: `system.json` places the FIFO at `offset`, 8-byte
                 // aligned, inside the pool; `view_at` documents the remaining
                 // requirements (one producer, one consumer, initialized memory),
-                // which the doorbell/dispatcher protocol upholds.
+                // which the doorbell/dispatcher protocol upholds. The base is
+                // the literal synced address, or the distribution's override
+                // for host/mock pools (D3).
                 unsafe {
                     #rt_path::Fifo::<#input_ty, #depth>::view_at(
-                        __rticx_xbin_base + __RTICX_XBIN_FIFO_OFFSET,
+                        #base + __RTICX_XBIN_FIFO_OFFSET,
                     )
                 }
             }
@@ -1674,8 +1709,6 @@ fn generate_sender(
                 pub fn cross_spawn(
                     input: #input_ty,
                 ) -> Result<(), Option<#input_ty>> {
-                    use #rt_path::CrossBinBackend as _;
-
                     const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
                     const __RTICX_XBIN_TASK_ID: u32 = #task_id;
 
@@ -1688,13 +1721,14 @@ fn generate_sender(
                         "the IDL layout of the spawn input changed; run `cargo xbin sync`",
                     );
 
-                    let __rticx_xbin_backend = #backend_expr;
-                    if __rticx_xbin_backend.current_global_core_id() != __RTICX_XBIN_SOURCE_CORE {
+                    // The caller must run on the task's synced producer core;
+                    // a single-core binary folds this guard away (D5).
+                    if #current_core != __RTICX_XBIN_SOURCE_CORE {
                         return Err(Some(input));
                     }
 
                     __rticx_interrupt_free(|| -> Result<(), Option<#input_ty>> {
-                        let __rticx_xbin_fifo = #fifo_fn(&__rticx_xbin_backend);
+                        let __rticx_xbin_fifo = #fifo_fn();
                         // SAFETY: this is the single producer core (checked
                         // above) and `__rticx_interrupt_free` serializes other
                         // local spawners.
@@ -1796,19 +1830,20 @@ mod tests {
     }
 
     /// A backend that does not adopt the capability binding keeps the identity
-    /// physical core and reports no reachable pool (M6.9-T1): the defaults are
-    /// the "no distro capability information" fallback.
+    /// physical core and reports no reachable pool (M6.9-T1), and the hardware
+    /// codegen hooks default to "nothing": no shared-memory configuration and
+    /// no base override. Only `current_global_core_id` is required (D5).
     #[test]
-    fn capability_binding_defaults_to_identity_and_no_pools() {
+    fn backend_defaults_are_identity_no_pools_and_no_hooks() {
         struct BareBackend;
 
         impl XbinPassBackend for BareBackend {
-            fn backend(&self) -> syn::Expr {
-                syn::parse_quote!(())
-            }
-
             fn rt_path(&self) -> syn::Path {
                 syn::parse_quote!(rticx_xbin_rt)
+            }
+
+            fn current_global_core_id(&self) -> syn::Expr {
+                syn::parse_quote!(0u32)
             }
 
             fn ring_doorbell_fn(
@@ -1837,5 +1872,25 @@ mod tests {
         let backend = BareBackend;
         assert_eq!(backend.physical_core(4), PhysicalCore(4));
         assert!(backend.ipc_pools(0).is_empty());
+        assert!(backend.configure_shared_memory(0).is_none());
+        assert!(backend.ipc_base_override(0, 0, 1).is_none());
+    }
+
+    /// The endpoint base resolves each pool endpoint's own view, independent
+    /// of the direction the pool is used in.
+    #[test]
+    fn pool_endpoint_base_resolves_each_endpoints_view() {
+        let pool = PoolEntry {
+            id: "p01".to_string(),
+            core_a: 0,
+            core_b: 1,
+            base_from_a: 0x3004_0000,
+            base_from_b: 0x1004_0000,
+            budget: 4096,
+            used: 100,
+        };
+        assert_eq!(pool_endpoint_base(&pool, 0), Some(0x3004_0000));
+        assert_eq!(pool_endpoint_base(&pool, 1), Some(0x1004_0000));
+        assert_eq!(pool_endpoint_base(&pool, 2), None);
     }
 }

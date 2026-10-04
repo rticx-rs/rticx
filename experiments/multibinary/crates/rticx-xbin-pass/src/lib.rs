@@ -1,7 +1,7 @@
 //! Compilation pass for cross-binary tasks in the RTICX multi-binary
 //! extension.
 //!
-//! The pass has two modes (see `multibinary-multicore-plan.md` §7 and §8):
+//! The pass has two modes:
 //!
 //! - **metadata mode** (phase 1, `cargo xbin sync`): when
 //!   `RTICX_XBIN_META_OUT` is set in the compiler environment, the pass writes
@@ -37,11 +37,12 @@
 //!     as `pub mod <ipc_types>` together with the `CrossCoreMessage` marker
 //!     trait its types implement, so `ipc_types::TypeX` resolves inside the
 //!     application without a checked-in crate;
-//!   - init hooks (M3-T3, M6-T1): `__rticx_xbin_configure_shared_memory` on
-//!     every core and `__rticx_xbin_init_fifos_core<N>` on every core
-//!     producing cross-binary FIFOs, wired into the generated entry functions
-//!     through [`RticPass::main_injection`] (see `crate::codegen`). Boot
-//!     sequencing between cores is distribution-owned;
+//!   - init hooks (M3-T3, M6-T1): the distribution's
+//!     `configure_shared_memory` inlined on every core and one
+//!     `__rticx_xbin_init_fifos_core<N>` on every core producing cross-binary
+//!     FIFOs, wired into the generated entry functions through
+//!     [`RticPass::main_injection`] (see `crate::codegen`). Boot sequencing
+//!     between cores is distribution-owned;
 //!   - freshness (M3-T4): the generated code embeds the synced
 //!     `__RTICX_XBIN_TOPOLOGY_HASH` and `include_str!`s the system view, so
 //!     rustc records it in dep-info and rebuilds the application when it

@@ -544,9 +544,10 @@ From the view, the pass generated inside the `#[app]` modules:
   view, the `SpawnInput: CrossCoreMessage` assertion, the `EncryptTask` line
   dispatcher bound to `XBIN_IPC_LINE_0`, and the `0->1` doorbell router;
 - in both: the injected `CrossCoreMessage` trait and `pub mod ipc_types` (from
-  `ipc_types.rs`), the entry hooks (`configure_shared_memory` on every core and
-  `init_fifos` on core 0 as the producer, with the distribution owning the boot
-  handshake) and the `__RTICX_XBIN_TOPOLOGY_HASH` freshness anchor.
+  `ipc_types.rs`), the entry hooks (the distribution's inlined
+  `configure_shared_memory` on every core and `init_fifos` on core 0 as the
+  producer, with the distribution owning the boot handshake) and the
+  `__RTICX_XBIN_TOPOLOGY_HASH` freshness anchor.
 
 **Step 7 — run it.** `cargo xbin build` compiles the host binaries but does
 not run them. The end-to-end behaviour (spawn → ring function → router →
@@ -688,10 +689,10 @@ shared memory and zeroes the FIFOs each core produces:
 
 1. the distribution releases the cores (H7: the CM7 initializes shared memory
    and then releases the CM4 from reset, from the distribution's `post_init`);
-2. **every core** runs `__rticx_xbin_configure_shared_memory` before its user
-   `init`, and every core that produces cross-binary tasks zeroes the ring
-   indices of exactly the FIFOs it produces at `BeforePostInit`, before its
-   `post_init` can spawn;
+2. **every core** runs the distribution's inlined `configure_shared_memory`
+   tokens before its user `init` (mapping its own pool view), and every core
+   that produces cross-binary tasks zeroes the ring indices of exactly the
+   FIFOs it produces at `BeforePostInit`, before its `post_init` can spawn;
 3. the distribution guarantees its peers are up before IPC or the router
    interrupts are relied on. Spawning before the consumer's router IRQ is
    enabled is safe while the doorbell latches (the H7 HSEM status does) and the
@@ -708,9 +709,9 @@ source of runtime-only failures:
 - **Attributes:** map every pool Normal, **Non-cacheable, Shareable** (MPU
   or equivalent). Never Device/Strongly-ordered memory: the FIFO's
   `ldrex`/`strex`-based atomics are invalid there.
-- **Timing:** `configure_shared_memory()` runs at the start of each entry,
-  before the user `init` and before any generated code touches a pool, so
-  configure it there (the distribution implements the backend method).
+- **Timing:** the distribution's `XbinPassBackend::configure_shared_memory`
+  tokens run at the start of each entry, before the user `init` and before any
+  generated code touches a pool, so configure it there.
 - **Linker/MPU consistency:** reserve each pool outside every binary's
   `.data`/`.bss` (section 7.5); keep the capability binding's per-core pool
   views consistent with the MPU region (base and limit alignment/size follow
@@ -720,11 +721,12 @@ source of runtime-only failures:
   endpoint's own view as `base_local` and the peer's as `base_peer`; the
   generated code uses the view of the core that runs it. When both cores see
   the same absolute address, report the same value for both.
-- **Cacheable fallback (unsupported v1):** if a pool cannot be made
-  non-cacheable, use the `clean_range`/`invalidate_range` hooks on the
-  producer/consumer paths and keep the atomic ordering; the
+- **Cacheable mapping (unsupported v1):** a pool must be non-cacheable. The
+  pass offers no cache-hook binding; a cacheable mapping would require the
+  generated transport body to clean/invalidate around every shared access, and
+  is out of scope (the
   [architecture decision tree](architecture.md#6-memory-and-layout) spells
-  this out. Prefer non-cacheable.
+  this out). Prefer non-cacheable.
 - **IRQs:** every `ipc_dispatchers` entry and every pair doorbell IRQ must be
   enabled and assigned a priority at least as urgent as the tasks they wake;
   the core pass's used-IRQ machinery does this from the generated
@@ -736,16 +738,25 @@ Everything in this section is the **distribution author's** responsibility.
 Since M6.9 the project (`rticx.toml`) declares no IPC memory: the distribution
 owns the pools, their addresses and aliases, the shared budget, and the linker
 reservations that keep them out of every binary's allocated data. The
-[plan §10](../multibinary-multicore-plan.md#10-distributionbackend-contract)
+[plan §10](multibinary-multicore-plan.md#10-distributionbackend-contract)
 is the normative contract; this is the practical checklist.
 
-**1. Report the capability binding.** A distribution's `#[app]` macro binds
-`rticx-xbin-pass` with an `XbinPassBackend` implementing two queries:
+**1. Report the capability binding and the hardware codegen.** A
+distribution's `#[app]` macro binds `rticx-xbin-pass` with an `XbinPassBackend`
+implementing the two capability queries
 
 ```rust
 fn physical_core(&self, local_core: u32) -> PhysicalCore; // e.g. "cm7" -> 0
 fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool>;
 ```
+
+plus the hardware-codegen bindings the pass inlines: `current_global_core_id`
+(the `cross_spawn` core guard, required), `configure_shared_memory(local_core)`
+(the per-core pool mapping, injected before the user `init`) and the optional
+`ipc_base_override(view_core, source, target)` that only heap-backed host/mock
+backends need (a fixed-address distribution leaves it `None`, and the pass
+emits the literal `system.json` address). `rt_path` points the generated code
+at the distribution's runtime `Fifo` re-export.
 
 Each `IpcPool` describes one **unordered** core pair (a *dual*) from this
 core's side: a symbolic `id`, the `peer` physical core, this core's view

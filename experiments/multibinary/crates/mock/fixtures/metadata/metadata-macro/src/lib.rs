@@ -43,7 +43,7 @@ impl MetadataCapabilityBackend {
 }
 
 impl XbinPassBackend for MetadataCapabilityBackend {
-    fn backend(&self) -> syn::Expr {
+    fn current_global_core_id(&self) -> syn::Expr {
         // Never reached: the fixture runs only the metadata pass.
         syn::parse_quote!(unreachable!())
     }

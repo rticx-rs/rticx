@@ -1,6 +1,6 @@
 //! Protocol support for the RTICX multi-binary extension.
 //!
-//! Responsibilities (see `multibinary-multicore-plan.md` §6 and §9):
+//! Responsibilities:
 //!
 //! - [`idl`]: parse `ipc-types.toml` and validate the 32-bit-safe type subset;
 //! - [`project`]: parse `rticx.toml`, the single source of project topology;

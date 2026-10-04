@@ -1,8 +1,7 @@
 //! Canonical in-region FIFO image and sizing.
 //!
 //! Every cross-binary task gets a fixed-size FIFO inside the shared-memory
-//! region of its `(source -> target)` direction (see
-//! `multibinary-multicore-plan.md` §7.1 and §9). The driver computes sizes and
+//! region of its `(source -> target)` direction. The driver computes sizes and
 //! offsets on the host, so the image below is a canonical, target-independent
 //! contract that the runtime type of `rticx-xbin-rt` mirrors exactly:
 //!

@@ -1,17 +1,15 @@
 //! Host tests for the mock cross-binary backend.
 //!
-//! Covers the pool table, the per-handle core identity, the pair doorbell
-//! message word and the no-op cache hooks, plus the M2-T3 acceptance case:
-//! two threads spawn and drain through a raw `Fifo` placed in a mock pool,
-//! notified through the pair doorbell.
+//! Covers the pool table, the per-handle core identity and the pair doorbell
+//! message word, plus the M2-T3 acceptance case: two threads spawn and drain
+//! through a raw `Fifo` placed in a mock pool, notified through the pair
+//! doorbell.
 
-use std::mem::size_of;
 use std::thread;
 use std::time::Duration;
 
 use rticx_xbin_mock::{MockError, MockSystem};
-use rticx_xbin_rt::backend::CrossBinBackend;
-use rticx_xbin_rt::{FIFO_ALIGN, FIFO_HEADER, Fifo};
+use rticx_xbin_rt::{FIFO_ALIGN, Fifo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,33 +39,28 @@ fn pools_are_aligned_and_addressable_from_both_ends() {
 
     let sender = system.backend(0);
     let receiver = system.backend(1);
-    let pool = sender.ipc_region(0, 1).expect("pool {0, 1} exists");
+    let base = sender.pool_base(0, 1);
 
-    assert_eq!(pool.base_from_source(), pool.base_from_target());
-    assert_eq!(pool.base_from_source() % FIFO_ALIGN, 0);
-    assert_eq!(pool.size(), 256);
-    assert_eq!(pool.base_for(0, 0, 1), Some(pool.base_from_source()));
-    assert_eq!(pool.base_for(1, 0, 1), Some(pool.base_from_target()));
-    assert_eq!(pool.base_for(2, 0, 1), None);
+    assert_eq!(base % FIFO_ALIGN, 0);
+    assert_eq!(receiver.pool_base(0, 1), base);
+    assert_eq!(system.pool_base(0, 1), Some(base));
+    // The mock has a single address space, so both endpoint views coincide.
+    assert_eq!(sender.pool_base(1, 0), base);
 
-    assert_eq!(receiver.ipc_region(0, 1), Some(pool));
-    assert_eq!(sender.ipc_region(7, 8), None);
+    assert_eq!(system.pool_base(7, 8), None);
 }
 
-/// Both directions of a dual are the same shared pool: the backward view is
-/// the forward one with the endpoint views swapped (M6.9-T6). In the mock's
-/// single address space both base addresses coincide.
+/// Both directions of a dual are the same shared pool: the mock has one
+/// address space per process, so `(0, 1)` and `(1, 0)` resolve the same base
+/// (M6.9-T6).
 #[test]
 fn both_directions_return_the_same_pool() {
     let mut system = MockSystem::new();
     system.add_pool(0, 1, 256).unwrap();
 
-    let forward = system.backend(0).ipc_region(0, 1).expect("0 -> 1 pool");
-    let backward = system.backend(0).ipc_region(1, 0).expect("1 -> 0 pool");
-
-    assert_eq!(forward.size(), backward.size(), "one shared budget");
-    assert_eq!(forward.base_from_source(), backward.base_from_target());
-    assert_eq!(forward.base_from_target(), backward.base_from_source());
+    let backend = system.backend(0);
+    assert_eq!(backend.pool_base(0, 1), backend.pool_base(1, 0));
+    assert_eq!(system.pool_base(0, 1), system.pool_base(1, 0));
 }
 
 #[test]
@@ -105,10 +98,9 @@ fn pool_declaration_rejects_invalid_input() {
 }
 
 #[test]
-fn current_global_core_id_comes_from_the_handle() {
+fn global_core_id_comes_from_the_handle() {
     let system = MockSystem::new();
-    assert_eq!(system.backend(0).current_global_core_id(), 0);
-    assert_eq!(system.backend(7).current_global_core_id(), 7);
+    assert_eq!(system.backend(0).global_core_id(), 0);
     assert_eq!(system.backend(7).global_core_id(), 7);
 }
 
@@ -154,18 +146,16 @@ fn pair_doorbell_wakes_a_waiting_router() {
     });
 }
 
+/// The address [`MockSystem::pool_base`] returns is directly usable as a raw
+/// `Fifo` view: the host needs no mapping, cache or MPU work (the mock binds
+/// no `configure_shared_memory`).
 #[test]
-fn cache_hooks_are_no_ops_on_host() {
+fn pool_base_is_usable_as_a_raw_fifo_view() {
     let mut system = MockSystem::new();
     system.add_pool(0, 1, 128).unwrap();
-    let backend = system.backend(0);
-    let region = backend.ipc_region(0, 1).unwrap();
+    let base = system.backend(0).pool_base(0, 1);
 
-    backend.configure_shared_memory();
-    backend.clean_range(region.base_from_source(), region.size());
-    backend.invalidate_range(region.base_from_source(), region.size());
-
-    let fifo = unsafe { Fifo::<Msg, 2>::view_at(region.base_from_source()) };
+    let fifo = unsafe { Fifo::<Msg, 2>::view_at(base) };
     assert!(unsafe { (*fifo).enqueue(msg(1)) }.is_ok());
     assert_eq!(unsafe { (*fifo).dequeue() }, Some(msg(1)));
 }
@@ -180,9 +170,8 @@ fn two_threads_spawn_and_drain_via_raw_fifo() {
 
     thread::scope(|scope| {
         let producer = scope.spawn(move || {
-            let region = sender.ipc_region(0, 1).expect("region 0->1 exists");
-            assert!(FIFO_HEADER + size_of::<Msg>() * DEPTH <= region.size());
-            let fifo = unsafe { Fifo::<Msg, DEPTH>::view_at(region.base_from_source()) };
+            let base = sender.pool_base(0, 1);
+            let fifo = unsafe { Fifo::<Msg, DEPTH>::view_at(base) };
 
             for seq in 0..MESSAGES {
                 let mut value = msg(seq);
@@ -199,8 +188,8 @@ fn two_threads_spawn_and_drain_via_raw_fifo() {
         });
 
         let consumer = scope.spawn(move || {
-            let region = receiver.ipc_region(0, 1).expect("region 0->1 exists");
-            let fifo = unsafe { Fifo::<Msg, DEPTH>::view_at(region.base_from_target()) };
+            let base = receiver.pool_base(0, 1);
+            let fifo = unsafe { Fifo::<Msg, DEPTH>::view_at(base) };
 
             let mut expected = 0;
             while expected < MESSAGES {

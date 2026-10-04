@@ -4,11 +4,11 @@
 //! The sender fixture expands in codegen mode (no core pass: its expansion is
 //! a plain module), is written into a throwaway cargo binary together with a
 //! stub `ipc_types.rs` next to its `system.json` and the in-tree mock, and is
-//! **run** on the host:
-//! the generated `__rticx_xbin_configure_shared_memory` must configure this
-//! core's view of the pools, and the generated
+//! **run** on the host: the generated, argument-less
 //! `__rticx_xbin_init_fifos_core0` must zero exactly the FIFOs produced by
-//! core 0 (M6-T1), leaving its peer's FIFOs untouched. Generated code arms no
+//! core 0 (M6-T1), leaving its peer's FIFOs untouched. The shared-memory
+//! configuration is inlined at `BeforeInit` (D1) and is a no-op on the host,
+//! so no configure wrapper function is generated. Generated code arms no
 //! doorbell (M6.5: the router IRQs are enabled and prioritized by the core
 //! pass's used-IRQ machinery). Boot sequencing between cores is
 //! distribution-owned and is not part of these hooks.
@@ -111,12 +111,19 @@ const SYSTEM_JSON: &str = r#"{
 struct TestBackend;
 
 impl XbinPassBackend for TestBackend {
-    fn backend(&self) -> syn::Expr {
-        syn::parse_quote!(__rticx_xbin_backend())
-    }
-
     fn rt_path(&self) -> syn::Path {
         syn::parse_quote!(rticx_xbin_rt)
+    }
+
+    fn current_global_core_id(&self) -> syn::Expr {
+        syn::parse_quote!(__rticx_xbin_backend().global_core_id())
+    }
+
+    fn ipc_base_override(&self, _view_core: u32, source: u32, target: u32) -> Option<syn::Expr> {
+        // The host mock pools are heap-backed, not at the synced addresses.
+        Some(syn::parse_quote!(
+            __rticx_xbin_backend().pool_base(#source, #target)
+        ))
     }
 
     fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
@@ -175,12 +182,8 @@ fn owner_app() -> syn::ItemMod {
                 __rticx_xbin_system()
             }
 
-            pub fn test_configure_shared_memory() {
-                __rticx_xbin_configure_shared_memory(&__rticx_xbin_backend());
-            }
-
             pub fn test_init_fifos() {
-                __rticx_xbin_init_fifos_core0(&__rticx_xbin_backend());
+                __rticx_xbin_init_fifos_core0();
             }
         }
     }
@@ -258,27 +261,25 @@ fn write_project(root: &Path, expanded: &str) {
          #![allow(dead_code, unused_imports, unused_variables, non_snake_case, \
          non_upper_case_globals, static_mut_refs)]\n\n\
          include!(\"generated.rs\");\n\n\
-         use rticx_xbin_rt::backend::CrossBinBackend;\n\
          use rticx_xbin_rt::Fifo;\n\n\
          fn msg(addr: u32) -> app::ipc_types::EncryptReq {\n\
              app::ipc_types::EncryptReq { addr, len: 2, key: 3 }\n\
          }\n\n\
          fn main() {\n\
-              let system = app::test_system();\n\
-              app::test_configure_shared_memory();\n\n\
+              let system = app::test_system();\n\n\
               // Dirty both task FIFOs: they live in the same shared `p01`\n\
               // pool but are produced by different cores, so\n\
               // `init_fifos_core0` must zero exactly the `0 -> 1` FIFO and\n\
               // leave the `1 -> 0` one untouched (M6-T1).\n\
-             let out_pool = system.backend(0).ipc_region(0, 1).expect(\"pool {0, 1}\");\n\
+             let out_base = system.pool_base(0, 1).expect(\"pool {0, 1}\");\n\
              // `EncryptTask` is the second task of the shared `p01` pool.\n\
              let out_fifo = unsafe {\n\
-                 Fifo::<app::ipc_types::EncryptReq, 3usize>::view_at(out_pool.base_from_source() + 88)\n\
+                 Fifo::<app::ipc_types::EncryptReq, 3usize>::view_at(out_base + 88)\n\
              };\n\
-             let in_pool = system.backend(0).ipc_region(1, 0).expect(\"pool {1, 0}\");\n\
+             let in_base = system.pool_base(1, 0).expect(\"pool {1, 0}\");\n\
              // `DecryptTask` is the first task of the shared `p01` pool.\n\
              let in_fifo = unsafe {\n\
-                 Fifo::<app::ipc_types::EncryptReq, 2usize>::view_at(in_pool.base_from_target())\n\
+                 Fifo::<app::ipc_types::EncryptReq, 2usize>::view_at(in_base)\n\
              };\n\
              assert!(unsafe { (*out_fifo).enqueue(msg(1)) }.is_ok());\n\
              assert!(unsafe { (*in_fifo).enqueue(msg(2)) }.is_ok());\n\
@@ -326,8 +327,8 @@ fn mock_app_initializes_only_its_produced_fifos() {
 
     let expanded = expand(&system);
     assert!(
-        expanded.contains("__rticx_xbin_configure_shared_memory"),
-        "the configure hook is missing: {expanded}"
+        !expanded.contains("__rticx_xbin_configure_shared_memory"),
+        "the configure wrapper function must be gone (D1): {expanded}"
     );
     assert!(
         expanded.contains("__rticx_xbin_init_fifos_core0"),

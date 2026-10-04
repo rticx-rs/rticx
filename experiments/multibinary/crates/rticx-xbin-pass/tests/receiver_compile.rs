@@ -114,12 +114,19 @@ unsafe impl CrossCoreMessage for EncryptReq {}\n";
 struct CompileBackend;
 
 impl XbinPassBackend for CompileBackend {
-    fn backend(&self) -> syn::Expr {
-        syn::parse_quote!(__rticx_xbin_backend())
-    }
-
     fn rt_path(&self) -> syn::Path {
         syn::parse_quote!(rticx_xbin_rt)
+    }
+
+    fn current_global_core_id(&self) -> syn::Expr {
+        syn::parse_quote!(__rticx_xbin_backend().global_core_id())
+    }
+
+    fn ipc_base_override(&self, _view_core: u32, source: u32, target: u32) -> Option<syn::Expr> {
+        // The host mock pools are heap-backed, not at the synced addresses.
+        Some(syn::parse_quote!(
+            __rticx_xbin_backend().pool_base(#source, #target)
+        ))
     }
 
     fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
@@ -472,9 +479,10 @@ fn receiver_fixture_expands_and_compiles() {
         "the receiver's shared resource was dropped: {expanded}"
     );
 
-    // The configure init hook is wired into the generated entry function; the
-    // receiver produces no FIFO, so it has no FIFO initializer, and no
-    // generated code arms doorbells (M6.5-T4).
+    // The shared-memory configuration is inlined at `BeforeInit` (D1); the
+    // host backend leaves it unset, so the entry has no configure call and no
+    // wrapper function is generated. The receiver produces no FIFO, so it has
+    // no FIFO initializer, and no generated code arms doorbells (M6.5-T4).
     assert!(
         !expanded.contains("__rticx_xbin_init_shared"),
         "the removed shared-state initializer must not be generated: {expanded}"
@@ -484,8 +492,8 @@ fn receiver_fixture_expands_and_compiles() {
         "a pure receiver initializes no FIFO: {expanded}"
     );
     assert!(
-        expanded.contains("__rticx_xbin_configure_shared_memory (& __rticx_xbin_backend ()) ;"),
-        "the configure hook is not injected into the entry function: {expanded}"
+        !expanded.contains("__rticx_xbin_configure_shared_memory"),
+        "the configure wrapper function must be gone (D1): {expanded}"
     );
 
     let project = dir.path().join("project");

@@ -2,10 +2,10 @@
 //!
 //! The distribution and its proc-macro crate must agree, to the byte, on where
 //! the cross-binary IPC pool, the boot-flag word and the doorbell words live.
-//! The distribution (`rticx-stm32h7`) implements the runtime half
-//! (`rticx_xbin_rt::CrossBinBackend`); the proc-macro crate
-//! (`rticx-stm32h7-macro`) reports the same pool through the compile-time
-//! capability binding (`XbinPassBackend::ipc_pools`). Neither can depend on the
+//! The distribution (`rticx-stm32h7`) uses these numbers for its doorbell and
+//! boot helpers; the proc-macro crate (`rticx-stm32h7-macro`) reports the same
+//! pool through the compile-time capability binding
+//! (`XbinPassBackend::ipc_pools`). Neither can depend on the
 //! other — the distribution depends on the macro, and a proc-macro crate cannot
 //! export normal items — so the distro-specific IPC geometry lives here, in a
 //! small `no_std` crate both sides link.

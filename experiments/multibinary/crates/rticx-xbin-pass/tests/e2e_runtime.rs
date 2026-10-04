@@ -152,12 +152,19 @@ unsafe impl CrossCoreMessage for EncryptReq {}\n";
 struct TestBackend;
 
 impl XbinPassBackend for TestBackend {
-    fn backend(&self) -> syn::Expr {
-        syn::parse_quote!(__rticx_xbin_backend())
-    }
-
     fn rt_path(&self) -> syn::Path {
         syn::parse_quote!(rticx_xbin_rt)
+    }
+
+    fn current_global_core_id(&self) -> syn::Expr {
+        syn::parse_quote!(__rticx_xbin_backend().global_core_id())
+    }
+
+    fn ipc_base_override(&self, _view_core: u32, source: u32, target: u32) -> Option<syn::Expr> {
+        // The host mock pools are heap-backed, not at the synced addresses.
+        Some(syn::parse_quote!(
+            __rticx_xbin_backend().pool_base(#source, #target)
+        ))
     }
 
     fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {
@@ -259,12 +266,8 @@ fn producer_module(core: u32) -> syn::ItemMod {
                 f()
             }
 
-            pub fn test_configure() {
-                __rticx_xbin_configure_shared_memory(&__rticx_xbin_backend());
-            }
-
             pub fn test_init_fifos() {
-                __rticx_xbin_init_fifos_core0(&__rticx_xbin_backend());
+                __rticx_xbin_init_fifos_core0();
             }
 
             /// Builds this producer's own view of the fixture message. Each
@@ -308,8 +311,6 @@ fn two_app_receiver_module() -> syn::ItemMod {
         pub mod receiver_app {
             use std::sync::Mutex;
 
-            use rticx_xbin_rt::backend::CrossBinBackend;
-
             fn __rticx_xbin_backend() -> rticx_xbin_mock::MockBackend {
                 crate::backend_for(1)
             }
@@ -347,21 +348,15 @@ fn two_app_receiver_module() -> syn::ItemMod {
                 }
             }
 
-            pub fn test_configure() {
-                __rticx_xbin_configure_shared_memory(&__rticx_xbin_backend());
-            }
-
             #[idle]
             struct Idle;
 
             impl RticIdleTask for Idle {
                 fn exec(&mut self) -> ! {
                     // Complete the mock boot: global core 0 produces the task
-                    // FIFO, so its FIFO initializer runs here (the receiver's
-                    // own `configure` ran in the generated entry). Boot
-                    // sequencing between the simulated cores is
-                    // distribution-owned and is not exercised by the mock.
-                    crate::producer_0::test_configure();
+                    // FIFO, so its FIFO initializer runs here. Boot sequencing
+                    // between the simulated cores is distribution-owned and is
+                    // not exercised by the mock.
                     crate::producer_0::test_init_fifos();
 
                     let backend = __rticx_xbin_backend();
@@ -491,8 +486,6 @@ fn three_app_receiver_module() -> syn::ItemMod {
         pub mod receiver_app {
             use std::sync::Mutex;
 
-            use rticx_xbin_rt::backend::CrossBinBackend;
-
             fn __rticx_xbin_backend() -> rticx_xbin_mock::MockBackend {
                 crate::backend_for(1)
             }
@@ -555,24 +548,18 @@ fn three_app_receiver_module() -> syn::ItemMod {
                     // initializes its own FIFO before its `post_init` would
                     // spawn (M6-T1); boot sequencing between the simulated
                     // cores is distribution-owned.
-                    crate::producer_0::test_configure();
                     crate::producer_0::test_init_fifos();
 
                     // Dirty the `(2 -> 1)` FIFO through the receiver's view,
                     // then let its producer core initialize it: the topology
                     // owner (core 0) is not an endpoint of that pool.
-                    let pool = backend
-                        .ipc_region(2, 1)
-                        .expect("the fixture declares the `{1, 2}` pool");
+                    let sensor_base = backend.pool_base(2, 1);
                     let sensor_fifo = unsafe {
-                        rticx_xbin_rt::Fifo::<ipc_types::EncryptReq, 2usize>::view_at(
-                            pool.base_from_target(),
-                        )
+                        rticx_xbin_rt::Fifo::<ipc_types::EncryptReq, 2usize>::view_at(sensor_base)
                     };
                     assert!(unsafe { (*sensor_fifo).enqueue(request(99)) }.is_ok());
                     assert_eq!(unsafe { (*sensor_fifo).len() }, 1, "the FIFO is dirty");
 
-                    crate::producer_2::test_configure();
                     crate::producer_2::test_init_fifos();
                     assert_eq!(
                         unsafe { (*sensor_fifo).len() },

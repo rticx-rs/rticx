@@ -11,7 +11,8 @@
 pub use rticx_spsc::Queue;
 
 /// Re-export the cross-binary runtime crate: the generated code reaches
-/// `Fifo`, `CrossBinBackend`, `Queue`, … through `rticx_stm32h7::export::xbin_rt`.
+/// `Fifo`, `Queue` and the FIFO layout constants through
+/// `rticx_stm32h7::export::xbin_rt`.
 pub use rticx_xbin_rt as xbin_rt;
 
 /// Trait abstracting over interrupt numbers.

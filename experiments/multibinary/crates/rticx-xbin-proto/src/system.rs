@@ -1,9 +1,8 @@
 //! The driver-generated system view, `target/rticx-xbin/system.json`.
 //!
-//! `system.json` is the single description of the whole multi-binary project
-//! (see `multibinary-multicore-plan.md` §7.2): cores, IDL types with their
-//! canonical layout, cross-binary tasks with their FIFO allocations, the
-//! distro IPC pools and the doorbell lines. Phase 1 (`cargo xbin sync`)
+//! `system.json` is the single description of the whole multi-binary project:
+//! cores, IDL types with their canonical layout, cross-binary tasks with their FIFO allocations,
+//! the distro IPC pools and the doorbell lines. Phase 1 (`cargo xbin sync`)
 //! merges the per-application manifests into it; phase 2 (the compilation
 //! pass) reads it and filters it by its own cores.
 //!

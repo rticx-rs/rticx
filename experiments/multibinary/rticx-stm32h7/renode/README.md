@@ -61,9 +61,9 @@ Renode does **not** need to be rebuilt; any v1.16.x install works.
   view); peripherals in the base platform drive `nvic0` only, while the HSEM
   and EXTI models drive `nvic0`/`nvic1` programmatically.
 * **No cache model.** Renode does not emulate the M7 D-cache, so cache
-  maintenance (`clean_range`/`invalidate_range`) is a no-op here; the
-  non-cacheable MPU configuration required on silicon is invisible to the
-  simulation. Do not treat a passing Renode run as cache-policy evidence.
+  maintenance is a no-op here; the non-cacheable MPU configuration required on
+  silicon is invisible to the simulation. Do not treat a passing Renode run as
+  cache-policy evidence.
 
 ## Known limitations (from upstream)
 

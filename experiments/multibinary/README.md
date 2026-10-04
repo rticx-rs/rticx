@@ -14,7 +14,7 @@ Standalone workspace for the multi-binary / heterogeneous multi-core extension o
 
 | Crate | Purpose |
 |---|---|
-| `rticx-xbin-rt` | Atomic cross-core SPSC queue and backend contract |
+| `rticx-xbin-rt` | Atomic cross-core SPSC FIFO and the ready-queue re-export |
 | `rticx-xbin-proto` | IDL parser, canonical layout engine, `ipc_types` module generator, merge + validation, JSON schemas, canonical FIFO image |
 | `rticx-xbin-pass` | `RticPass` capturing Multi-binary cross-core tasks syntax; injects the `CrossCoreMessage` trait and the `ipc_types` module |
 | `rticx-xbin-driver` | `cargo-xbin` subcommand (`sync`, `build [--verify-elf]`, `verify`) |

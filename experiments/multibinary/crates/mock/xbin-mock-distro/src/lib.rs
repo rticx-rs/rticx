@@ -60,12 +60,24 @@ impl MockDistroBackend {
 }
 
 impl XbinPassBackend for MockDistroBackend {
-    fn backend(&self) -> syn::Expr {
-        syn::parse_quote!(__rticx_xbin_backend())
-    }
-
     fn rt_path(&self) -> syn::Path {
         syn::parse_quote!(xbin_mock_runtime::xbin_rt)
+    }
+
+    fn current_global_core_id(&self) -> syn::Expr {
+        // The host mock resolves the core at runtime: the same generated code
+        // is expanded for every simulated core, so the guard cannot be baked
+        // (D5).
+        syn::parse_quote!(__rticx_xbin_backend().global_core_id())
+    }
+
+    fn ipc_base_override(&self, _view_core: u32, source: u32, target: u32) -> Option<syn::Expr> {
+        // The mock pools are heap-backed, not at the addresses `system.json`
+        // records, so the generated FIFO views must look the base up at runtime
+        // (D3). Both endpoints see the pool at the same address.
+        Some(syn::parse_quote!(
+            xbin_mock_runtime::pool_base(#source, #target)
+        ))
     }
 
     fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {

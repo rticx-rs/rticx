@@ -24,12 +24,12 @@ use rticx_xbin_proto::{
 struct TestBackend;
 
 impl XbinPassBackend for TestBackend {
-    fn backend(&self) -> syn::Expr {
-        syn::parse_quote!(__rticx_xbin_backend())
-    }
-
     fn rt_path(&self) -> syn::Path {
         syn::parse_quote!(rticx_xbin_rt)
+    }
+
+    fn current_global_core_id(&self) -> syn::Expr {
+        syn::parse_quote!(__rticx_xbin_backend().global_core_id())
     }
 
     fn ring_doorbell_fn(&self, source: u32, target: u32, mut template: syn::ItemFn) -> syn::ItemFn {

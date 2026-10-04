@@ -1,6 +1,4 @@
-//! Acceptance tests for the native cross-binary task syntax (M5.5).
-//!
-//! Covers the confirmed syntax of `multibinary-multicore-plan.md` §6.4/§6.5:
+//! Acceptance tests for the native cross-binary task syntax.
 //!
 //! - `#[app(core_ids = [..], external_cores = [..])]` and the native
 //!   `#[sw_task(..)]` + `impl RticSwTask { type SpawnInput = …; }` receiver

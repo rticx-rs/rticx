@@ -75,22 +75,14 @@ fn cargo_xbin_build_builds_the_three_applications() {
         );
     }
 
-    // Phase 2 really ran in every producer direction: each binary carries the
-    // generated FIFO view diagnostics of the pools it spawns into.
-    for (bin, direction) in [
-        ("m7", "0 -> 1"),
-        ("m7", "0 -> 2"),
-        ("m5", "2 -> 1"),
-        ("m5", "2 -> 0"),
-        ("m4", "1 -> 0"),
-        ("m4", "1 -> 2"),
-    ] {
+    // Phase 2 really ran in every producer: each binary carries the generated
+    // FIFO initializer symbol (which exists nowhere in the fixture sources).
+    // The per-direction coverage is asserted through the receiver router and
+    // dispatcher symbols below, one per `(source, target)` pair.
+    for bin in ["m7", "m5", "m4"] {
         assert!(
-            binary_contains(
-                &binaries.join(bin),
-                &format!("`cargo xbin sync` allocated the `({direction})` IPC pool"),
-            ),
-            "the {bin} binary does not contain the generated FIFO view for `{direction}`"
+            binary_contains(&binaries.join(bin), "__rticx_xbin_init_fifos_core0"),
+            "the {bin} binary does not contain the generated FIFO initializer"
         );
     }
 

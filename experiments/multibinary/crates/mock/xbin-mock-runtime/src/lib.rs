@@ -11,7 +11,11 @@
 //!
 //! Because the system is process-global, applications expanded into one
 //! process share the same pools while each gets the backend handle of its
-//! own core through [`backend_for`].
+//! own core through [`backend_for`]. The generated FIFO views do not use the
+//! addresses recorded in `system.json`: the mock distribution's
+//! `XbinPassBackend::ipc_base_override` emits [`pool_base`] calls so the heap
+//! addresses are resolved at runtime (D3); [`backend_for`] remains the handle
+//! the generated doorbell/router code calls through.
 
 use std::sync::LazyLock;
 
@@ -46,4 +50,16 @@ pub fn system() -> &'static MockSystem {
 /// Returns the backend handle of global core `core`.
 pub fn backend_for(core: u32) -> MockBackend {
     system().backend(core)
+}
+
+/// Returns the base address of the `(source -> target)` fixture pool.
+///
+/// The mock pools are heap-backed, so they are not at the addresses
+/// `system.json` records; the mock distribution's `ipc_base_override` emits a
+/// call to this function so the generated FIFO views resolve the real base at
+/// runtime (D3). Both directions of a dual share one address.
+pub fn pool_base(source: u32, target: u32) -> usize {
+    system()
+        .pool_base(source, target)
+        .unwrap_or_else(|| panic!("the fixtures declare the `{{{source}, {target}}}` pool"))
 }

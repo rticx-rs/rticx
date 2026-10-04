@@ -1,4 +1,4 @@
-//! Mock distribution/backend for the RTICX multi-binary extension host tests.
+//! Mock backend for the RTICX multi-binary extension host tests.
 //!
 //! [`MockSystem`] owns the in-process stand-in for a project's
 //! shared-memory pools and doorbells. Hand one [`MockBackend`] per simulated
@@ -6,7 +6,6 @@
 //!
 //! ```
 //! use rticx_xbin_mock::MockSystem;
-//! use rticx_xbin_rt::backend::CrossBinBackend;
 //!
 //! let mut system = MockSystem::new();
 //! system.add_pool(0, 1, 4096).unwrap();
@@ -14,24 +13,27 @@
 //! let sender = system.backend(0);
 //! let receiver = system.backend(1);
 //!
-//! assert_eq!(sender.ipc_region(0, 1).unwrap().size(), 4096);
-//! assert_eq!(receiver.current_global_core_id(), 1);
+//! assert_eq!(sender.pool_base(0, 1), receiver.pool_base(1, 0));
+//! assert_eq!(receiver.global_core_id(), 1);
 //! ```
 //!
 //! A pool is backed by an 8-byte-aligned, zeroed in-process array (the
 //! "array" variant of the plan's `mmap`/array choice) and carries the FIFOs of
-//! **both** directions of its dual: `ipc_region(a, b)` and `ipc_region(b, a)`
-//! return the same pool (M6.9-T6). The doorbell transport
+//! **both** directions of its dual: [`MockSystem::pool_base`] resolves the
+//! same address for `(a, b)` and `(b, a)` (M6.9-T6). The doorbell transport
 //! is the per-`(source -> target)` **pair message word** of the M6.5 router
 //! ([`MockBackend::doorbell_send`], [`MockBackend::take_message`],
 //! [`MockBackend::router_wait`]): it carries the task id a producer publishes
 //! to the target's router, which then pends the line dispatcher. There are no
 //! per-line doorbell methods (M6.5).
 //!
-//! This crate is host-only test support: it is not `no_std` and its
-//! `MockBackend` implements the [`CrossBinBackend`] cache/MPU hooks with the
-//! trait's no-op defaults, which is correct because host memory needs no
-//! cache maintenance and is never Device/Strongly-ordered.
+//! This crate is host-only test support: it is not `no_std` and provides no
+//! cache/MPU work, which is correct because host memory needs no cache
+//! maintenance and is never Device/Strongly-ordered. Its pools are heap-backed,
+//! so they are *not* at the addresses `system.json` records; the mock
+//! distribution's `XbinPassBackend::ipc_base_override` emits a call to
+//! [`MockBackend::pool_base`] so the generated FIFO views resolve the real
+//! address at runtime (D3).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -40,7 +42,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use rticx_xbin_rt::FIFO_ALIGN;
-use rticx_xbin_rt::backend::{CrossBinBackend, IpcRegion};
 
 const _: () = assert!(
     core::mem::align_of::<u64>() >= FIFO_ALIGN,
@@ -71,7 +72,6 @@ struct PoolBacking {
     /// Backing allocation; `base` points at its start and keeps it alive.
     _storage: Vec<u64>,
     base: usize,
-    size: usize,
 }
 
 /// Orders a dual's cores as `(core_a, core_b)` with `core_a < core_b`.
@@ -131,7 +131,6 @@ impl MockSystem {
             PoolBacking {
                 _storage: words,
                 base,
-                size,
             },
         );
         Ok(())
@@ -143,6 +142,19 @@ impl MockSystem {
             system: self.clone(),
             core: global_core_id,
         }
+    }
+
+    /// Returns the base address of the `{core_a, core_b}` dual's pool, or
+    /// `None` when it is not declared.
+    ///
+    /// The mock pools are heap-backed, so the generated FIFO views cannot use
+    /// the addresses recorded in `system.json`; they call this through the
+    /// distribution's `ipc_base_override` instead (D3).
+    pub fn pool_base(&self, core_a: u32, core_b: u32) -> Option<usize> {
+        self.inner
+            .pools
+            .get(&ordered_pair(core_a, core_b))
+            .map(|pool| pool.base)
     }
 
     /// Returns the pair message word of `(source -> target)`, creating it on
@@ -167,7 +179,7 @@ impl Clone for MockSystem {
     }
 }
 
-/// A per-core handle onto a [`MockSystem`], implementing [`CrossBinBackend`].
+/// A per-core handle onto a [`MockSystem`].
 ///
 /// Cloning yields another handle for the same core; use
 /// [`MockSystem::backend`] for another core.
@@ -186,6 +198,18 @@ impl MockBackend {
     /// Returns the [`MockSystem`] this handle belongs to.
     pub fn system(&self) -> &MockSystem {
         &self.system
+    }
+
+    /// Returns the base address of the `(source -> target)` pool, panicking
+    /// when the dual was never declared.
+    ///
+    /// This backs the generated FIFO views on the host: the mock pools are
+    /// heap-backed, so the distribution overrides the synced literal base with
+    /// this lookup (D3). Both directions of a dual share one address.
+    pub fn pool_base(&self, source: u32, target: u32) -> usize {
+        self.system.pool_base(source, target).unwrap_or_else(|| {
+            panic!("the mock backend was asked for the `{{{source}, {target}}}` pool, which was never declared")
+        })
     }
 
     /// Publishes `task_id` to the `(source -> target)` pair message word and
@@ -224,20 +248,6 @@ impl MockBackend {
         self.system
             .pair_doorbell(source, target)
             .wait_timeout(timeout)
-    }
-}
-
-impl CrossBinBackend for MockBackend {
-    fn current_global_core_id(&self) -> u32 {
-        self.core
-    }
-
-    fn ipc_region(&self, source: u32, target: u32) -> Option<IpcRegion> {
-        self.system
-            .inner
-            .pools
-            .get(&ordered_pair(source, target))
-            .map(|pool| IpcRegion::new(pool.base, pool.base, pool.size))
     }
 }
 

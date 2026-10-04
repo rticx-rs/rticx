@@ -63,7 +63,7 @@ by an out-of-tree distribution.
 | Type subset v1 | 32-bit-safe only: `u8..u32`, `i8..i32`, `f32`, `[T; N]`, nested messages, optional `repr(u32)` enums. No `u64/i64/f64`, `usize`, `bool`, pointers, references |
 | Layout guarantee | Generated `#[repr(C)]` types + canonical layout consts + per-target compile-time assertions |
 | FIFO ordering | New atomic SPSC queue (`AtomicUsize` head/tail via `portable-atomic`, Release/Acquire) — not `rticx-spsc` |
-| Cache policy | Distribution configures the shared region Normal, Non-cacheable, Shareable; optional clean/invalidate fallback |
+| Cache policy | Distribution configures the shared region Normal, Non-cacheable, Shareable; a cacheable mapping is unsupported in v1 (no cache hooks; the generated transport body owns any maintenance) |
 | Phase-2 metadata | Driver emits one JSON system view; each binary's pass parses the whole view and filters by its cores |
 | Driver UX | `cargo xbin sync`, `cargo xbin build` (= sync + build, `--verify-elf` to check the linked ELFs) and `cargo xbin verify` (check the plain-`cargo build` output); granular per-app cargo/clippy workflows remain possible after an explicit `sync` |
 | Pass internals | The external pass reimplements needed internals for now, marked `TODO(extract): ...`; may later be promoted/shared with `rticx-sw-pass` |
@@ -178,13 +178,13 @@ the root generation.
 |---|---|---|
 | `rticx-xbin-proto` | `crates/rticx-xbin-proto/` | IDL parser, canonical layout engine, merge + validation, JSON schemas, canonical FIFO image |
 | `rticx-xbin-pass` | `crates/rticx-xbin-pass/` | `RticPass` implementation, metadata mode + codegen mode |
-| `rticx-xbin-rt` | `crates/rticx-xbin-rt/` | Atomic cross-core SPSC queue, backend contract |
+| `rticx-xbin-rt` | `crates/rticx-xbin-rt/` | Atomic cross-core SPSC FIFO and the ready-queue re-export |
 | `rticx-xbin-driver` | `crates/rticx-xbin-driver/` | `cargo-xbin` subcommand (`sync`, `build`, `verify`) |
 | `rticx-xbin-mock` | `crates/mock/rticx-xbin-mock/` | `MockSystem` runtime for host tests |
 | `mock-pac` | `crates/mock/mock-pac/` | Minimal PAC for the mock `#[app]` |
 | `xbin-mock-capability` | `crates/mock/xbin-mock-capability/` | Fixture IPC capability table shared by the mock distributions |
 | `xbin-mock-distro` | `crates/mock/xbin-mock-distro/` | Mock `#[app]` distribution (core pass + xbin pass + sw pass) |
-| `xbin-mock-runtime` | `crates/mock/xbin-mock-runtime/` | Runtime wrapper the generated mock code calls (`xbin_rt`, backend handle) |
+| `xbin-mock-runtime` | `crates/mock/xbin-mock-runtime/` | Runtime wrapper the generated mock code calls (`xbin_rt` re-export, per-core mock handle, `pool_base` lookup) |
 
 ### 5.2 Key modules
 
@@ -205,8 +205,7 @@ the root generation.
 | | `codegen.rs` | Sender stubs, receiver FIFO views, line dispatchers, doorbell routers, ring/read functions, init hooks, freshness anchors, `XbinPassBackend` |
 | | `priority.rs` | Build-phase priority-line validation over raw sw/async declarations + view receivers |
 | `rticx-xbin-rt` | `fifo.rs` | Atomic SPSC ring (`Fifo`), producer/consumer split, `view_at` placement |
-| | `backend.rs` | `CrossBinBackend` + `IpcRegion` contract (pools, core id, cache/MPU) |
-| | `lib.rs` | `Queue` re-export for ready queues (the `CrossCoreMessage` trait is injected by `rticx-xbin-pass`, not defined here) |
+| | `lib.rs` | `Fifo` re-exports and the `Queue` re-export for ready queues; a pure data-structure runtime — the pool base and core id are baked by `XbinPassBackend`, and the `CrossCoreMessage` trait is injected by `rticx-xbin-pass`, not defined here |
 | `rticx-xbin-driver` | `cli.rs` | `cargo xbin` CLI surface (`sync`, `build [--verify-elf]`, `verify [--release]`) |
 | | `commands.rs` | `sync` (collect, merge, allocate, emit, generate), `build` (= sync + per-app build, optional ELF verification) and `verify` (check a plain `cargo build` output) |
 | | `elf.rs` | Linked-ELF verification with the `object` crate: pool-view overlap, stack bound and distro pool bound symbols (M6.9-T7) |
@@ -264,7 +263,7 @@ the workspace's default members (it only compiles for Cortex-M).
 
 | Crate / item | Path | Purpose |
 |---|---|---|
-| `rticx-stm32h7` | `rticx-stm32h7/` | Distribution library: `CrossBinBackend` runtime (`xbin.rs`), BASEPRI locking (`export.rs`), the generated `memory.x` (`build.rs`, `linker/`) |
+| `rticx-stm32h7` | `rticx-stm32h7/` | Distribution library: the `xbin` hardware helpers (`xbin.rs`: doorbells, MPU mapping, boot release) and the free `configure_shared_memory` the macro injects, BASEPRI locking (`export.rs`), the generated `memory.x` (`build.rs`, `linker/`) |
 | `rticx-stm32h7-macro` | `rticx-stm32h7/rticx-stm32h7-macro/` | `#[app]` macro: core pass backend + `XbinPassBackend` + software pass, with the reserved-HSEM validation |
 | `rticx-stm32h7-bindings` | `rticx-stm32h7/rticx-stm32h7-bindings/` | Shared SRAM3 IPC pool geometry and HSEM semaphore vocabulary both halves must agree on (hardware registers come from the `stm32h7` PAC) |
 | Acceptance demo | `rticx-stm32h7/examples-apps/` | A `cargo xbin` project (`app-cm7`/`app-cm4`) booting under `renode/run.sh`; each app declares a cross-binary receiver, so the full transport codegen is compiled, and `app-cm7`'s `idle` starts an M7↔M4 ping-pong through the generated `cross_spawn` stubs (M7-T2) |
@@ -669,19 +668,40 @@ external `task_trait` paths, so no core changes are required.
 ## 10. Distribution/backend contract
 
 Owned by the extension; implemented by the in-tree STM32H7 distribution
-(`rticx-stm32h7`, M7-T1) and by the mock backend.
+(`rticx-stm32h7`, M7-T1) and by the mock backend. There is a **single**
+contract, the compile-time `rticx_xbin_pass::XbinPassBackend`: everything the
+generated code reads at runtime is baked here or from the synced
+`system.json`, so the generated helpers take no runtime backend value.
 
-**Runtime half — `rticx_xbin_rt::backend::CrossBinBackend`:**
+**Capability binding** — the two queries the driver merges into pools:
 
-- `ipc_region()` — the dual's shared pool as seen through `(source, target)`:
-  each endpoint's base view and the shared budget. Both directions of a dual
-  return the same pool (M6.9-T6).
-- `configure_shared_memory()` — configure Normal, Non-cacheable, Shareable (MPU).
-  Device/Strongly-ordered is forbidden (`ldrex`/`strex` are invalid there).
-- optional `clean_range` / `invalidate_range` for cacheable-region fallback.
-- `current_global_core_id()`.
-- Carries **no doorbell methods**: the transport is the generated per-pair
-  ring/read bodies.
+- `physical_core(local_core)` — the distro's stable physical-core id, used to
+  match the two endpoints of a dual (identity by default);
+- `ipc_pools(local_core)` — every pool (dual) this core can reach, with the
+  peer, both base views, the shared budget and the cache policy. Both
+  directions of a dual allocate inside the one pool (M6.9-T6).
+
+**Hardware codegen** — the doorbell transport, the shared-memory configuration
+and the executing core id:
+
+| Binding | Emits / names |
+|---|---|
+| `ring_doorbell_fn(source, target, template)` | `__rticx_xbin_ring_{source}_{target}(task_id) -> Result<(), ()>` on the producer side |
+| `doorbell_interrupt(target, source) -> Ident` | the router's `binds` |
+| `read_doorbell_msg_fn(target, source, template)` | `__rticx_xbin_read_{source}_{target}() -> Option<u32>` on the target side |
+| `custom_interrupt_path(core)` | the interrupt type the router pends through (mirrors the software pass's backend) |
+| `rt_path()` / `ipc_types_path()` | the generated code's runtime `Fifo` path and injected `ipc_types` module path |
+| `current_global_core_id()` | the `cross_spawn` core guard expression (required) |
+| `configure_shared_memory(local_core)` | the per-core pool mapping (Normal, Non-cacheable, Shareable), inlined at `BeforeInit` |
+| `ipc_base_override(view_core, source, target)` | optional runtime pool-base expression for heap-backed host/mock backends; real fixed-address distributions keep the literal `system.json` address (default `None`) |
+
+Device/Strongly-ordered memory is forbidden for a pool (`ldrex`/`strex` are
+invalid there). The generated code bakes the pool base (the literal
+`system.json` address, or the `ipc_base_override` expression) and the core id,
+so `rticx-xbin-rt` stays a pure shared-memory data-structure runtime (`Fifo`
+plus the ready `Queue`); the transport is the generated per-pair ring/read
+bodies. There are **no** cache hooks: a cacheable pool mapping is unsupported
+in v1 (D2).
 
 Boot sequencing is distribution-owned (H7: CM7 initializes the region and then
 releases CM4 via `RCC_GCR.BOOT_C2`, from the distribution's `post_init`; the
@@ -691,21 +711,11 @@ guarantee its peers are up before IPC or the router interrupts are relied on,
 and it handles resets itself. `cross_spawn` returns `Err(Some(input))` only for
 a full FIFO or a caller on the wrong core.
 
-**Code-generation half — `rticx_xbin_pass::XbinPassBackend`** (proc-macro side): the
-distribution makes the per-pair doorbell concrete by filling templates —
-
-| Binding | Emits / names |
-|---|---|
-| `ring_doorbell_fn(source, target, template)` | `__rticx_xbin_ring_{source}_{target}(task_id) -> Result<(), ()>` on the producer side |
-| `doorbell_interrupt(target, source) -> Ident` | the router's `binds` |
-| `read_doorbell_msg_fn(target, source, template)` | `__rticx_xbin_read_{source}_{target}() -> Option<u32>` on the target side |
-| `custom_interrupt_path(core)` | the interrupt type the router pends through (mirrors the software pass's backend) |
-
-A portable implementation writes the task id to a per-pair shared atomic word and
-triggers one IRQ; hardware with a payload-capable doorbell can implement the same
-contract directly. There is no IPCC on the H7 line, so the portable shape applies.
-The router IRQ is enabled/prioritized by the core pass's used-IRQ machinery (no
-`doorbell_setup` call remains).
+A portable implementation writes the task id to a per-pair shared atomic word
+and triggers one IRQ; hardware with a payload-capable doorbell can implement the
+same contract directly. There is no IPCC on the H7 line, so the portable shape
+applies. The router IRQ is enabled/prioritized by the core pass's used-IRQ
+machinery (no `doorbell_setup` call remains).
 
 ---
 
@@ -927,6 +937,10 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   codegen/init-hooks/e2e harnesses declare pools instead of per-direction
   regions and pass with the shared budgets. Tests: mock pool-table/dual-sharing
   unit tests, the pinned-const sender snapshot, and the unknown-pool rejection.
+  *Superseded by the backend-trait refactor (`backend-trait-refactor-plan.md`):
+  the runtime `CrossBinBackend`/`IpcRegion` were removed, and the pool base and
+  executing core id are now baked by `XbinPassBackend` instead of resolved
+  through a runtime backend value.*
 - [x] **M6.9-T7 — ELF verification.** `cargo xbin build --verify-elf` (default
   **off**) runs `sync`, links every application and then verifies each linked
   binary; a standalone `cargo xbin verify` (`--release` for the release
@@ -996,9 +1010,11 @@ distro may use them internally, but no new framework mechanism).
 
 ### M7 — STM32H7 acceptance and extraction (separate effort, out-of-tree)
 
-- [x] **M7-T1** STM32H7 (M7+M4) distribution implementing
-      `CrossBinBackend` (non-cacheable shared region, boot release) and the
-      `XbinPassBackend` doorbell bindings (ring/read/router IRQ). Landed
+- [x] **M7-T1** STM32H7 (M7+M4) distribution: the non-cacheable shared region
+      and boot release, plus the `XbinPassBackend` capability and doorbell
+      bindings (ring/read/router IRQ). The runtime `CrossBinBackend` it first
+      implemented was later removed (see `backend-trait-refactor-plan.md`).
+      Landed
       in-tree under `experiments/multibinary/rticx-stm32h7` (member of the
       experimental workspace); extraction is M7-T3.
       *Acceptance:* the M7 and M4 example binaries boot under
@@ -1035,7 +1051,7 @@ distro may use them internally, but no new framework mechanism).
 |---|---|
 | `ipc_types` generation location | `target/rticx-xbin/ipc_types.rs` next to `system.json`; regenerated by `sync`, never checked in |
 | Doorbell/IRQ availability per distro | One doorbell IRQ per producer pair plus one dispatcher IRQ per line, supplied by the user's `ipc_dispatchers` list; the router coalesces all lines of a pair onto that one IRQ |
-| Cacheable-region fallback correctness | v1 recommends non-cacheable only; fallback hooks exist but are not the supported path |
+| Cacheable-region fallback correctness | v1 requires a Normal, Non-cacheable, Shareable pool; there are no cache hooks and a cacheable mapping is unsupported (the transport body would own any maintenance, D2) |
 | Staleness under plain `cargo build` | Only the changed app detects its own staleness; `cargo xbin build` is the safe path |
 | Reimplemented internals drift from `rticx-sw-pass` | `TODO(extract)` markers; periodic manual comparison; possible later shared crate |
 | Priority-line exhaustion on a target | No automatic shifting: producer cores must declare disjoint priorities; collisions are hard errors naming both tasks (`sync` for producer-vs-producer, the pass at `build` for collisions with the target app's own sw/async tasks); the limits are documented |
@@ -1074,6 +1090,11 @@ distro may use them internally, but no new framework mechanism).
   across application manifests.
 - **Pool budget** — the maximum number of bytes a distro reserves in a pool for
   IPC; the FIFOs of both directions of the dual must fit it together.
+- **Pool cache policy** — the memory attributes a distro maps a pool with. v1
+  requires Normal, **Non-cacheable, Shareable**; Device/Strongly-ordered is
+  forbidden because the FIFO's `ldrex`/`strex` atomics are invalid there. A
+  cacheable mapping is unsupported: there are no cache hooks, so the generated
+  transport body would own any maintenance.
 - **FIFO** — per-task atomic SPSC ring inside a pool (formerly a region), one
   element per spawn input.
 - **Doorbell** — hardware signal (mailbox/IPI/HSEM) that wakes a target's
@@ -1091,6 +1112,12 @@ distro may use them internally, but no new framework mechanism).
   `__rticx_xbin_ring_{source}_{target}(task_id) -> Result<(), ()>` and
   `__rticx_xbin_read_{source}_{target}() -> Option<u32>` whose bodies the
   distribution fills through the `XbinPassBackend` bindings.
+- **Backend binding** — `rticx_xbin_pass::XbinPassBackend`, the single
+  compile-time contract a distribution implements: the capability binding
+  (`physical_core`/`ipc_pools`), the doorbell templates, and the hardware
+  codegen (`current_global_core_id`, `configure_shared_memory`, the optional
+  `ipc_base_override`). There is **no runtime backend trait**: the pool base and
+  the executing core id are baked into the generated code.
 - **Priority line** — a target-core priority reserved for tasks arriving from one
   specific remote source core; producer cores on one target must hold disjoint
   lines (validated at `sync` for producer-vs-producer, by the pass at `build` for

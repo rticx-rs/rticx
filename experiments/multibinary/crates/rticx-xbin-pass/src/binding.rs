@@ -122,9 +122,10 @@ impl std::fmt::Display for PoolId {
 pub enum CachePolicy {
     /// Normal, Non-cacheable, Shareable — the supported v1 policy.
     NormalNonCacheableShareable,
-    /// Normal, cacheable, Shareable: the fallback that requires explicit
-    /// `clean_range` / `invalidate_range` cache maintenance around every
-    /// shared access (the runtime backend's cache hooks).
+    /// Normal, cacheable, Shareable: unsupported in v1. A cacheable pool would
+    /// need explicit clean/invalidate around every shared access; the
+    /// distribution's generated doorbell/read bodies would own that
+    /// maintenance (D2).
     NormalCacheableShareable,
 }
 
