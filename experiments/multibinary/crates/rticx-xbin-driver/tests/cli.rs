@@ -217,7 +217,7 @@ fn sync_html_writes_the_visualization() {
 /// Root of the checked-in end-to-end fixture.
 fn e2e_fixture_root() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/e2e")
+        .join("../mock/fixtures/e2e")
         .canonicalize()
         .expect("the end-to-end fixture ships with the driver crate")
 }

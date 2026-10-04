@@ -8,4 +8,4 @@ edition = "2021"
 publish = false
 
 [dependencies]
-rticx-xbin-rt = { path = "../../../crates/rticx-xbin-rt" }
+rticx-xbin-rt = { path = "../../../../rticx-xbin-rt" }

@@ -1,4 +1,4 @@
-//! Minimal `#[app]` stand-in for the metadata fixture (`fixtures/metadata`).
+//! Minimal `#[app]` stand-in for the metadata fixture (`crates/mock/fixtures/metadata`).
 //!
 //! It runs only the cross-binary metadata pass, which is enough for
 //! `cargo xbin sync` to collect `<target>.xbin.json` on the host. The real

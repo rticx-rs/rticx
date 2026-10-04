@@ -3,7 +3,7 @@
 //!
 //! `sync` must drive `cargo clean -p <package>` followed by
 //! `cargo check -p <package> --bin <target>` with `RTICX_XBIN_META_OUT` over
-//! `fixtures/metadata`, read back one manifest per application, and merge the
+//! `crates/mock/fixtures/metadata`, read back one manifest per application, and merge the
 //! manifests into the validated project view.
 
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use tempfile::tempdir;
 /// Root of the checked-in metadata fixture.
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/metadata")
+        .join("../mock/fixtures/metadata")
         .canonicalize()
         .expect("the metadata fixture ships with the driver crate")
 }
@@ -110,7 +110,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     let cargo_toml =
         std::fs::read_to_string(ipc_types.path.join("Cargo.toml")).expect("Cargo.toml");
     assert!(
-        cargo_toml.contains("rticx-xbin-rt = { path = \"../../../crates/rticx-xbin-rt\" }"),
+        cargo_toml.contains("rticx-xbin-rt = { path = \"../../../../rticx-xbin-rt\" }"),
         "{cargo_toml}"
     );
 

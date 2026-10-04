@@ -6,5 +6,5 @@ publish = false
 description = "Runtime of the mock distribution shared by the rticx-xbin fixtures"
 
 [dependencies]
-rticx-xbin-mock = { path = "../../rticx-xbin-mock" }
+rticx-xbin-mock = { path = "../rticx-xbin-mock" }
 rticx-xbin-rt = { path = "../../rticx-xbin-rt" }

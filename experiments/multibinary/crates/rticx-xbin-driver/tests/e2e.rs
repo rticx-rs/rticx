@@ -1,7 +1,7 @@
 //! M4-T1 acceptance: the two-application end-to-end fixture builds with
 //! `cargo xbin build`.
 //!
-//! `fixtures/e2e` is a standalone workspace whose `#[app]` macro is provided
+//! `crates/mock/fixtures/e2e` is a standalone workspace whose `#[app]` macro is provided
 //! by its own mock distribution: the full core pass runs on `MockCoreBackend`
 //! and the cross-binary pass generates against a mock `CrossBinBackend`, so
 //! the sender and receiver applications build and link on the host. The
@@ -16,7 +16,7 @@ use rticx_xbin_driver::build;
 /// Root of the checked-in end-to-end fixture.
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/e2e")
+        .join("../mock/fixtures/e2e")
         .canonicalize()
         .expect("the end-to-end fixture ships with the driver crate")
 }

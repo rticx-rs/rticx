@@ -892,7 +892,7 @@ fn write_project(root: &Path, modules: &[(&str, &str)], pools: &[(u32, u32)]) {
         .canonicalize()
         .expect("the runtime crate ships with the workspace");
     let mock = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../rticx-xbin-mock")
+        .join("../mock/rticx-xbin-mock")
         .canonicalize()
         .expect("the mock crate ships with the workspace");
 

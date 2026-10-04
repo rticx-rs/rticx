@@ -1,6 +1,6 @@
 //! M6.9-T7 acceptance: ELF verification of the linked fixture binaries.
 //!
-//! `fixtures/e2e` is built with `cargo xbin build --verify-elf` (through
+//! `crates/mock/fixtures/e2e` is built with `cargo xbin build --verify-elf` (through
 //! [`build_and_verify`]) and, separately, with the plain-`cargo build`
 //! workflow checked by [`verify`]. The mock distribution reserves its pools at
 //! `0x3000_0000`+ — far above the static sections of a host PIE — so the
@@ -17,7 +17,7 @@ use rticx_xbin_driver::{build, build_and_verify, verify, verify_binary};
 /// Root of the checked-in end-to-end fixture.
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/e2e")
+        .join("../mock/fixtures/e2e")
         .canonicalize()
         .expect("the end-to-end fixture ships with the driver crate")
 }
@@ -25,7 +25,7 @@ fn fixture_root() -> PathBuf {
 /// The `build --verify-elf` outcome, shared by the tests so the fixture is
 /// built (and verified) only once.
 ///
-/// The fixture is a standalone Cargo workspace below `fixtures/e2e`; building
+/// The fixture is a standalone Cargo workspace below `crates/mock/fixtures/e2e`; building
 /// it is expensive, and Cargo serializes concurrent builds on its lock anyway.
 fn verified_build() -> &'static rticx_xbin_driver::BuildOutcome {
     static OUTCOME: OnceLock<rticx_xbin_driver::BuildOutcome> = OnceLock::new();

@@ -56,7 +56,7 @@ target/rticx-xbin/
 ```
 
 The repository ships complete examples under
-`experiments/multibinary/fixtures/`: `e2e/` (two applications, one cross task),
+`experiments/multibinary/crates/mock/fixtures/`: `e2e/` (two applications, one cross task),
 `metadata/` (metadata phase only) and `three-app/` (two producers onto one
 receiver). Section 6 walks through `e2e/`.
 
@@ -82,7 +82,7 @@ budget — which each application records in its metadata manifest. A leftover
 pool budgets are the distribution author's concern (section 7.5); the project
 author only maps applications to cores.
 
-Example (the `fixtures/e2e` topology):
+Example (the `crates/mock/fixtures/e2e` topology):
 
 ```toml
 schema = 1
@@ -326,18 +326,19 @@ index, so cross-binary declarations require the pass.
 ## 6. Worked example: the two-application fixture
 
 The repository ships this project at
-`experiments/multibinary/fixtures/e2e/`; a fresh checkout can build it
+`experiments/multibinary/crates/mock/fixtures/e2e/`; a fresh checkout can build it
 without writing any code. Follow the steps, then use section 7 to run the
 same layout on real hardware.
 
 ```text
-fixtures/e2e/
+crates/mock/fixtures/e2e/
 ├── rticx.toml, ipc-types.toml      # sections 3 and 4
 ├── ipc-types/                      # generated crate (checked in)
 ├── app-m7/  (binary `m7`, global core 0)   # producer, declares nothing
 └── app-m4/  (binary `m4`, global core 1)   # receiver, declares EncryptTask
 
 crates/mock/                        # shared by every fixture
+├── rticx-xbin-mock/                # in-process mock backend for host tests
 ├── mock-pac/                       # stand-in for a real PAC
 └── xbin-mock-distro/, xbin-mock-runtime/   # stand-in for a real distribution
 ```
@@ -350,7 +351,7 @@ real project replaces it with the target distribution and PAC (section 7.2).
 
 ```bash
 cargo install --path experiments/multibinary/crates/rticx-xbin-driver
-cd experiments/multibinary/fixtures/e2e
+cd experiments/multibinary/crates/mock/fixtures/e2e
 ```
 
 **Step 2 — the two configuration files.** `ipc-types.toml` declares one
@@ -530,13 +531,13 @@ expands both applications into one process over a
 shared mock system. Back in `experiments/multibinary/`:
 
 ```bash
-cd ../..
+cd ../../..
 cargo test -p rticx-xbin-pass --test e2e_runtime
 ```
 
 ### Multi-source variant
 
-`fixtures/three-app/` is the same project with a second producer
+`crates/mock/fixtures/three-app/` is the same project with a second producer
 (`app-m5`, global core 2) spawning `SensorTask` onto the same receiver core.
 The mock capability binding provides one pool per dual (`mock-0-1`,
 `mock-1-2`, `mock-0-2`), each with its own 4096-byte shared budget; the `0->1`
@@ -803,7 +804,7 @@ build instead of corrupting IPC at runtime.
   ```bash
   cargo test -p rticx-xbin-pass --test e2e_runtime    # two-app spawn/dispatch
   cargo test -p rticx-xbin-pass --test priority_lines # build-phase priority-line errors
-  cargo test -p rticx-xbin-driver --test e2e          # `cargo xbin build` over fixtures/e2e
+  cargo test -p rticx-xbin-driver --test e2e          # `cargo xbin build` over crates/mock/fixtures/e2e
   cargo test -p rticx-xbin-driver --test three_app    # multi-source fixture
   cargo test -p rticx-xbin-driver --test verify       # linked-ELF verification
   cargo test -p rticx-xbin-driver --test negative     # documented error messages

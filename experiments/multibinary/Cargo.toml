@@ -1,10 +1,5 @@
 # Standalone experimental workspace for the multi-binary / heterogeneous
 # multi-core extension.
-#
-# Deliberately kept OUTSIDE the root workspace (see
-# `multibinary-multicore-plan.md` §5) so release-plz, the shared-generation
-# check and root CI are untouched. It path-depends on the root crates and is
-# intended to be extracted into its own repository later (M7-T3).
 
 [workspace]
 resolver = "2"
@@ -13,9 +8,9 @@ members = [
     "crates/rticx-xbin-pass",
     "crates/rticx-xbin-rt",
     "crates/rticx-xbin-driver",
-    "crates/rticx-xbin-mock",
     # Shared mock distribution used by the checked-in fixtures (the fixtures
     # are standalone workspaces that path-depend on these).
+    "crates/mock/rticx-xbin-mock",
     "crates/mock/mock-pac",
     "crates/mock/xbin-mock-capability",
     "crates/mock/xbin-mock-distro",
@@ -37,7 +32,7 @@ default-members = [
     "crates/rticx-xbin-pass",
     "crates/rticx-xbin-rt",
     "crates/rticx-xbin-driver",
-    "crates/rticx-xbin-mock",
+    "crates/mock/rticx-xbin-mock",
     "crates/mock/mock-pac",
     "crates/mock/xbin-mock-capability",
     "crates/mock/xbin-mock-distro",

@@ -180,7 +180,7 @@ the root generation.
 | `rticx-xbin-pass` | `crates/rticx-xbin-pass/` | `RticPass` implementation, metadata mode + codegen mode |
 | `rticx-xbin-rt` | `crates/rticx-xbin-rt/` | Atomic cross-core SPSC queue, marker trait, backend contract |
 | `rticx-xbin-driver` | `crates/rticx-xbin-driver/` | `cargo-xbin` subcommand (`sync`, `build`, `verify`) |
-| `rticx-xbin-mock` | `crates/rticx-xbin-mock/` | `MockSystem` runtime for host tests |
+| `rticx-xbin-mock` | `crates/mock/rticx-xbin-mock/` | `MockSystem` runtime for host tests |
 | `mock-pac` | `crates/mock/mock-pac/` | Minimal PAC for the mock `#[app]` |
 | `xbin-mock-capability` | `crates/mock/xbin-mock-capability/` | Fixture IPC capability table shared by the mock distributions |
 | `xbin-mock-distro` | `crates/mock/xbin-mock-distro/` | Mock `#[app]` distribution (core pass + xbin pass + sw pass) |
@@ -218,19 +218,19 @@ distribution-injected backend helper; no public API of the root workspace change
 
 ### 5.3 Fixtures and what they test
 
-The fixtures are standalone workspaces under `fixtures/`, each path-depending on the
+The fixtures are standalone workspaces under `crates/mock/fixtures/`, each path-depending on the
 workspace crates and (for `e2e`/`three-app`) on the shared mock distribution.
 
 | Fixture | Topology | Exercises |
 |---|---|---|
-| `fixtures/metadata/` | Two apps (`app-m7` producer core 0, `app-m4` receiver core 1) + a minimal `metadata-macro` `#[app]` stand-in that runs only the xbin metadata pass and binds the mock capability table (M6.9-T9) | `cargo xbin sync` end to end: metadata collection, merge/validation, `system.json` (schema 2, `pools` + physical ids) emission and `ipc-types/` generation. Driven by the driver's `tests/fixture.rs`; the generated `ipc-types/` crate is checked in like a real project |
-| `fixtures/e2e/` | Same two apps, with the mock **distribution** (`xbin-mock-distro` + `xbin-mock-runtime`) running the full core pass on `MockCoreBackend` and the xbin pass against an in-process backend | `cargo xbin build` over a real phase-1/phase-2 cycle (driver `tests/e2e.rs`); phase 2 generates the sender `cross_spawn`, the receiver dispatcher and the init hooks and links both host binaries. The pass crate's `tests/e2e_runtime.rs` expands both apps into one host binary and **runs** the generated chain: `cross_spawn` → ring function → router ISR → pended line dispatcher → `exec`, plus FIFO backpressure and coalesced/duplicate notifications |
-| `fixtures/three-app/` | Three apps: producers `app-m7` (global 0) and `app-m5` (global 2) spawn onto receiver `app-m4` (global 1) through two shared pools, two priority lines and two per-pair routers | Multi-source support: driver `tests/three_app.rs` builds it with `cargo xbin build`; `tests/e2e_runtime.rs` runs all three apps in one process (per-pair routers/dispatcher lines, per-source backpressure, and the non-owner producer initializing its own pool); pass `tests/priority_lines.rs` covers build-phase priority-line validation |
+| `crates/mock/fixtures/metadata/` | Two apps (`app-m7` producer core 0, `app-m4` receiver core 1) + a minimal `metadata-macro` `#[app]` stand-in that runs only the xbin metadata pass and binds the mock capability table (M6.9-T9) | `cargo xbin sync` end to end: metadata collection, merge/validation, `system.json` (schema 2, `pools` + physical ids) emission and `ipc-types/` generation. Driven by the driver's `tests/fixture.rs`; the generated `ipc-types/` crate is checked in like a real project |
+| `crates/mock/fixtures/e2e/` | Same two apps, with the mock **distribution** (`xbin-mock-distro` + `xbin-mock-runtime`) running the full core pass on `MockCoreBackend` and the xbin pass against an in-process backend | `cargo xbin build` over a real phase-1/phase-2 cycle (driver `tests/e2e.rs`); phase 2 generates the sender `cross_spawn`, the receiver dispatcher and the init hooks and links both host binaries. The pass crate's `tests/e2e_runtime.rs` expands both apps into one host binary and **runs** the generated chain: `cross_spawn` → ring function → router ISR → pended line dispatcher → `exec`, plus FIFO backpressure and coalesced/duplicate notifications |
+| `crates/mock/fixtures/three-app/` | Three apps: producers `app-m7` (global 0) and `app-m5` (global 2) spawn onto receiver `app-m4` (global 1) through two shared pools, two priority lines and two per-pair routers | Multi-source support: driver `tests/three_app.rs` builds it with `cargo xbin build`; `tests/e2e_runtime.rs` runs all three apps in one process (per-pair routers/dispatcher lines, per-source backpressure, and the non-owner producer initializing its own pool); pass `tests/priority_lines.rs` covers build-phase priority-line validation |
 
 Supporting negative/edge coverage lives next to the crates rather than in a fixture:
 driver `tests/negative.rs` (missing sync, stale view/source, priority conflicts,
 unknown types, region overflow), driver `tests/verify.rs` (linked-ELF
-verification over `fixtures/e2e`: clean pass, injected pool overlap, standalone
+verification over `crates/mock/fixtures/e2e`: clean pass, injected pool overlap, standalone
 `verify`), driver `tests/driver.rs`/`tests/cli.rs`, pass
 `tests/{codegen,syntax,metadata,core_ids,ipc_dispatchers,init_hooks,receiver_compile}.rs`,
 proto `tests/{idl,layout,generate,generate_compile,alloc,merge,project,system,hash}.rs`,
@@ -720,7 +720,7 @@ The router IRQ is enabled/prioritized by the core pass's used-IRQ machinery (no
 - **Cross-compile layout checks:** `thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
   optionally `riscv32imc`.
 - **In-tree end-to-end:** the two- and three-application fixture projects
-  (`fixtures/e2e`, `fixtures/three-app`) built via `cargo xbin build`. The runtime
+  (`crates/mock/fixtures/e2e`, `crates/mock/fixtures/three-app`) built via `cargo xbin build`. The runtime
   harness (`crates/rticx-xbin-pass/tests/e2e_runtime.rs`) expands all applications
   into one process over a shared `MockSystem`: two producer cores each spawning onto
   the receiver core through their own router and dispatcher line, auto-stub
@@ -939,7 +939,7 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   output (a stripped binary loses `.symtab`; the section check still works).
   Tests: `driver/src/elf.rs` unit tests (pool-view selection, section overlap,
   half-open pool containment, pool-bound symbol matching/sanitization) and
-  `driver/tests/verify.rs` over the built `fixtures/e2e` (clean pass, an
+  `driver/tests/verify.rs` over the built `crates/mock/fixtures/e2e` (clean pass, an
   injected overlap naming the section and pool, the standalone `verify`, and
   `build` without `--verify-elf` reporting no verifications).
 
@@ -969,7 +969,7 @@ direction with no pool is an impossible link; `sync` rejects a receiver whose
   The architecture doc is updated throughout (§2/§3/§4/§6/§7/§9/§10/§11/§12)
   for pools, physical ids, the shared budget and link-time verification.
   Fixture test: the metadata `sync` asserts the matched `mock-0-1` pool and the
-  pool-relative FIFO; CLI test: `sync --html` over `fixtures/e2e` renders the
+  pool-relative FIFO; CLI test: `sync --html` over `crates/mock/fixtures/e2e` renders the
   `mock-0-1` pool panel with its shared budget.
 
 *Acceptance:* `cargo xbin sync` validates the fixtures with no region syntax and
@@ -1012,7 +1012,7 @@ distro may use them internally, but no new framework mechanism).
       compilation right after writing its manifest, so phase 1 never
       type-checks the application at all (phase 2 still generates the typed,
       view-derived stub, so missing or misspelled tasks remain hard build
-      errors). The driver `fixtures/metadata` sync test pins the halt: its
+      errors). The driver `crates/mock/fixtures/metadata` sync test pins the halt: its
       producer calls a stub that does not exist in phase 1.
 - [ ] **M7-T3** Extract `experiments/multibinary` into its own repository; resolve
       and remove `TODO(extract)` markers; add CI there.

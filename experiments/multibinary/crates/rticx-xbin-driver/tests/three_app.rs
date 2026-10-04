@@ -1,7 +1,7 @@
 //! M6-T1 acceptance: the three-application fixture builds with
 //! `cargo xbin build`.
 //!
-//! `fixtures/three-app` is a standalone workspace with three binaries in a
+//! `crates/mock/fixtures/three-app` is a standalone workspace with three binaries in a
 //! fully connected cross-binary topology: `app-m7` owns global core 0,
 //! `app-m4` global core 1 and `app-m5` global core 2, and every ordered pair
 //! is carried by the mock distribution's pool for that dual. Each application
@@ -19,7 +19,7 @@ use rticx_xbin_driver::build;
 /// Root of the checked-in three-application fixture.
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/three-app")
+        .join("../mock/fixtures/three-app")
         .canonicalize()
         .expect("the three-app fixture ships with the driver crate")
 }

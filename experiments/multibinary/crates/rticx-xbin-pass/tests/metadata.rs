@@ -400,7 +400,7 @@ fn env_detection_switches_on_metadata_mode() {
     // terminates the compiler once the manifest is written, which would kill
     // the test harness. The real `cargo check` path — including the manifest
     // naming from `CARGO_PKG_NAME`/`CARGO_BIN_NAME` — is covered end to end by
-    // the driver's `fixtures/metadata` sync test (M7-T2).
+    // the driver's `crates/mock/fixtures/metadata` sync test (M7-T2).
 }
 
 #[test]

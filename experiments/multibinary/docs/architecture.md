@@ -82,7 +82,7 @@ files whose contents differ; the `rticx-xbin-rt` dependency is a path relative
 to `<project root>/ipc-types`, so the checked-in crate is portable. An
 unchanged IDL therefore touches nothing and the CLI reports
 `ipc-types is up to date` (or `created`/`updated` per file). The checked-in
-`fixtures/metadata` project covers this end to end, including the checked-in
+`crates/mock/fixtures/metadata` project covers this end to end, including the checked-in
 generated crate.
 
 1. Parse `rticx.toml` (`rticx-xbin-proto::parse_project_file`).
@@ -142,7 +142,7 @@ phase 2 for every application in M4-T1: after
 `cargo build --package <package> --bin <target>` and
 `RTICX_XBIN_SYSTEM=<project root>/target/rticx-xbin/system.json`, so the pass
 runs in codegen mode and the freshness checks reject a stale view or a source
-changed since `sync`. The checked-in `fixtures/e2e` project (its own mock
+changed since `sync`. The checked-in `crates/mock/fixtures/e2e` project (its own mock
 distribution over `MockCoreBackend` and `MockBackend`) is the in-tree
 acceptance: both binaries compile and link on the host.*
 
@@ -422,7 +422,7 @@ generated stubs, a missing `RticSwTask` failing to compile (M5.5), and the
 generated init hooks executed against the mock (M3-T3) —, JSON round-trip);
 host mock (two threads over `rticx-xbin-rt`, backpressure);
 cross-compile layout checks (`thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
-optionally `riscv32imc`); the in-tree two-app fixture `fixtures/e2e` built via
+optionally `riscv32imc`); the in-tree two-app fixture `crates/mock/fixtures/e2e` built via
 `cargo xbin build` (M4-T1), with its own mock distribution so the generated
 phase-2 code compiles and links on the host.
 M4-T2 expands both fixture applications into one host binary and drives the
@@ -434,7 +434,7 @@ suite: a plain build without a synced view, a source changed after `sync`, a
 hand-edited `system.json`, a priority line shared by two source cores, an input
 type absent from the IDL and a pool budget too small for its FIFOs, each
 asserted against its documented message.
-M6-T1 adds the three-application fixture `fixtures/three-app` (two producers
+M6-T1 adds the three-application fixture `crates/mock/fixtures/three-app` (two producers
 onto one receiver, two lines and two per-pair routers) built via `cargo xbin
 build`, the build-phase priority-line validation tests (cross vs. core-local
 sw/async, vs. in-app `spawn_by`, cross-producer collisions, same-producer
@@ -444,7 +444,7 @@ dispatcher, per-source backpressure, and the non-owner producer initializing
 its own pool half.
 M6-T3 completes this document and the [user guide](user-guide.md): the
 commands and listings there describe the same `cargo xbin sync`/`build` path
-that the tests above exercise over `fixtures/e2e` and `fixtures/three-app`, so
+that the tests above exercise over `crates/mock/fixtures/e2e` and `crates/mock/fixtures/three-app`, so
 a fresh reader follows tested steps.
 M6.9 makes the distro the single owner of IPC memory: `proto/tests/merge.rs`
 pins the capability graph (symmetric/mismatched entries, impossible links, the
@@ -452,10 +452,10 @@ shared per-dual budget fitting two directions together but not separately, and
 overflow), `proto/tests/{alloc,system}.rs` pin the schema-2 `pools[]` and
 pool-relative FIFO offsets, the pass codegen tests pin the pool-pinned sender
 snapshot and the unknown-pool rejection, the driver's `tests/verify.rs` checks
-the linked-ELF verification over `fixtures/e2e` (clean pass, an injected
+the linked-ELF verification over `crates/mock/fixtures/e2e` (clean pass, an injected
 overlap naming the section and pool, the standalone `verify`), and the
 `visualize` module tests pin one panel per pool (both directions in one panel,
-occupied-extent scaling, the unpooled fallback). `fixtures/metadata` binds the
+occupied-extent scaling, the unpooled fallback). `crates/mock/fixtures/metadata` binds the
 mock capability table (shared through `xbin-mock-capability`) so `sync` emits
 `pools[]` and physical core ids for the metadata-only fixture too (M6.9-T9).
 

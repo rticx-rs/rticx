@@ -3,7 +3,7 @@
 //!
 //! Two families of negative cases are covered end to end:
 //!
-//! - **build-phase freshness** over a copy of the checked-in `fixtures/e2e`
+//! - **build-phase freshness** over a copy of the checked-in `crates/mock/fixtures/e2e`
 //!   project: a plain `cargo build` without a synced view (missing sync), a
 //!   source changed after `sync` (source hash mismatch) and a hand-edited
 //!   `system.json` (topology hash mismatch). These run the real proc-macro
@@ -30,7 +30,7 @@ fn cargo() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Build-phase freshness over a copy of `fixtures/e2e`
+// Build-phase freshness over a copy of `crates/mock/fixtures/e2e`
 // ---------------------------------------------------------------------------
 
 /// Copies the checked-in end-to-end fixture into a fresh temporary directory.
@@ -41,7 +41,7 @@ fn cargo() -> PathBuf {
 /// uses its own application sources.
 fn fixture_copy() -> tempfile::TempDir {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/e2e")
+        .join("../mock/fixtures/e2e")
         .canonicalize()
         .expect("the end-to-end fixture ships with the driver crate");
     let dir = tempdir().expect("tempdir");
@@ -312,7 +312,7 @@ fn main() {}
 /// plus `rticx.toml` and `ipc-types.toml`.
 fn write_metadata_project(root: &Path, config: &str, idl: &str, apps: &[(&str, &str, &str)]) {
     let macro_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/metadata/metadata-macro")
+        .join("../mock/fixtures/metadata/metadata-macro")
         .canonicalize()
         .expect("the metadata fixture ships with the driver crate");
 
