@@ -20,7 +20,7 @@ use rticx_core::{
     Analysis, App, AppArgs, CorePassBackend, RticMacroBuilder, RticTask, SubAnalysis, SubApp,
 };
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use rticx_xbin_pass::{XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{AppTopology, XbinPass, XbinPassBackend};
 use rticx_xbin_proto::SystemView;
 
 /// A two-application system view: `app-m7` (global core 0) spawns
@@ -322,13 +322,13 @@ fn receiver_app() -> syn::ItemMod {
 }
 
 fn receiver_args() -> TokenStream {
-    quote!(
-        device = pac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = [IRQ0]
-    )
+    quote!(device = pac, ipc_dispatchers = [IRQ0])
+}
+
+/// The receiver application's topology: local core 0 -> global 1, global core 0
+/// visible (M7-T2).
+fn receiver_topology() -> AppTopology {
+    AppTopology::new(vec![1], vec![0])
 }
 
 /// The fixture view with the receiver application's source hash recorded, as
@@ -348,7 +348,9 @@ fn receiver_system() -> String {
 /// Runs the extension pass, the software pass and the core pass and returns
 /// the expansion.
 fn expand(system: &Path) -> String {
-    let pass = XbinPass::with_system(system, "app-m4", "m4").with_backend(CompileBackend);
+    let pass = XbinPass::with_system(system, "app-m4", "m4")
+        .with_topology(receiver_topology())
+        .with_backend(CompileBackend);
     let mut builder = RticMacroBuilder::new(FixtureCoreBackend::default());
     builder.bind_pre_core_pass(pass);
     builder.bind_pre_core_pass(SoftwarePass::new(CompileSwBackend));
@@ -360,7 +362,9 @@ fn expand(system: &Path) -> String {
 /// Like [`expand`], but without the software pass: what a distribution whose
 /// `swtasks` feature is off produces (M5.5).
 fn expand_without_sw_pass(system: &Path) -> String {
-    let pass = XbinPass::with_system(system, "app-m4", "m4").with_backend(CompileBackend);
+    let pass = XbinPass::with_system(system, "app-m4", "m4")
+        .with_topology(receiver_topology())
+        .with_backend(CompileBackend);
     let mut builder = RticMacroBuilder::new(FixtureCoreBackend::default());
     builder.bind_pre_core_pass(pass);
     builder

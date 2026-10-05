@@ -4,19 +4,22 @@
 //! This module owns the syntax that the multi-binary extension adds on top of
 //! the core RTIC syntax:
 //!
-//! - `#[app(core_ids = [..], external_cores = [..], ipc_dispatchers = [..])]`:
-//!   `core_ids` is read through the core parser (`rticx_core` owns the key
-//!   since M5) and left in the arguments for the core pass; `external_cores`
-//!   and `ipc_dispatchers` are consumed here, so the core/software/async
-//!   passes never see them (the core pass would warn about unknown
-//!   arguments). `ipc_dispatchers` is the pass-owned per-core pool of
+//! - `#[app(ipc_dispatchers = [..])]`: the pass-owned per-core pool of
 //!   interrupt lines for the generated cross-binary line dispatchers (M6.5):
 //!   one entry per `(source, priority)` cross line of each local core, in
 //!   ascending `(source, priority)` order, unique per core and disjoint from
-//!   the software pass's `dispatchers` entries of the same core;
+//!   the software pass's `dispatchers` entries of the same core. It is
+//!   consumed here, so the core/software/async passes never see it.
+//!
+//! `rticx.toml` is the single user-facing source of project topology (M7-T2):
+//! [`parse_app_args`] resolves the application's `cores`/`core_ids`/
+//! `external_cores` (or takes a `Fixed`/identity topology) and **injects**
+//! `cores`/`core_ids` into the arguments for `rticx-core`. The old
+//! `#[app(core_ids = [..])]` / `#[app(external_cores = [..])]` keys are hard
+//! errors naming the migration;
 //! - native `#[sw_task(..)]` structs with `impl RticSwTask { type SpawnInput
-//!   = …; }` blocks. In an application that declares `external_cores`, the
-//!   task's `spawn_by` is resolved in the **global** namespace:
+//!   = …; }` blocks. In an application whose topology declares external
+//!   cores, the task's `spawn_by` is resolved in the **global** namespace:
 //!   - `spawn_by ∈ core_ids` → an in-app cross-core task; the value is
 //!     rewritten to its local index and the task is left for `rticx-sw-pass`;
 //!   - `spawn_by ∈ external_cores` → a cross-binary receiver; it is recorded
@@ -53,12 +56,11 @@
 //!   `capacity = 1` (minimum 1), receiver `core = 0`;
 //! - unknown, duplicate and multi-segment keys as well as malformed values
 //!   are hard errors; `external_cores` is validated against the `core_ids`
-//!   mapping the core parser resolves (identity when not declared);
+//!   mapping the project topology resolves (M7-T2);
 //! - stripping happens in both modes and for every distribution that binds
 //!   the pass. Without the pass, the core pass only *warns* about
-//!   `external_cores`/`ipc_dispatchers` as unknown `#[app]` arguments
-//!   (`core_ids` is native to `rticx-core` since M5 and is understood with or
-//!   without the pass).
+//!   `ipc_dispatchers` as an unknown `#[app]` argument (`core_ids` is native
+//!   to `rticx-core` since M5 and is understood with or without the pass).
 //!
 //! The producer application declares nothing: its `Task::cross_spawn` stubs
 //! are generated in codegen mode from the synced system view (M5.5).
@@ -77,6 +79,8 @@ use quote::{ToTokens, format_ident, quote};
 use rticx_core::parse_utils::RticAttr;
 use rticx_core::parser::ast::AppArgs;
 use rticx_xbin_proto::ReceiverDecl;
+
+use crate::topology::AppTopology;
 use syn::{
     Attribute, Expr, ExprLit, ImplItem, Item, ItemImpl, ItemMod, Lit, LitInt, Meta, Path,
     PathArguments, Token, Type, parse::Parser, parse_quote, punctuated::Punctuated,
@@ -87,6 +91,16 @@ use syn::{
 pub(crate) const CORE_IDS_ARG: &str = "core_ids";
 /// `#[app(external_cores = [..])]`: global ids of cores in other binaries.
 pub(crate) const EXTERNAL_CORES_ARG: &str = "external_cores";
+/// Hard error for the `#[app(core_ids = ..)]` key, which moved to `rticx.toml`
+/// (M7-T2).
+pub(crate) const CORE_IDS_MOVED: &str = "`core_ids` moved to `rticx.toml`: declare the local \
+     core index to global core id mapping in this application's `[[application]]` entry and \
+     remove `core_ids` from `#[app]`";
+/// Hard error for the `#[app(external_cores = ..)]` key, which moved to
+/// `rticx.toml` (M7-T2).
+pub(crate) const EXTERNAL_CORES_MOVED: &str = "`external_cores` moved to `rticx.toml`: declare \
+     the foreign cores this application can see in its `[[application]]` entry and remove \
+     `external_cores` from `#[app]`";
 /// `#[app(ipc_dispatchers = [..])]`: pass-owned per-core interrupt lines of the
 /// generated cross-binary line dispatchers (M6.5).
 pub(crate) const IPC_DISPATCHERS_ARG: &str = "ipc_dispatchers";
@@ -204,46 +218,92 @@ pub(crate) struct LocalTaskDecl {
 /// Parses the `#[app]` arguments owned by this pass and returns them together
 /// with the argument token stream stripped of the consumed keys.
 ///
-/// `cores`, `device` and `core_ids` are left untouched for the core pass;
-/// `core_ids` is parsed through [`AppArgs`] (the core parser owns and
-/// validates it since M5) so the pass reads the resolved mapping, and
-/// `external_cores` and `ipc_dispatchers` are consumed.
-pub(crate) fn parse_app_args(args: TokenStream) -> syn::Result<(AppExtensions, TokenStream)> {
+/// `rticx.toml` is the single user-facing source of topology (M7-T2): the
+/// `core_ids` / `external_cores` keys are rejected with a migration error and
+/// the resolved `topology` is injected into the arguments as `cores` and
+/// `core_ids`, which `rticx-core` owns and validates (M5). `device` is left
+/// untouched for the core pass; `ipc_dispatchers` is consumed.
+///
+/// `topology` is `None` for an application with no governing project: the pass
+/// then falls back to the identity mapping over the declared `cores` (default
+/// 1), keeping a standalone xbin distribution usable. `package` only names the
+/// application in the `cores` mismatch error.
+pub(crate) fn parse_app_args(
+    args: TokenStream,
+    package: &str,
+    topology: Option<&AppTopology>,
+) -> syn::Result<(AppExtensions, TokenStream)> {
     let args_span = args.span();
 
-    // `rticx-core` owns `core_ids` (M5): parsing through `AppArgs` resolves
-    // the identity default and validates the length and uniqueness with the
-    // core pass's own errors. The arguments themselves are not consumed here.
-    let app_args = AppArgs::parse(args.clone())?;
-    let cores = app_args.cores;
-    if cores == 0 {
+    let mut attr = parse_attr_tokens(args, format_ident!("app"))?;
+
+    // `core_ids` and `external_cores` moved to `rticx.toml` (M7-T2): reject
+    // them with a migration error before anything else can consume them.
+    if let Some(expr) = attr.get_expr(CORE_IDS_ARG) {
+        return Err(syn::Error::new(expr.span(), CORE_IDS_MOVED));
+    }
+    if let Some(expr) = attr.get_expr(EXTERNAL_CORES_ARG) {
+        return Err(syn::Error::new(expr.span(), EXTERNAL_CORES_MOVED));
+    }
+
+    // `cores` stays optional: in a multi-binary project it is derived from the
+    // project's `core_ids`, so a declared value must agree with the resolved
+    // mapping (M7-T2).
+    let declared_cores = match attr.get_expr("cores") {
+        Some(_) => Some(parse_attr_int::<u32>(&attr, "cores", 0)?),
+        None => None,
+    };
+    let topology = match topology {
+        Some(topology) => topology.clone(),
+        None => AppTopology::identity(declared_cores.unwrap_or(1)),
+    };
+    if topology.cores() == 0 {
         return Err(syn::Error::new(
             args_span,
             "The `cores` argument must be at least 1.",
         ));
     }
-    let core_ids = app_args.core_ids;
-    let pacs = app_args.pacs;
-
-    let mut attr = parse_attr_tokens(args, format_ident!("app"))?;
-
-    let external_cores_span = attr.get_expr(EXTERNAL_CORES_ARG).map(Spanned::span);
-    let external_cores = attr.take_u32_array(EXTERNAL_CORES_ARG)?.unwrap_or_default();
-    if let Some(duplicate) = first_duplicate(&external_cores) {
+    if let Some(cores) = declared_cores
+        && cores != topology.cores()
+    {
         return Err(syn::Error::new(
-            external_cores_span.unwrap_or(args_span),
-            format!("`{EXTERNAL_CORES_ARG}` lists global core id {duplicate} more than once"),
-        ));
-    }
-    if let Some(owned) = external_cores.iter().find(|id| core_ids.contains(id)) {
-        return Err(syn::Error::new(
-            external_cores_span.unwrap_or(args_span),
+            attr.get_expr("cores")
+                .map(Spanned::span)
+                .unwrap_or(args_span),
             format!(
-                "`{EXTERNAL_CORES_ARG}` lists global core id {owned}, which this application \
-                 owns via `{CORE_IDS_ARG}`"
+                "`{package}` declares `cores = {cores}`, but rticx.toml maps {} core(s) via \
+                 `core_ids`. In a multi-binary project `cores` is derived from `core_ids`; \
+                 declare `cores` only when this application itself runs on more than one core at \
+                 once (single-binary multicore, uncommon in a multi-binary project). Remove the \
+                 argument or reconcile it with rticx.toml",
+                topology.cores()
             ),
         ));
     }
+
+    // Inject the resolved topology for the core pass: it owns and validates
+    // `cores`/`core_ids` (M5), so the pass hands it the values `rticx.toml`
+    // resolved (the core pass never sees the removed `#[app]` keys).
+    let cores = topology.cores();
+    let core_ids = topology.core_ids().to_vec();
+    let external_cores = topology.external_cores().to_vec();
+
+    let cores_lit = LitInt::new(&cores.to_string(), Span::call_site());
+    attr.elements
+        .insert("cores".to_string(), syn::parse_quote!(#cores_lit));
+    let core_id_lits = core_ids
+        .iter()
+        .map(|id| LitInt::new(&id.to_string(), Span::call_site()));
+    attr.elements.insert(
+        CORE_IDS_ARG.to_string(),
+        syn::parse_quote!([#(#core_id_lits),*]),
+    );
+
+    // `rticx-core` owns `core_ids` (M5): parsing through `AppArgs` validates
+    // the injected `cores`/`core_ids` (length and uniqueness) with the core
+    // pass's own errors and resolves the `device` PAC paths.
+    let app_args = AppArgs::parse(attr.args_tokens())?;
+    let pacs = app_args.pacs;
 
     // M6.5: the per-core IPC interrupt pool is owned by this pass and stripped
     // before the core/software/async passes run. `dispatchers` stays in the
@@ -1057,12 +1117,6 @@ where
             format!("`{key}` must be an integer literal"),
         )),
     }
-}
-
-/// Returns the first value occurring more than once in `values`.
-fn first_duplicate(values: &[u32]) -> Option<u32> {
-    let mut seen = std::collections::BTreeSet::new();
-    values.iter().copied().find(|value| !seen.insert(*value))
 }
 
 /// Span of an integer literal argument, for error reporting.

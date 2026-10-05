@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use rticx_core::{MainInjectionPoint, RticPass};
-use rticx_xbin_pass::{SYSTEM_ENV, XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{AppTopology, SYSTEM_ENV, XbinPass, XbinPassBackend};
 use rticx_xbin_proto::{IPC_TYPES_FILE, SystemView};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -198,12 +198,13 @@ fn sender_app() -> syn::ItemMod {
 }
 
 fn sender_args() -> TokenStream {
-    quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [0],
-        external_cores = [1]
-    )
+    quote!(device = mypac)
+}
+
+/// The producer fixture's topology: local core 0 -> global 0, global core 1
+/// visible (M7-T2).
+fn sender_topology() -> AppTopology {
+    AppTopology::new(vec![0], vec![1])
 }
 
 /// The receiver fixture application: one native cross receiver with its
@@ -228,25 +229,19 @@ fn receiver_app() -> syn::ItemMod {
 }
 
 fn receiver_args() -> TokenStream {
-    quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = [IRQ0]
-    )
+    quote!(device = mypac, ipc_dispatchers = [IRQ0])
+}
+
+/// The receiver fixture's topology: local core 0 -> global 1, global core 0
+/// visible (M7-T2).
+fn receiver_topology() -> AppTopology {
+    AppTopology::new(vec![1], vec![0])
 }
 
 /// Like [`receiver_args`] for an application without cross declarations: the
 /// pass-owned pool must be empty (one entry per cross line, M6.5-T1).
 fn receiver_args_without_cross_declarations() -> TokenStream {
-    quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = []
-    )
+    quote!(device = mypac, ipc_dispatchers = [])
 }
 
 /// The generated `ipc_types.rs` stand-in: the fixture view's `EncryptReq`
@@ -364,7 +359,9 @@ fn system_tampered(mutate: impl FnOnce(&mut serde_json::Value)) -> String {
 /// Runs the codegen pass over the producer fixture and returns the generated
 /// module as a token string.
 fn generate(path: &Path) -> syn::Result<String> {
-    let pass = XbinPass::with_system(path, "app-m7", "m7").with_backend(TestBackend);
+    let pass = XbinPass::with_system(path, "app-m7", "m7")
+        .with_topology(sender_topology())
+        .with_backend(TestBackend);
     let (_, module) = pass.run_pass(sender_args(), sender_app())?;
     Ok(module.to_token_stream().to_string())
 }
@@ -377,7 +374,9 @@ fn generate_ok(path: &Path) -> String {
 /// Runs the codegen pass over the receiver fixture and returns the generated
 /// module as a token string.
 fn generate_receiver(path: &Path) -> syn::Result<String> {
-    let pass = XbinPass::with_system(path, "app-m4", "m4").with_backend(TestBackend);
+    let pass = XbinPass::with_system(path, "app-m4", "m4")
+        .with_topology(receiver_topology())
+        .with_backend(TestBackend);
     let (_, module) = pass.run_pass(receiver_args(), receiver_app())?;
     Ok(module.to_token_stream().to_string())
 }
@@ -671,6 +670,7 @@ fn missing_ipc_types_file_is_reported() {
     ));
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
         .with_backend(TestBackend)
         .run_pass(sender_args(), sender_app())
         .expect_err("a view with types needs the generated module")
@@ -694,6 +694,7 @@ fn user_defined_ipc_types_module_is_rejected() {
     ));
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
         .with_backend(TestBackend)
         .run_pass(sender_args(), app_mod)
         .expect_err("a user `ipc_types` module must be rejected")
@@ -715,6 +716,7 @@ fn user_defined_cross_core_message_is_rejected() {
     ));
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
         .with_backend(TestBackend)
         .run_pass(sender_args(), app_mod)
         .expect_err("a user `CrossCoreMessage` item must be rejected")
@@ -736,6 +738,7 @@ fn stale_topology_hash_is_rejected() {
     let (_dir, path) = write_system(&tampered);
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
         .with_backend(TestBackend)
         .run_pass(sender_args(), sender_app())
         .expect_err("a tampered view must be rejected")
@@ -757,6 +760,7 @@ fn stale_application_source_is_rejected() {
     };
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
         .with_backend(TestBackend)
         .run_pass(sender_args(), app_mod)
         .expect_err("a source changed after sync must be rejected")
@@ -960,13 +964,7 @@ fn receiver_codegen_router_snapshot() {
 /// Receiver args for the two-line fixture: two cross lines on local core 0,
 /// listed in ascending `(source, priority)` order (M6.5-T1).
 fn two_line_receiver_args() -> TokenStream {
-    quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = [IRQ0, IRQ1]
-    )
+    quote!(device = mypac, ipc_dispatchers = [IRQ0, IRQ1])
 }
 
 /// Receiver module with two tasks on two priority lines of the same
@@ -1027,7 +1025,9 @@ fn router_has_one_match_arm_per_view_task() {
         &[("app-m4", &args, &app_mod)],
     );
     let (_dir, path) = write_system(&view);
-    let pass = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
+    let pass = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology())
+        .with_backend(TestBackend);
     let (_, module) = pass
         .run_pass(args, app_mod)
         .expect("two-line generation succeeds");
@@ -1197,7 +1197,9 @@ fn receiver_codegen_init_hooks_snapshot() {
 fn init_hooks_are_wired_into_the_entry_functions() {
     let (_dir, path) = write_both_system();
 
-    let pass = XbinPass::with_system(&path, "app-m7", "m7").with_backend(TestBackend);
+    let pass = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
+        .with_backend(TestBackend);
     pass.run_pass(sender_args(), sender_app())
         .expect("sender code generation succeeds");
 
@@ -1243,7 +1245,9 @@ fn init_hooks_are_wired_into_the_entry_functions() {
 
     // The receiver application produces no FIFO, but wires its own configure
     // hook.
-    let receiver = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
+    let receiver = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology())
+        .with_backend(TestBackend);
     receiver
         .run_pass(receiver_args(), receiver_app())
         .expect("receiver code generation succeeds");
@@ -1287,22 +1291,13 @@ fn fifo_init_follows_the_producing_core() {
             }
         }
     };
-    let receiver_args = quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [2],
-        external_cores = [5],
-        ipc_dispatchers = [IRQ0]
-    );
+    let receiver_args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+    let receiver_topology = AppTopology::new(vec![2], vec![5]);
     let sender_mod: syn::ItemMod = syn::parse_quote! {
         mod app {}
     };
-    let sender_args = quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [5],
-        external_cores = [2]
-    );
+    let sender_args = quote!(device = mypac);
+    let sender_topology = AppTopology::new(vec![5], vec![2]);
 
     // app-m7 owns global core 5 and app-m4 owns global core 2: only the
     // producer core 5 initializes the `5 -> 2` FIFO, independently of the
@@ -1331,7 +1326,9 @@ fn fifo_init_follows_the_producing_core() {
     );
     let (_dir, path) = write_system(&view);
 
-    let receiver = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
+    let receiver = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology.clone())
+        .with_backend(TestBackend);
     let (_, module) = receiver
         .run_pass(receiver_args, receiver_mod)
         .expect("the core-2 application generates code");
@@ -1351,7 +1348,9 @@ fn fifo_init_follows_the_producing_core() {
         "the pure receiver produces no FIFO to initialize"
     );
 
-    let sender = XbinPass::with_system(&path, "app-m7", "m7").with_backend(TestBackend);
+    let sender = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology)
+        .with_backend(TestBackend);
     let (_, module) = sender
         .run_pass(sender_args, sender_mod)
         .expect("the core-5 application generates code");
@@ -1375,7 +1374,9 @@ fn fifo_init_follows_the_producing_core() {
 #[test]
 fn metadata_mode_never_rewrites_receivers() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pass = XbinPass::with_manifest(dir.path(), "app-m4", "m4").with_backend(TestBackend);
+    let pass = XbinPass::with_manifest(dir.path(), "app-m4", "m4")
+        .with_topology(receiver_topology())
+        .with_backend(TestBackend);
     let (_, module) = pass
         .run_pass(receiver_args(), receiver_app())
         .expect("metadata pass succeeds");
@@ -1404,6 +1405,7 @@ fn stub_name_collision_is_reported() {
         }
     };
     let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
         .with_backend(TestBackend)
         .run_pass(sender_args(), app_mod)
         .expect_err("a stub name collision must be rejected")
@@ -1420,8 +1422,9 @@ fn stub_name_collision_is_reported() {
 
 #[test]
 fn missing_system_view_is_reported() {
-    let pass =
-        XbinPass::with_system("/nonexistent/system.json", "app-m7", "m7").with_backend(TestBackend);
+    let pass = XbinPass::with_system("/nonexistent/system.json", "app-m7", "m7")
+        .with_topology(sender_topology())
+        .with_backend(TestBackend);
     let error = pass
         .run_pass(sender_args(), sender_app())
         .expect_err("unsynced application must fail")
@@ -1434,6 +1437,7 @@ fn missing_system_view_is_reported() {
 fn missing_producer_backend_is_reported() {
     let (_dir, path) = write_base_system();
     let error = XbinPass::with_system(&path, "app-m7", "m7")
+        .with_topology(sender_topology())
         .run_pass(sender_args(), sender_app())
         .expect_err("a producer without a backend must fail")
         .to_string();
@@ -1448,10 +1452,11 @@ fn missing_producer_backend_is_reported() {
 
 #[test]
 fn stale_receiver_declarations_are_rejected() {
-    // (application args, module, expected error fragment)
-    let cases: Vec<(TokenStream, syn::ItemMod, &str)> = vec![
+    // (application args, topology, module, expected error fragment)
+    let cases: Vec<(TokenStream, AppTopology, syn::ItemMod, &str)> = vec![
         (
             receiver_args(),
+            receiver_topology(),
             syn::parse_quote! {
                 mod app {
                     trait RticSwTask {
@@ -1472,6 +1477,7 @@ fn stale_receiver_declarations_are_rejected() {
         ),
         (
             receiver_args(),
+            receiver_topology(),
             syn::parse_quote! {
                 mod app {
                     trait RticSwTask {
@@ -1492,6 +1498,7 @@ fn stale_receiver_declarations_are_rejected() {
         ),
         (
             receiver_args(),
+            receiver_topology(),
             syn::parse_quote! {
                 mod app {
                     trait RticSwTask {
@@ -1512,6 +1519,7 @@ fn stale_receiver_declarations_are_rejected() {
         ),
         (
             receiver_args(),
+            receiver_topology(),
             syn::parse_quote! {
                 mod app {
                     trait RticSwTask {
@@ -1531,24 +1539,14 @@ fn stale_receiver_declarations_are_rejected() {
             "declares `spawn_by = 2`, which is not a known core",
         ),
         (
-            quote!(
-                device = mypac,
-                cores = 1,
-                core_ids = [7],
-                external_cores = [0],
-                ipc_dispatchers = [IRQ0]
-            ),
+            quote!(device = mypac, ipc_dispatchers = [IRQ0]),
+            AppTopology::new(vec![7], vec![0]),
             receiver_app(),
             "maps its local cores to [7], but the synced system view has [1]",
         ),
         (
-            quote!(
-                device = mypac,
-                cores = 2,
-                core_ids = [1, 7],
-                external_cores = [0],
-                ipc_dispatchers = [[], [IRQ0]]
-            ),
+            quote!(device = mypac, ipc_dispatchers = [[], [IRQ0]]),
+            AppTopology::new(vec![1, 7], vec![0]),
             syn::parse_quote! {
                 mod app {
                     trait RticSwTask {
@@ -1577,9 +1575,10 @@ fn stale_receiver_declarations_are_rejected() {
     let (_dir, path) = write_base_system();
     let (_two_dir, two_path) = write_system(&two_cores);
 
-    for (index, (args, app_mod, expected)) in cases.into_iter().enumerate() {
+    for (index, (args, topology, app_mod, expected)) in cases.into_iter().enumerate() {
         let path = if index == 5 { &two_path } else { &path };
         let error = XbinPass::with_system(path, "app-m4", "m4")
+            .with_topology(topology)
             .with_backend(TestBackend)
             .run_pass(args, app_mod)
             .expect_err("stale declaration must be rejected")
@@ -1604,6 +1603,7 @@ fn a_view_task_without_receiver_declaration_is_rejected() {
     });
     let (_dir, path) = write_system(&stale);
     let error = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology())
         .with_backend(TestBackend)
         .run_pass(receiver_args(), receiver_app())
         .expect_err("an undrained view task must be rejected")
@@ -1662,6 +1662,7 @@ fn a_receiver_without_doorbell_is_rejected() {
     });
     let (_dir, path) = write_system(&stale);
     let error = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology())
         .with_backend(TestBackend)
         .run_pass(receiver_args(), receiver_app())
         .expect_err("a task without doorbell line must be rejected")
@@ -1677,6 +1678,7 @@ fn a_receiver_without_doorbell_is_rejected() {
 fn missing_receiver_backend_is_reported() {
     let (_dir, path) = write_base_system();
     let error = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology())
         .run_pass(receiver_args(), receiver_app())
         .expect_err("a receiver without a backend must fail")
         .to_string();
@@ -1693,6 +1695,7 @@ fn missing_receiver_backend_is_reported() {
 fn unknown_application_is_rejected() {
     let (_dir, path) = write_base_system();
     let error = XbinPass::with_system(&path, "app-m0", "m0")
+        .with_topology(sender_topology())
         .with_backend(TestBackend)
         .run_pass(sender_args(), sender_app())
         .expect_err("undeclared application must fail")
@@ -1720,7 +1723,9 @@ fn applications_without_cross_declarations_still_load_the_view() {
             &app_mod,
         )],
     ));
-    let pass = XbinPass::with_system(&path, "app-m4", "m4").with_backend(TestBackend);
+    let pass = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology())
+        .with_backend(TestBackend);
     let (_, module) = pass
         .run_pass(receiver_args_without_cross_declarations(), app_mod)
         .expect("a plain application still loads the view (M5.5)");
@@ -1800,6 +1805,48 @@ fn codegen_mode_resolves_the_application_without_cargo_bin_name() {
 }
 
 #[test]
+fn project_topology_anchor_is_embedded() {
+    // A topology resolved from `rticx.toml` embeds the project file with
+    // `include_str!`, so a plain `cargo build` tracks topology edits through
+    // rustc's dep-info (M7-T2).
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("rticx.toml"),
+        "schema = 1\n\n\
+         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
+         core_ids = [0]\nexternal_cores = [1]\n",
+    )
+    .expect("rticx.toml");
+    let system = dir.path().join("system.json");
+    std::fs::write(
+        &system,
+        with_source_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+    )
+    .expect("system.json");
+    std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
+
+    let _env = EnvGuard::set_all(&[
+        (SYSTEM_ENV, system.as_os_str()),
+        ("CARGO_MANIFEST_DIR", dir.path().as_os_str()),
+        ("CARGO_PKG_NAME", std::ffi::OsStr::new("app-m7")),
+        ("CARGO_BIN_NAME", std::ffi::OsStr::new("m7")),
+    ]);
+
+    let pass = XbinPass::from_env();
+    assert!(pass.is_codegen_mode());
+    let (_, module) = pass
+        .with_backend(TestBackend)
+        .run_pass(sender_args(), sender_app())
+        .expect("codegen succeeds");
+    let generated = module.to_token_stream().to_string();
+    assert!(
+        generated.contains("__RTICX_XBIN_PROJECT_TOML"),
+        "the `rticx.toml` freshness anchor is missing: {generated}"
+    );
+}
+
+#[test]
 fn source_hash_ignores_token_spacing() {
     // rustc and rust-analyzer's proc-macro server represent the same token
     // tree with different punctuation `Spacing` and render it very
@@ -1860,7 +1907,13 @@ fn source_hash_ignores_ra_synthetic_statement_semicolons() {
 fn discovered_project_root_without_a_synced_view_is_a_hard_error() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("rticx.toml"), "schema = 1\n").expect("rticx.toml");
+    std::fs::write(
+        dir.path().join("rticx.toml"),
+        "schema = 1\n\n\
+         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
+         core_ids = [0]\nexternal_cores = [1]\n",
+    )
+    .expect("rticx.toml");
 
     // A discovered project root selects codegen mode even before the first
     // `cargo xbin sync` wrote the view, so any application fails instead of

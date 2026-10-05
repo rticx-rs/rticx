@@ -12,7 +12,7 @@
 
 use xbin_mock_distro::app;
 
-#[app(device = mock_pac, cores = 1, core_ids = [0], external_cores = [1])]
+#[app(device = mock_pac)]
 mod app {
     #[idle]
     struct Idle;

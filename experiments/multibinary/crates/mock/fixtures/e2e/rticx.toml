@@ -14,8 +14,10 @@ schema = 1
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
 core_ids = [0]
+external_cores = [1]
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
+external_cores = [0]

@@ -27,9 +27,6 @@ use xbin_mock_distro::app;
 
 #[app(
     device = mock_pac,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0, 2],
     ipc_dispatchers = [
         XBIN_IPC_LINE_0,
         XBIN_IPC_LINE_1,

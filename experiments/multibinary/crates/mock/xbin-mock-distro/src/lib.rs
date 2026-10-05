@@ -24,7 +24,9 @@ use rticx_core::RticMacroBuilder;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::parse_utils::RticAttr;
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use rticx_xbin_pass::{IpcPool, PhysicalCore, XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{
+    AppTopology, IpcPool, PhysicalCore, XbinPass, XbinPassBackend, resolve_app_topology,
+};
 use syn::{Expr, ItemMod, Lit, parse_macro_input};
 use xbin_mock_capability::fixture_pools;
 
@@ -37,8 +39,8 @@ use xbin_mock_capability::fixture_pools;
 /// [`XbinPassBackend::ipc_pools`], M6.9-T1) can map a local core index to the
 /// fixture's physical core.
 struct MockDistroBackend {
-    /// Local core index -> global core id (`core_ids = [..]`), empty when the
-    /// application leaves the identity default.
+    /// Local core index -> global core id, resolved from `rticx.toml` (M7-T2);
+    /// empty when the application leaves the identity default.
     core_ids: Vec<u32>,
 }
 
@@ -160,43 +162,55 @@ impl SwPassBackend for MockSwBackend {
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let parsed_args = TokenStream2::from(args.clone());
     let mut app_mod = parse_macro_input!(input as ItemMod);
-    let core_ids = core_ids(&parsed_args);
-    inject_backend_helper(&mut app_mod, core_ids.first().copied().unwrap_or(0));
+    let topology = match app_topology(&parsed_args) {
+        Ok(topology) => topology,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    inject_backend_helper(
+        &mut app_mod,
+        topology.core_ids().first().copied().unwrap_or(0),
+    );
     inject_interrupt_support(&mut app_mod, &parsed_args);
 
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(XbinPass::from_env().with_backend(MockDistroBackend {
-        core_ids: core_ids.clone(),
+        core_ids: topology.core_ids().to_vec(),
     }));
     builder.bind_pre_core_pass(SoftwarePass::new(MockSwBackend));
     builder.build_rtic_macro(args, quote!(#app_mod).into())
 }
 
-/// Reads the local core index -> global core id mapping from
-/// `core_ids = [g0, g1, ..]`.
+/// Resolves the application's topology from the nearest `rticx.toml` (M7-T2).
 ///
-/// The mapping drives both the injected backend helper (the fixture
-/// applications declare exactly one core each, so the first entry is the
-/// current global core id) and the capability binding's
-/// [`physical_core`](XbinPassBackend::physical_core) (M6.9-T1).
-fn core_ids(args: &TokenStream2) -> Vec<u32> {
+/// A standalone mock distribution with no project above the crate falls back
+/// to the identity mapping over the declared `cores` (default 1), exactly like
+/// the cross-binary pass.
+fn app_topology(args: &TokenStream2) -> syn::Result<AppTopology> {
+    let package = std::env::var("CARGO_PKG_NAME").ok();
+    let target = std::env::var("CARGO_BIN_NAME").ok();
+    let resolved = match package.as_deref() {
+        Some(package) => resolve_app_topology(package, target.as_deref())?,
+        None => None,
+    };
+    Ok(match resolved {
+        Some(resolved) => resolved.topology,
+        None => AppTopology::identity(declared_cores(args)),
+    })
+}
+
+/// Reads the declared `cores` argument (default 1) for the no-project
+/// fallback.
+fn declared_cores(args: &TokenStream2) -> u32 {
     let Ok(attr) = RticAttr::parse_from_tokens(args.clone(), format_ident!("app")) else {
-        return Vec::new();
+        return 1;
     };
-    let Some(Expr::Array(array)) = attr.get_expr("core_ids") else {
-        return Vec::new();
-    };
-    array
-        .elems
-        .iter()
-        .filter_map(|element| match element {
-            Expr::Lit(lit) => match &lit.lit {
-                Lit::Int(int) => int.base10_parse().ok(),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
+    match attr.get_expr("cores") {
+        Some(Expr::Lit(lit)) => match &lit.lit {
+            Lit::Int(int) => int.base10_parse().unwrap_or(1),
+            _ => 1,
+        },
+        _ => 1,
+    }
 }
 
 /// Injects the fixture interrupt enum (M6.5-T3/T5).

@@ -9,9 +9,6 @@ use metadata_macro::app;
 
 #[app(
     device = fixture,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0],
     ipc_dispatchers = [IRQ_LINE_0]
 )]
 mod app {

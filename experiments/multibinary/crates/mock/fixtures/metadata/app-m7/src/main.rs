@@ -11,7 +11,7 @@
 
 use metadata_macro::app;
 
-#[app(device = fixture, cores = 1, core_ids = [0], external_cores = [1])]
+#[app(device = fixture)]
 mod app {}
 
 fn main() {

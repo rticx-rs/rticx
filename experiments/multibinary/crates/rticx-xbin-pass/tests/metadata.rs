@@ -12,7 +12,8 @@ use quote::quote;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
 use rticx_xbin_pass::{
-    CachePolicy, IpcPool, META_OUT_ENV, PhysicalCore, PoolId, XbinPass, XbinPassBackend,
+    AppTopology, CachePolicy, IpcPool, META_OUT_ENV, PhysicalCore, PoolId, XbinPass,
+    XbinPassBackend,
 };
 use rticx_xbin_proto::AppManifest;
 
@@ -51,12 +52,13 @@ fn producer_app() -> syn::ItemMod {
 
 fn run_manifest(
     app_mod: syn::ItemMod,
+    topology: AppTopology,
     args: TokenStream,
     package: &str,
     target: &str,
 ) -> (tempfile::TempDir, AppManifest) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pass = XbinPass::with_manifest(dir.path(), package, target);
+    let pass = XbinPass::with_manifest(dir.path(), package, target).with_topology(topology);
     assert!(pass.is_metadata_mode());
 
     let (stripped_args, _out_mod) = pass
@@ -79,12 +81,15 @@ fn run_manifest(
 fn run_manifest_with_backend<B: XbinPassBackend + 'static>(
     backend: B,
     app_mod: syn::ItemMod,
+    topology: AppTopology,
     args: TokenStream,
     package: &str,
     target: &str,
 ) -> (tempfile::TempDir, AppManifest) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pass = XbinPass::with_manifest(dir.path(), package, target).with_backend(backend);
+    let pass = XbinPass::with_manifest(dir.path(), package, target)
+        .with_topology(topology)
+        .with_backend(backend);
     pass.run_pass(args, app_mod)
         .expect("metadata pass succeeds");
 
@@ -215,14 +220,14 @@ fn pool(
 
 #[test]
 fn receiver_fixture_produces_the_expected_manifest() {
-    let args = quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = [IRQ0]
+    let args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+    let (_dir, manifest) = run_manifest(
+        receiver_app(),
+        AppTopology::new(vec![1], vec![0]),
+        args,
+        "app-m4",
+        "m4",
     );
-    let (_dir, manifest) = run_manifest(receiver_app(), args, "app-m4", "m4");
 
     assert_eq!(manifest.schema_version, 2);
     assert_eq!(manifest.package, "app-m4");
@@ -260,34 +265,36 @@ fn manifest_records_the_resolved_core_ids() {
     // A declared mapping is recorded as written.
     let (_dir, manifest) = run_manifest(
         receiver_app(),
-        quote!(
-            device = mypac,
-            cores = 2,
-            core_ids = [4, 5],
-            external_cores = [0],
-            ipc_dispatchers = [[IRQ0], []]
-        ),
+        AppTopology::new(vec![4, 5], vec![0]),
+        quote!(device = mypac, ipc_dispatchers = [[IRQ0], []]),
         "app-m4",
         "m4",
     );
     assert_eq!(manifest.core_ids.as_deref(), Some(&[4, 5][..]));
 
-    // Without the key, the manifest records the identity default the core
-    // pass resolves (M5-T3), so the driver always validates it against
-    // `rticx.toml`.
-    let (_dir, manifest) = run_manifest(receiver_app(), quote!(device = mypac), "app-m4", "m4");
+    // Without a project mapping, the manifest records the identity default
+    // the core pass resolves (M5-T3), so the driver always validates it
+    // against `rticx.toml`.
+    let (_dir, manifest) = run_manifest(
+        receiver_app(),
+        AppTopology::identity(1),
+        quote!(device = mypac),
+        "app-m4",
+        "m4",
+    );
     assert_eq!(manifest.core_ids.as_deref(), Some(&[0][..]));
 }
 
 #[test]
 fn producer_fixture_produces_an_empty_manifest() {
-    let args = quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [0],
-        external_cores = [1]
+    let args = quote!(device = mypac);
+    let (_dir, manifest) = run_manifest(
+        producer_app(),
+        AppTopology::new(vec![0], vec![1]),
+        args,
+        "app-m7",
+        "m7",
     );
-    let (_dir, manifest) = run_manifest(producer_app(), args, "app-m7", "m7");
 
     assert!(manifest.receivers.is_empty());
     assert!(manifest.types.is_empty());
@@ -296,15 +303,21 @@ fn producer_fixture_produces_an_empty_manifest() {
 
 #[test]
 fn manifests_are_deterministic() {
-    let args = quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = [IRQ0]
+    let args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+    let (first_dir, _) = run_manifest(
+        receiver_app(),
+        AppTopology::new(vec![1], vec![0]),
+        args.clone(),
+        "app-m4",
+        "m4",
     );
-    let (first_dir, _) = run_manifest(receiver_app(), args.clone(), "app-m4", "m4");
-    let (second_dir, _) = run_manifest(receiver_app(), args, "app-m4", "m4");
+    let (second_dir, _) = run_manifest(
+        receiver_app(),
+        AppTopology::new(vec![1], vec![0]),
+        args,
+        "app-m4",
+        "m4",
+    );
 
     let first = std::fs::read(first_dir.path().join("m4.xbin.json")).expect("first manifest");
     let second = std::fs::read(second_dir.path().join("m4.xbin.json")).expect("second manifest");
@@ -317,19 +330,19 @@ fn manifests_are_deterministic() {
 #[test]
 fn source_hash_covers_the_source_before_stripping() {
     let app_mod = receiver_app();
-    let args = quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = [IRQ0]
-    );
+    let args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
 
     // The hash covers the arguments and module exactly as the user wrote
     // them, before any pass-owned attribute is stripped.
     let expected = rticx_xbin_pass::app_source_hash(&args, &app_mod);
 
-    let (dir, manifest) = run_manifest(app_mod, args, "app-m4", "m4");
+    let (dir, manifest) = run_manifest(
+        app_mod,
+        AppTopology::new(vec![1], vec![0]),
+        args,
+        "app-m4",
+        "m4",
+    );
     assert_eq!(manifest.source_hash, expected);
 
     // Reading the manifest back from disk yields the same hash.
@@ -451,14 +464,12 @@ fn full_pipeline_writes_the_manifest() {
     };
 
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
-    builder.bind_pre_core_pass(XbinPass::with_manifest(dir.path(), "app-m4", "m4"));
+    builder.bind_pre_core_pass(
+        XbinPass::with_manifest(dir.path(), "app-m4", "m4")
+            .with_topology(AppTopology::new(vec![1], vec![0])),
+    );
     let code = builder.build_rtic_macro2(
-        quote!(
-            device = mypac,
-            core_ids = [1],
-            external_cores = [0],
-            ipc_dispatchers = [IRQ0]
-        ),
+        quote!(device = mypac, ipc_dispatchers = [IRQ0]),
         app_mod,
         None,
     );
@@ -496,14 +507,9 @@ fn manifest_declaration_order_is_normalized() {
         }
     };
     XbinPass::with_manifest(dir.path(), "app", "app")
+        .with_topology(AppTopology::new(vec![1], vec![0]))
         .run_pass(
-            quote!(
-                device = mypac,
-                cores = 1,
-                core_ids = [1],
-                external_cores = [0],
-                ipc_dispatchers = [IRQ0, IRQ1]
-            ),
+            quote!(device = mypac, ipc_dispatchers = [IRQ0, IRQ1]),
             app_mod,
         )
         .expect("pass succeeds");
@@ -524,16 +530,20 @@ fn manifest_declaration_order_is_normalized() {
 fn malformed_extensions_are_rejected_with_precise_errors() {
     let cases: Vec<(TokenStream, &str)> = vec![
         (
-            quote!(device = mypac, core_ids = [1, 1, 2], cores = 3),
-            "lists global core id 1 more than once",
+            quote!(device = mypac, core_ids = [1, 1, 2]),
+            "`core_ids` moved to `rticx.toml`",
         ),
         (
             quote!(device = mypac, external_cores = 3),
-            "`external_cores` must be an array of integers",
+            "`external_cores` moved to `rticx.toml`",
         ),
         (
             quote!(device = mypac, cores = 0),
             "The `cores` argument must be at least 1.",
+        ),
+        (
+            quote!(device = mypac, cores = "two"),
+            "`cores` must be an integer literal",
         ),
     ];
 
@@ -564,7 +574,8 @@ fn manifest_records_the_identity_capability_default() {
         syn::parse_quote!(
             mod app {}
         ),
-        quote!(device = mypac, cores = 2, core_ids = [4, 5]),
+        AppTopology::new(vec![4, 5], vec![]),
+        quote!(device = mypac),
         "app-m4",
         "m4",
     );
@@ -603,7 +614,8 @@ fn manifest_records_multi_core_backend_capabilities() {
         syn::parse_quote!(
             mod app {}
         ),
-        quote!(device = mypac, cores = 2, core_ids = [7, 9]),
+        AppTopology::new(vec![7, 9], vec![]),
+        quote!(device = mypac),
         "app-m4",
         "m4",
     );

@@ -13,7 +13,9 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::format_ident;
-use rticx_xbin_pass::{IpcPool, PhysicalCore, RticPass, XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{
+    AppTopology, IpcPool, PhysicalCore, RticPass, XbinPass, XbinPassBackend, resolve_app_topology,
+};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{Expr, Lit, MetaNameValue, Token};
@@ -22,11 +24,11 @@ use xbin_mock_capability::fixture_pools;
 /// Capability binding of the metadata-only stand-in.
 ///
 /// The mock's physical-core vocabulary is the global core id, so the local
-/// index is mapped through the application's `core_ids` exactly like the real
-/// mock distribution does (M6.9-T1).
+/// index is mapped through the application's resolved `rticx.toml` topology
+/// exactly like the real mock distribution does (M6.9-T1, M7-T2).
 struct MetadataCapabilityBackend {
-    /// Local core index -> global core id (`core_ids = [..]`), empty for the
-    /// identity default.
+    /// Local core index -> global core id, resolved from `rticx.toml`;
+    /// empty for the identity default.
     core_ids: Vec<u32>,
 }
 
@@ -90,8 +92,12 @@ impl XbinPassBackend for MetadataCapabilityBackend {
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     let app_mod = syn::parse_macro_input!(input as syn::ItemMod);
+    let topology = match app_topology(&args) {
+        Ok(topology) => topology,
+        Err(error) => return error.to_compile_error().into(),
+    };
     let backend = MetadataCapabilityBackend {
-        core_ids: core_ids(&args),
+        core_ids: topology.core_ids().to_vec(),
     };
     match XbinPass::from_env()
         .with_backend(backend)
@@ -102,32 +108,42 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-/// Reads the local core index -> global core id mapping from
-/// `core_ids = [g0, g1, ..]`.
-fn core_ids(args: &TokenStream2) -> Vec<u32> {
+/// Resolves the application's topology from the nearest `rticx.toml` (M7-T2).
+///
+/// A standalone project with no `rticx.toml` falls back to the identity
+/// mapping over the declared `cores` (default 1), exactly like the pass.
+fn app_topology(args: &TokenStream2) -> syn::Result<AppTopology> {
+    let package = std::env::var("CARGO_PKG_NAME").ok();
+    let target = std::env::var("CARGO_BIN_NAME").ok();
+    let resolved = match package.as_deref() {
+        Some(package) => resolve_app_topology(package, target.as_deref())?,
+        None => None,
+    };
+    Ok(match resolved {
+        Some(resolved) => resolved.topology,
+        None => AppTopology::identity(declared_cores(args)),
+    })
+}
+
+/// Reads the declared `cores` argument (default 1) for the no-project
+/// fallback.
+fn declared_cores(args: &TokenStream2) -> u32 {
     let Ok(entries) = Punctuated::<MetaNameValue, Token![,]>::parse_terminated.parse2(args.clone())
     else {
-        return Vec::new();
+        return 1;
     };
     let Some(value) = entries
         .iter()
-        .find(|entry| entry.path.is_ident("core_ids"))
+        .find(|entry| entry.path.is_ident("cores"))
         .map(|entry| &entry.value)
     else {
-        return Vec::new();
+        return 1;
     };
-    let Expr::Array(array) = value else {
-        return Vec::new();
-    };
-    array
-        .elems
-        .iter()
-        .filter_map(|element| match element {
-            Expr::Lit(lit) => match &lit.lit {
-                Lit::Int(int) => int.base10_parse().ok(),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
+    match value {
+        Expr::Lit(lit) => match &lit.lit {
+            Lit::Int(int) => int.base10_parse().unwrap_or(1),
+            _ => 1,
+        },
+        _ => 1,
+    }
 }

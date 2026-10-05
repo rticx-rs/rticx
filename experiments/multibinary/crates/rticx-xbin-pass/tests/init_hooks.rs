@@ -21,7 +21,7 @@ use std::process::Command;
 
 use quote::{ToTokens, format_ident, quote};
 use rticx_core::RticPass;
-use rticx_xbin_pass::{XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{AppTopology, XbinPass, XbinPassBackend};
 use rticx_xbin_proto::SystemView;
 
 /// A two-application system view: `app-m7` (global core 0) spawns
@@ -190,12 +190,13 @@ fn owner_app() -> syn::ItemMod {
 }
 
 fn owner_args() -> proc_macro2::TokenStream {
-    quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [0],
-        external_cores = [1]
-    )
+    quote!(device = mypac)
+}
+
+/// The owner application's topology: local core 0 -> global 0, global core 1
+/// visible (M7-T2).
+fn owner_topology() -> AppTopology {
+    AppTopology::new(vec![0], vec![1])
 }
 
 /// The fixture view with the owner application's source hash recorded, as
@@ -214,7 +215,9 @@ fn owner_system() -> String {
 
 /// Runs the pass over the owner fixture and returns the generated module.
 fn expand(system: &Path) -> String {
-    let pass = XbinPass::with_system(system, "app-m7", "m7").with_backend(TestBackend);
+    let pass = XbinPass::with_system(system, "app-m7", "m7")
+        .with_topology(owner_topology())
+        .with_backend(TestBackend);
     let (_, module) = pass
         .run_pass(owner_args(), owner_app())
         .expect("owner code generation succeeds");

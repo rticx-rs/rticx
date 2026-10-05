@@ -211,7 +211,7 @@ const ENCRYPT_IDL: &str = "schema = 1\n\n\
 const PRODUCER_ALPHA: &str = r#"
 use metadata_macro::app;
 
-#[app(device = fixture, cores = 1, core_ids = [0], external_cores = [1])]
+#[app(device = fixture)]
 mod app {}
 
 fn main() {}
@@ -221,7 +221,7 @@ fn main() {}
 const PRODUCER_BETA: &str = r#"
 use metadata_macro::app;
 
-#[app(device = fixture, cores = 1, core_ids = [2], external_cores = [1])]
+#[app(device = fixture)]
 mod app {}
 
 fn main() {}
@@ -231,7 +231,7 @@ fn main() {}
 const PRODUCER_ENCRYPT: &str = r#"
 use metadata_macro::app;
 
-#[app(device = fixture, cores = 1, core_ids = [0], external_cores = [1])]
+#[app(device = fixture)]
 mod app {}
 
 fn main() {}
@@ -243,9 +243,6 @@ use metadata_macro::app;
 
 #[app(
     device = fixture,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0, 2],
     ipc_dispatchers = [IRQ0, IRQ1]
 )]
 mod app {
@@ -282,9 +279,6 @@ use metadata_macro::app;
 
 #[app(
     device = fixture,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0],
     ipc_dispatchers = [IRQ0]
 )]
 mod app {
@@ -353,11 +347,11 @@ fn sync_rejects_a_priority_conflict_between_sources() {
     let dir = tempdir().expect("tempdir");
     let config = "schema = 1\n\n\
          [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\n\n\
+         core_ids = [0]\nexternal_cores = [1]\n\n\
          [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
-         core_ids = [1]\n\n\
+         core_ids = [1]\nexternal_cores = [0, 2]\n\n\
          [[application]]\npackage = \"app-m5\"\ntarget = { kind = \"bin\", name = \"m5\" }\n\
-         core_ids = [2]\n";
+         core_ids = [2]\nexternal_cores = [1]\n";
     write_metadata_project(
         dir.path(),
         config,
@@ -384,9 +378,9 @@ fn sync_rejects_an_unknown_input_type() {
     let dir = tempdir().expect("tempdir");
     let config = "schema = 1\n\n\
          [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\n\n\
+         core_ids = [0]\nexternal_cores = [1]\n\n\
          [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
-         core_ids = [1]\n";
+         core_ids = [1]\nexternal_cores = [0]\n";
     write_metadata_project(
         dir.path(),
         config,

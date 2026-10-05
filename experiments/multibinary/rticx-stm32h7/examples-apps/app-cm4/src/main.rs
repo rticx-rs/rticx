@@ -24,9 +24,6 @@ use panic_halt as _;
 
 #[rticx_stm32h7::app(
     device = stm32h7::stm32h747cm4,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0],
     ipc_dispatchers = [USART3]
 )]
 pub mod app {

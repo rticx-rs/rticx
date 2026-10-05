@@ -1,16 +1,19 @@
 //! Acceptance tests for the native cross-binary task syntax.
 //!
-//! - `#[app(core_ids = [..], external_cores = [..])]` and the native
-//!   `#[sw_task(..)]` + `impl RticSwTask { type SpawnInput = …; }` receiver
-//!   syntax parse into declarations with the documented defaults;
-//! - `spawn_by` in an application declaring `external_cores` resolves in the
-//!   global namespace: in-app ids are mapped back to local indexes, external
-//!   ids classify the task as a cross receiver and unknown ids are rejected;
-//! - without `external_cores` the native local reading is kept;
+//! - the project topology (`cores`/`core_ids`/`external_cores`) comes from
+//!   `rticx.toml` and is injected into the arguments by the pass (M7-T2); the
+//!   native `#[sw_task(..)]` + `impl RticSwTask { type SpawnInput = …; }`
+//!   receiver syntax parses into declarations with the documented defaults;
+//! - `spawn_by` in an application whose topology declares external cores
+//!   resolves in the global namespace: in-app ids are mapped back to local
+//!   indexes, external ids classify the task as a cross receiver and unknown
+//!   ids are rejected;
+//! - without external cores the native local reading is kept;
 //! - `init = generated` is accepted for parity with the native `#[sw_task]`
 //!   syntax (the pass always generates the receiver's init); other `init`
 //!   values are rejected;
-//! - unknown and malformed keys fail with precise errors;
+//! - unknown and malformed keys fail with precise errors, and `#[app(core_ids)]`
+//!   / `#[app(external_cores)]` are rejected with the migration errors;
 //! - metadata mode strips the parsed receiver attributes, codegen mode is
 //!   covered by the codegen snapshot tests;
 //! - a distribution *without* the extension pass only warns about the `#[app]`
@@ -20,25 +23,36 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
-use rticx_xbin_pass::XbinPass;
+use rticx_xbin_pass::{AppTopology, XbinPass};
 use rticx_xbin_proto::AppManifest;
 
-/// Runs the pass (no metadata file) and returns its output.
-fn run(args: TokenStream, app_mod: syn::ItemMod) -> syn::Result<(TokenStream, syn::ItemMod)> {
-    XbinPass::disabled().run_pass(args, app_mod)
+/// Runs the pass (no metadata file) with `topology` and returns its output.
+fn run(
+    topology: AppTopology,
+    args: TokenStream,
+    app_mod: syn::ItemMod,
+) -> syn::Result<(TokenStream, syn::ItemMod)> {
+    XbinPass::disabled()
+        .with_topology(topology)
+        .run_pass(args, app_mod)
 }
 
 /// Runs the pass and returns the error message of a rejected input.
-fn rejected(args: TokenStream, app_mod: syn::ItemMod) -> String {
-    run(args, app_mod)
+fn rejected(topology: AppTopology, args: TokenStream, app_mod: syn::ItemMod) -> String {
+    run(topology, args, app_mod)
         .expect_err("the pass must reject this syntax")
         .to_string()
 }
 
 /// Runs the pass in metadata mode and returns the parsed manifest.
-fn manifest_for(args: TokenStream, app_mod: syn::ItemMod) -> (tempfile::TempDir, AppManifest) {
+fn manifest_for(
+    topology: AppTopology,
+    args: TokenStream,
+    app_mod: syn::ItemMod,
+) -> (tempfile::TempDir, AppManifest) {
     let dir = tempfile::tempdir().expect("tempdir");
     XbinPass::with_manifest(dir.path(), "app", "app")
+        .with_topology(topology)
         .run_pass(args, app_mod)
         .expect("metadata pass succeeds");
     let source =
@@ -50,47 +64,37 @@ fn manifest_for(args: TokenStream, app_mod: syn::ItemMod) -> (tempfile::TempDir,
 }
 
 /// Runs the pass in metadata mode and returns the emitted module as tokens.
-fn metadata_module(args: TokenStream, app_mod: syn::ItemMod) -> String {
+fn metadata_module(topology: AppTopology, args: TokenStream, app_mod: syn::ItemMod) -> String {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, module) = XbinPass::with_manifest(dir.path(), "app", "app")
+        .with_topology(topology)
         .run_pass(args, app_mod)
         .expect("metadata pass succeeds");
     module.to_token_stream().to_string()
 }
 
-/// The arguments of a two-core application with the global mapping `[4, 5]`
+/// The topology of a two-core application with the global mapping `[4, 5]`
 /// and the external core `7`.
+fn mapped_topology() -> AppTopology {
+    AppTopology::new(vec![4, 5], vec![7])
+}
+
+/// The arguments of a two-core application; the core mapping comes from the
+/// project topology (M7-T2).
 fn mapped_args() -> TokenStream {
-    quote!(
-        device = mypac,
-        cores = 2,
-        core_ids = [4, 5],
-        external_cores = [7]
-    )
+    quote!(device = mypac)
 }
 
 /// Like [`mapped_args`] with the cross lines of the receiver fixtures: local
 /// core 0 carries `(7, 1)`, local core 1 carries `(7, 3)` (M6.5-T1).
 fn receiver_args() -> TokenStream {
-    quote!(
-        device = mypac,
-        cores = 2,
-        core_ids = [4, 5],
-        external_cores = [7],
-        ipc_dispatchers = [[IRQ_IN_0], [IRQ_IN_1]]
-    )
+    quote!(device = mypac, ipc_dispatchers = [[IRQ_IN_0], [IRQ_IN_1]])
 }
 
 /// Like [`mapped_args`] with the cross line of a single receiver on local core
 /// 0 (`(7, 3)`); local core 1 has no cross line.
 fn one_line_args() -> TokenStream {
-    quote!(
-        device = mypac,
-        cores = 2,
-        core_ids = [4, 5],
-        external_cores = [7],
-        ipc_dispatchers = [[IRQ_IN_0], []]
-    )
+    quote!(device = mypac, ipc_dispatchers = [[IRQ_IN_0], []])
 }
 
 #[test]
@@ -115,7 +119,7 @@ fn receiver_syntax_parses_all_keys_and_defaults() {
             }
         }
     };
-    let (_dir, manifest) = manifest_for(receiver_args(), app_mod);
+    let (_dir, manifest) = manifest_for(mapped_topology(), receiver_args(), app_mod);
 
     assert_eq!(
         manifest
@@ -157,8 +161,8 @@ fn identity_default_keeps_the_native_local_spawn_by() {
             }
         }
     };
-    let args = quote!(device = mypac, cores = 2);
-    let (_dir, manifest) = manifest_for(args.clone(), app_mod.clone());
+    let args = quote!(device = mypac);
+    let (_dir, manifest) = manifest_for(AppTopology::identity(2), args.clone(), app_mod.clone());
     assert_eq!(
         manifest.core_ids.as_deref(),
         Some(&[0, 1][..]),
@@ -166,7 +170,7 @@ fn identity_default_keeps_the_native_local_spawn_by() {
     );
     assert!(manifest.receivers.is_empty(), "no cross receiver");
 
-    let (_, out) = run(args, app_mod).expect("pass succeeds");
+    let (_, out) = run(AppTopology::identity(2), args, app_mod).expect("pass succeeds");
     let tokens = out.to_token_stream().to_string();
     assert!(tokens.contains("spawn_by = 1"), "kept local: {tokens}");
 }
@@ -186,14 +190,15 @@ fn local_spawn_by_stays_local_with_an_identity_mapping_and_external_cores() {
             }
         }
     };
-    let args = quote!(device = mypac, cores = 2, external_cores = [7]);
-    let (_dir, manifest) = manifest_for(args.clone(), app_mod.clone());
+    let args = quote!(device = mypac);
+    let topology = AppTopology::new(vec![0, 1], vec![7]);
+    let (_dir, manifest) = manifest_for(topology.clone(), args.clone(), app_mod.clone());
     assert!(
         manifest.receivers.is_empty(),
         "in-app, not a cross receiver"
     );
 
-    let (_, out) = run(args, app_mod).expect("pass succeeds");
+    let (_, out) = run(topology, args, app_mod).expect("pass succeeds");
     let tokens = out.to_token_stream().to_string();
     assert!(tokens.contains("spawn_by = 1"), "kept local: {tokens}");
 }
@@ -212,10 +217,10 @@ fn in_app_global_spawn_by_is_mapped_back_to_the_local_index() {
             }
         }
     };
-    let (_dir, manifest) = manifest_for(mapped_args(), app_mod.clone());
+    let (_dir, manifest) = manifest_for(mapped_topology(), mapped_args(), app_mod.clone());
     assert!(manifest.receivers.is_empty(), "not a cross receiver");
 
-    let (_, out) = run(mapped_args(), app_mod).expect("pass succeeds");
+    let (_, out) = run(mapped_topology(), mapped_args(), app_mod).expect("pass succeeds");
     let tokens = out.to_token_stream().to_string();
     assert!(
         tokens.contains("spawn_by = 1"),
@@ -238,14 +243,14 @@ fn external_spawn_by_classifies_and_strips_the_receiver() {
     };
 
     // The manifest records the global producer.
-    let (_dir, manifest) = manifest_for(one_line_args(), app_mod.clone());
+    let (_dir, manifest) = manifest_for(mapped_topology(), one_line_args(), app_mod.clone());
     assert_eq!(manifest.receivers.len(), 1);
     assert_eq!(manifest.receivers[0].spawn_by, 7);
     assert_eq!(manifest.types, ["ipc_types::Msg"]);
 
     // The emitted module strips `spawn_by` so the software pass never sees an
     // external id.
-    let (_, out) = run(one_line_args(), app_mod).expect("pass succeeds");
+    let (_, out) = run(mapped_topology(), one_line_args(), app_mod).expect("pass succeeds");
     let tokens = out.to_token_stream().to_string();
     assert!(!tokens.contains("spawn_by"), "{tokens}");
     assert!(tokens.contains("impl RticSwTask for Cross"), "{tokens}");
@@ -263,7 +268,7 @@ fn metadata_strips_the_cross_receiver_attributes() {
             }
         }
     };
-    let tokens = metadata_module(one_line_args(), app_mod);
+    let tokens = metadata_module(mapped_topology(), one_line_args(), app_mod);
 
     assert!(!tokens.contains("sw_task"), "{tokens}");
     assert!(!tokens.contains("spawn_by"), "{tokens}");
@@ -289,7 +294,7 @@ fn unknown_spawn_by_core_is_rejected() {
             }
         }
     };
-    let error = rejected(mapped_args(), app_mod);
+    let error = rejected(mapped_topology(), mapped_args(), app_mod);
     assert!(
         error.contains("receiver `Cross` declares `spawn_by = 9`"),
         "{error}"
@@ -311,7 +316,7 @@ fn spawn_by_arrays_are_rejected() {
             }
         }
     };
-    let error = rejected(mapped_args(), app_mod);
+    let error = rejected(mapped_topology(), mapped_args(), app_mod);
     assert!(
         error.contains("`spawn_by` must be a single core id, not an array"),
         "{error}"
@@ -408,7 +413,7 @@ fn malformed_task_values_are_rejected() {
     ];
 
     for (app_mod, expected) in cases {
-        let error = rejected(mapped_args(), app_mod);
+        let error = rejected(mapped_topology(), mapped_args(), app_mod);
         assert!(
             error.contains(expected),
             "expected `{expected}` in `{error}`"
@@ -428,7 +433,7 @@ fn unknown_task_keys_are_rejected_with_the_supported_list() {
             }
         }
     };
-    let error = rejected(mapped_args(), app_mod);
+    let error = rejected(mapped_topology(), mapped_args(), app_mod);
     assert!(
         error.contains(
             "unknown argument `bogus`; expected one of: priority, capacity, core, spawn_by, init, shared"
@@ -449,7 +454,7 @@ fn duplicate_task_keys_are_rejected() {
             }
         }
     };
-    let error = rejected(mapped_args(), app_mod);
+    let error = rejected(mapped_topology(), mapped_args(), app_mod);
     assert!(
         error.contains("duplicate argument `spawn_by` in `sw_task`"),
         "{error}"
@@ -468,7 +473,7 @@ fn multi_segment_task_keys_are_rejected() {
             }
         }
     };
-    let error = rejected(mapped_args(), app_mod);
+    let error = rejected(mapped_topology(), mapped_args(), app_mod);
     assert!(
         error.contains("`sw_task` arguments must use single-segment keys"),
         "{error}"
@@ -488,7 +493,7 @@ fn duplicate_spawn_input_impls_are_rejected() {
             }
         }
     };
-    let error = rejected(mapped_args(), app_mod);
+    let error = rejected(mapped_topology(), mapped_args(), app_mod);
     assert!(
         error.contains("duplicate `impl RticSwTask` for `EncryptTask`"),
         "{error}"
@@ -500,29 +505,15 @@ fn malformed_app_extensions_are_rejected() {
     let cases: Vec<(TokenStream, &str)> = vec![
         (
             quote!(device = mypac, core_ids = 1),
-            "`core_ids` must be an array of integers",
+            "`core_ids` moved to `rticx.toml`",
         ),
         (
             quote!(device = mypac, core_ids = [x]),
-            "`core_ids` entries must be integer literals",
+            "`core_ids` moved to `rticx.toml`",
         ),
         (
-            quote!(
-                device = mypac,
-                cores = 1,
-                core_ids = [0],
-                external_cores = [0]
-            ),
-            "`external_cores` lists global core id 0, which this application owns via `core_ids`",
-        ),
-        (
-            quote!(
-                device = mypac,
-                cores = 1,
-                core_ids = [0],
-                external_cores = [1, 1]
-            ),
-            "`external_cores` lists global core id 1 more than once",
+            quote!(device = mypac, external_cores = [1, 1]),
+            "`external_cores` moved to `rticx.toml`",
         ),
         (
             quote!(device = mypac, cores = "two"),
@@ -534,7 +525,7 @@ fn malformed_app_extensions_are_rejected() {
         let app_mod: syn::ItemMod = syn::parse_quote!(
             mod app {}
         );
-        let error = rejected(args, app_mod);
+        let error = rejected(mapped_topology(), args, app_mod);
         assert!(
             error.contains(expected),
             "expected `{expected}` in `{error}`"
@@ -543,11 +534,33 @@ fn malformed_app_extensions_are_rejected() {
 }
 
 #[test]
+fn declared_cores_must_agree_with_the_project_mapping() {
+    let app_mod: syn::ItemMod = syn::parse_quote!(
+        mod app {}
+    );
+    let error = XbinPass::with_system("/nonexistent/system.json", "app", "app")
+        .with_topology(AppTopology::new(vec![4, 5], vec![7]))
+        .run_pass(quote!(device = mypac, cores = 1), app_mod)
+        .expect_err("`cores` must equal `core_ids.len()`")
+        .to_string();
+    assert!(error.contains("`app` declares `cores = 1`"), "{error}");
+    assert!(
+        error.contains("rticx.toml maps 2 core(s) via `core_ids`"),
+        "{error}"
+    );
+    assert!(error.contains("single-binary multicore"), "{error}");
+}
+
+#[test]
 fn duplicate_app_arguments_are_rejected() {
     let app_mod: syn::ItemMod = syn::parse_quote!(
         mod app {}
     );
-    let error = rejected(quote!(device = mypac, device = other), app_mod);
+    let error = rejected(
+        mapped_topology(),
+        quote!(device = mypac, device = other),
+        app_mod,
+    );
     assert!(
         error.contains("duplicate argument `device` in `app`"),
         "{error}"
@@ -614,18 +627,14 @@ fn other_distributions_only_warn_about_app_extensions() {
         "{code}"
     );
 
-    // With the extension pass bound the same arguments are consumed, so no
-    // warning items are generated.
+    // With the extension pass bound the arguments are consumed, so no warning
+    // items are generated (M7-T2: `core_ids`/`external_cores` are resolved
+    // from `rticx.toml`).
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
-    builder.bind_pre_core_pass(XbinPass::disabled());
+    builder.bind_pre_core_pass(XbinPass::disabled().with_topology(AppTopology::identity(1)));
     let code = builder
         .build_rtic_macro2(
-            quote!(
-                device = mypac,
-                cores = 1,
-                core_ids = [0],
-                external_cores = [1]
-            ),
+            quote!(device = mypac, ipc_dispatchers = []),
             plain_app(),
             None,
         )
@@ -646,7 +655,7 @@ fn shared_is_preserved_for_the_software_pass() {
             }
         }
     };
-    let (_, out) = run(one_line_args(), app_mod).expect("pass succeeds");
+    let (_, out) = run(mapped_topology(), one_line_args(), app_mod).expect("pass succeeds");
     let tokens = out.to_token_stream().to_string();
     assert!(tokens.contains("shared = [counter]"), "{tokens}");
 }

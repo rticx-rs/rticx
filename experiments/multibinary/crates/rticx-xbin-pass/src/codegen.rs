@@ -1405,17 +1405,24 @@ pub(crate) fn check_source_hash(application: &AppEntry, source_hash: Hash64) -> 
     Ok(())
 }
 
-/// Generates the freshness anchors of one application (M3-T4).
+/// Generates the freshness anchors of one application (M3-T4, M7-T2).
 ///
 /// - `__RTICX_XBIN_TOPOLOGY_HASH` is the `TOPOLOGY_HASH` anchor of plan §7.3:
 ///   the `topology_hash` of the view the generated code was produced from;
 /// - `__RTICX_XBIN_SYSTEM_JSON` is the system view itself, embedded with
 ///   `include_str!` so rustc records it in the crate's dep-info and rebuilds
-///   the application whenever the file changes.
+///   the application whenever the file changes;
+/// - `__RTICX_XBIN_PROJECT_TOML` embeds the `rticx.toml` the topology was
+///   resolved from, when it came from a project file, so a plain `cargo build`
+///   tracks topology edits through dep-info (M7-T2).
 ///
 /// The anchors complement the hard errors of [`crate::load_system`] (stale
 /// `topology_hash`) and [`check_source_hash`] (source changed after `sync`).
-pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::Result<Vec<Item>> {
+pub(crate) fn generate_freshness_items(
+    view: &SystemView,
+    path: &Path,
+    project_manifest: Option<&Path>,
+) -> syn::Result<Vec<Item>> {
     // `include_str!` resolves a relative path against the file containing the
     // macro invocation, not the compilation working directory, so the path
     // must be absolute (`load_system` already read the file).
@@ -1429,7 +1436,7 @@ pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::R
          stale view or a source change is a hard error until `cargo xbin sync` runs again (M3-T4).";
     let json_doc = "The synced system view, embedded so rustc records it in dep-info and rebuilds \
          this application when it changes (M3-T4).";
-    Ok(vec![
+    let mut items = vec![
         syn::parse_quote! {
             #[doc = #hash_doc]
             #[doc(hidden)]
@@ -1441,7 +1448,25 @@ pub(crate) fn generate_freshness_items(view: &SystemView, path: &Path) -> syn::R
             #[allow(dead_code)]
             const __RTICX_XBIN_SYSTEM_JSON: &str = include_str!(#path_lit);
         },
-    ])
+    ];
+
+    // Only a topology that came from a project file has a `rticx.toml` to
+    // track: the identity fallback (no project) and the `Fixed` test override
+    // have none.
+    if let Some(project_manifest) = project_manifest {
+        let project_lit = include_str_path_lit(project_manifest)?;
+        let project_doc = "The `rticx.toml` this application's topology was resolved from, \
+             embedded so rustc records it in dep-info and rebuilds this application when it \
+             changes (M7-T2).";
+        items.push(syn::parse_quote! {
+            #[doc = #project_doc]
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            const __RTICX_XBIN_PROJECT_TOML: &str = include_str!(#project_lit);
+        });
+    }
+
+    Ok(items)
 }
 
 /// Returns `path` canonicalized (or lexically absolute as a fallback) as a

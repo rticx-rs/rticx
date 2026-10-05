@@ -11,7 +11,7 @@ use quote::quote;
 use rticx_core::RticMacroBuilder;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use rticx_xbin_pass::{RticPass, XbinPass};
+use rticx_xbin_pass::{AppTopology, RticPass, XbinPass};
 
 /// A single-core application with one native cross receiver: one cross line
 /// `(source 7, priority 3)` on local core 0.
@@ -29,21 +29,25 @@ fn cross_receiver_app() -> syn::ItemMod {
     }
 }
 
-/// The `#[app]` arguments of a single-core application seeing global core 7,
-/// with `ipc` as its pool expression.
+/// The `#[app]` arguments of a single-core application with `ipc` as its pool
+/// expression (the core mapping comes from `rticx.toml`, M7-T2).
 fn receiver_args(ipc: TokenStream) -> TokenStream {
     quote!(
         device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [7],
         ipc_dispatchers = #ipc
     )
 }
 
+/// The receiver's topology: local core 0 -> global 1, global core 7 visible.
+fn receiver_topology() -> AppTopology {
+    AppTopology::new(vec![1], vec![7])
+}
+
 /// Runs the syntax-only pass over the receiver fixture.
 fn run(ipc: TokenStream) -> syn::Result<(TokenStream, syn::ItemMod)> {
-    XbinPass::disabled().run_pass(receiver_args(ipc), cross_receiver_app())
+    XbinPass::disabled()
+        .with_topology(receiver_topology())
+        .run_pass(receiver_args(ipc), cross_receiver_app())
 }
 
 /// Returns the error message of a rejected pool.
@@ -60,19 +64,19 @@ fn flat_pool_is_accepted_and_stripped_in_both_modes() {
     // the software pass.
     let args = quote!(
         device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [7],
         dispatchers = [SW_IRQ],
         ipc_dispatchers = [XBIN_IRQ]
     );
 
     let dir = tempfile::tempdir().expect("tempdir");
     for (label, pass) in [
-        ("syntax-only", XbinPass::disabled()),
+        (
+            "syntax-only",
+            XbinPass::disabled().with_topology(receiver_topology()),
+        ),
         (
             "metadata",
-            XbinPass::with_manifest(dir.path(), "app", "app"),
+            XbinPass::with_manifest(dir.path(), "app", "app").with_topology(receiver_topology()),
         ),
     ] {
         let (stripped, _) = pass
@@ -113,14 +117,9 @@ fn nested_pool_is_accepted_per_core() {
             }
         }
     };
-    let args = quote!(
-        device = mypac,
-        cores = 2,
-        core_ids = [4, 5],
-        external_cores = [7],
-        ipc_dispatchers = [[IRQ_0], [IRQ_1]]
-    );
+    let args = quote!(device = mypac, ipc_dispatchers = [[IRQ_0], [IRQ_1]]);
     XbinPass::disabled()
+        .with_topology(AppTopology::new(vec![4, 5], vec![7]))
         .run_pass(args, app_mod)
         .expect("one nested list per core with one entry per cross line");
 }
@@ -130,14 +129,9 @@ fn pool_without_cross_lines_must_be_empty() {
     let app_mod: syn::ItemMod = syn::parse_quote!(
         mod app {}
     );
-    let args = quote!(
-        device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [7],
-        ipc_dispatchers = []
-    );
+    let args = quote!(device = mypac, ipc_dispatchers = []);
     XbinPass::disabled()
+        .with_topology(receiver_topology())
         .run_pass(args, app_mod)
         .expect("an empty pool has one entry per (zero) cross line");
 }
@@ -185,13 +179,11 @@ fn duplicate_pool_entries_are_rejected() {
 fn overlapping_dispatchers_entries_are_rejected() {
     let args = quote!(
         device = mypac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [7],
         dispatchers = [IRQ_A],
         ipc_dispatchers = [IRQ_A]
     );
     let error = XbinPass::disabled()
+        .with_topology(receiver_topology())
         .run_pass(args, cross_receiver_app())
         .expect_err("a line cannot serve both pools")
         .to_string();
@@ -221,15 +213,13 @@ fn pool_shape_errors_are_rejected() {
     for (ipc, expected) in cases {
         let args = quote!(
             device = mypac,
-            cores = 2,
-            core_ids = [4, 5],
-            external_cores = [7],
             ipc_dispatchers = #ipc
         );
         let app_mod: syn::ItemMod = syn::parse_quote!(
             mod app {}
         );
         let error = XbinPass::disabled()
+            .with_topology(AppTopology::new(vec![4, 5], vec![7]))
             .run_pass(args, app_mod)
             .expect_err("malformed pool")
             .to_string();
@@ -240,14 +230,9 @@ fn pool_shape_errors_are_rejected() {
     }
 
     // The nested shape must have exactly one list per core.
-    let args = quote!(
-        device = mypac,
-        cores = 3,
-        core_ids = [4, 5, 6],
-        external_cores = [7],
-        ipc_dispatchers = [[IRQ_A], [IRQ_B]]
-    );
+    let args = quote!(device = mypac, ipc_dispatchers = [[IRQ_A], [IRQ_B]]);
     let error = XbinPass::disabled()
+        .with_topology(AppTopology::new(vec![4, 5, 6], vec![7]))
         .run_pass(
             args,
             syn::parse_quote!(
@@ -328,16 +313,15 @@ fn software_pass_only_sees_its_own_dispatchers() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
-    builder.bind_pre_core_pass(XbinPass::with_manifest(dir.path(), "app", "app"));
+    builder.bind_pre_core_pass(
+        XbinPass::with_manifest(dir.path(), "app", "app").with_topology(receiver_topology()),
+    );
     builder.bind_pre_core_pass(SoftwarePass::new(TestSwBackend));
 
     let code = builder
         .build_rtic_macro2(
             quote!(
                 device = mypac,
-                cores = 1,
-                core_ids = [1],
-                external_cores = [7],
                 dispatchers = [SW_IRQ],
                 ipc_dispatchers = [XBIN_IRQ]
             ),

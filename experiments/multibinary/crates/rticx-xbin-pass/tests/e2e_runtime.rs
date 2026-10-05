@@ -54,7 +54,7 @@ use quote::{ToTokens, format_ident, quote};
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use rticx_xbin_pass::{XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{AppTopology, XbinPass, XbinPassBackend};
 use rticx_xbin_proto::{
     AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, PoolEntry, SystemView,
     TargetRef, TaskEntry, TypeEntry, TypeKind,
@@ -285,15 +285,16 @@ fn producer_module(core: u32) -> syn::ItemMod {
     }
 }
 
-/// `#[app]` arguments of the producer on `core`; a single local core, so the
-/// global id is `core` itself.
-fn producer_args(core: u32, external: u32) -> TokenStream {
-    quote!(
-        device = pac,
-        cores = 1,
-        core_ids = [#core],
-        external_cores = [#external]
-    )
+/// `#[app]` arguments of a producer; a single local core, so the global id is
+/// `core` itself (the mapping comes from `rticx.toml`, M7-T2).
+fn producer_args() -> TokenStream {
+    quote!(device = pac)
+}
+
+/// The producer's topology: local core 0 -> global `core`, with `external`
+/// visible.
+fn producer_topology(core: u32, external: u32) -> AppTopology {
+    AppTopology::new(vec![core], vec![external])
 }
 
 /// The two-app receiver fixture application: the task, a log of executed
@@ -465,13 +466,13 @@ fn two_app_receiver_module() -> syn::ItemMod {
 }
 
 fn two_app_receiver_args() -> TokenStream {
-    quote!(
-        device = pac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0],
-        ipc_dispatchers = [IRQ0]
-    )
+    quote!(device = pac, ipc_dispatchers = [IRQ0])
+}
+
+/// The two-app receiver's topology: local core 0 -> global 1, global core 0
+/// visible.
+fn two_app_receiver_topology() -> AppTopology {
+    AppTopology::new(vec![1], vec![0])
 }
 
 /// The three-app receiver fixture application (M6-T1): two cross receivers fed
@@ -675,13 +676,13 @@ fn three_app_receiver_module() -> syn::ItemMod {
 }
 
 fn three_app_receiver_args() -> TokenStream {
-    quote!(
-        device = pac,
-        cores = 1,
-        core_ids = [1],
-        external_cores = [0, 2],
-        ipc_dispatchers = [IRQ0, IRQ1]
-    )
+    quote!(device = pac, ipc_dispatchers = [IRQ0, IRQ1])
+}
+
+/// The three-app receiver's topology: local core 0 -> global 1, global cores 0
+/// and 2 visible.
+fn three_app_receiver_topology() -> AppTopology {
+    AppTopology::new(vec![1], vec![0, 2])
 }
 
 /// The fixture view with both applications' source hashes recorded, as
@@ -689,7 +690,7 @@ fn three_app_receiver_args() -> TokenStream {
 fn two_app_system() -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     for (package, args, app_mod) in [
-        ("app-m7", &producer_args(0, 1), &producer_module(0)),
+        ("app-m7", &producer_args(), &producer_module(0)),
         (
             "app-m4",
             &two_app_receiver_args(),
@@ -851,8 +852,8 @@ fn three_app_system() -> String {
     ];
 
     for (package, args, app_mod) in [
-        ("app-m7", producer_args(0, 1), producer_module(0)),
-        ("app-m5", producer_args(2, 1), producer_module(2)),
+        ("app-m7", producer_args(), producer_module(0)),
+        ("app-m5", producer_args(), producer_module(2)),
         (
             "app-m4",
             three_app_receiver_args(),
@@ -872,9 +873,11 @@ fn three_app_system() -> String {
 
 /// Expands a producer fixture through the cross-binary pass (no core pass).
 fn expand_producer(system: &Path, package: &str, target: &str, core: u32, external: u32) -> String {
-    let pass = XbinPass::with_system(system, package, target).with_backend(TestBackend);
+    let pass = XbinPass::with_system(system, package, target)
+        .with_topology(producer_topology(core, external))
+        .with_backend(TestBackend);
     let (_, module) = pass
-        .run_pass(producer_args(core, external), producer_module(core))
+        .run_pass(producer_args(), producer_module(core))
         .expect("producer code generation succeeds");
     module.to_token_stream().to_string()
 }
@@ -885,11 +888,14 @@ fn expand_receiver(
     system: &Path,
     package: &str,
     target: &str,
+    topology: AppTopology,
     args: TokenStream,
     app_mod: syn::ItemMod,
     irqs: &'static [&'static str],
 ) -> String {
-    let pass = XbinPass::with_system(system, package, target).with_backend(TestBackend);
+    let pass = XbinPass::with_system(system, package, target)
+        .with_topology(topology)
+        .with_backend(TestBackend);
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(pass);
     builder.bind_pre_core_pass(SoftwarePass::new(TestSwBackend::new(irqs)));
@@ -1026,6 +1032,7 @@ fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
         &system_path,
         "app-m4",
         "m4",
+        two_app_receiver_topology(),
         two_app_receiver_args(),
         two_app_receiver_module(),
         &["IRQ0"],
@@ -1099,6 +1106,7 @@ fn three_applications_spawn_through_their_own_routers() {
         &system_path,
         "app-m4",
         "m4",
+        three_app_receiver_topology(),
         three_app_receiver_args(),
         three_app_receiver_module(),
         &["IRQ0", "IRQ1"],
