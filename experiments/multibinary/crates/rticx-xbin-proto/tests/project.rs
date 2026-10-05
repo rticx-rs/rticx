@@ -18,11 +18,13 @@ schema = 1
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
 core_ids = [0]
+external_cores = [1]
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4", triple = "thumbv7em-none-eabihf" }
 core_ids = [1]
+external_cores = [0]
 "#;
 
 const CANONICAL: &str = "\
@@ -32,11 +34,13 @@ schema = 1
 package = \"app-m7\"
 target = { kind = \"bin\", name = \"m7\" }
 core_ids = [0]
+external_cores = [1]
 
 [[application]]
 package = \"app-m4\"
 target = { kind = \"bin\", name = \"m4\", triple = \"thumbv7em-none-eabihf\" }
 core_ids = [1]
+external_cores = [0]
 ";
 
 fn err(source: &str) -> String {
@@ -72,6 +76,31 @@ fn parses_minimal_project() {
     assert_eq!(application.target().name(), "m7");
     assert_eq!(application.target().triple(), None);
     assert_eq!(application.core_ids(), &[0]);
+    assert_eq!(application.external_cores(), &[] as &[u32]);
+}
+
+#[test]
+fn parses_external_cores() {
+    let config = parse_project_str(
+        r#"
+        schema = 1
+
+        [[application]]
+        package = "app-m7"
+        target = { kind = "bin", name = "m7" }
+        core_ids = [0]
+        external_cores = [2, 1]
+        "#,
+    )
+    .expect("valid manifest");
+
+    let application = config.application("app-m7").expect("application exists");
+    assert_eq!(application.core_ids(), &[0]);
+    assert_eq!(
+        application.external_cores(),
+        &[2, 1],
+        "declaration order is kept"
+    );
 }
 
 #[test]
@@ -93,6 +122,20 @@ fn parses_multi_application_project() {
         Some("thumbv7em-none-eabihf")
     );
     assert_eq!(config.core_ids().collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(
+        config
+            .application("app-m7")
+            .expect("application exists")
+            .external_cores(),
+        &[1]
+    );
+    assert_eq!(
+        config
+            .application("app-m4")
+            .expect("application exists")
+            .external_cores(),
+        &[0]
+    );
 }
 
 #[test]
@@ -284,7 +327,7 @@ fn rejects_application_entry_that_is_not_a_table() {
 fn rejects_unknown_application_key() {
     assert_eq!(
         err("schema = 1\n[[application]]\npackages = \"app\"\n"),
-        "`application[0]` has unknown key `packages`; expected `package`, `target` or `core_ids`"
+        "`application[0]` has unknown key `packages`; expected `package`, `target`, `core_ids` or `external_cores`"
     );
 }
 
@@ -435,5 +478,41 @@ fn rejects_duplicate_global_core_id_across_applications() {
              [[application]]\npackage = \"app-b\"\ntarget = { kind = \"bin\", name = \"b\" }\ncore_ids = [1, 0]\n"),
         "global core id 0 is declared by both `app-a` and `app-b`; \
          core ids must be unique across applications"
+    );
+}
+
+#[test]
+fn rejects_duplicate_external_core() {
+    assert_eq!(
+        err(
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\nexternal_cores = [1, 1]\n"
+        ),
+        "`application[0].external_cores` lists core id 1 more than once"
+    );
+}
+
+#[test]
+fn rejects_external_core_owned_by_the_application() {
+    assert_eq!(
+        err(
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0, 2]\nexternal_cores = [1, 2]\n"
+        ),
+        "`application[0].external_cores` lists core id 2, which this application owns via `core_ids`"
+    );
+}
+
+#[test]
+fn rejects_invalid_external_cores() {
+    assert_eq!(
+        err(
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\nexternal_cores = \"1\"\n"
+        ),
+        "`application[0].external_cores` must be an array of integers, found a string"
+    );
+    assert_eq!(
+        err(
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\nexternal_cores = [-1]\n"
+        ),
+        "`application[0].external_cores[0]` = -1 is out of range 0..=4294967295"
     );
 }

@@ -90,6 +90,7 @@ mod binding;
 mod codegen;
 mod parse;
 mod priority;
+mod topology;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -124,6 +125,11 @@ pub use crate::codegen::XbinPassBackend;
 /// tell the pass which cores it can reach and through which shared pool.
 pub use crate::binding::{CachePolicy, IpcPool, PhysicalCore, PoolId};
 
+/// Topology resolution from the nearest `rticx.toml` (M7-T2): the
+/// distribution macros and the pass read the application's core mapping and
+/// visible foreign cores from the project file instead of `#[app]`.
+pub use crate::topology::{AppTopology, ResolvedTopology, resolve_app_topology};
+
 /// Environment variable that switches the pass into metadata mode.
 ///
 /// Its value is the directory where `<target>.xbin.json` is written.
@@ -136,7 +142,7 @@ pub const META_OUT_ENV: &str = "RTICX_XBIN_META_OUT";
 pub const SYSTEM_ENV: &str = "RTICX_XBIN_SYSTEM";
 
 /// `rticx.toml` file name, used to discover the project root.
-const PROJECT_MANIFEST: &str = "rticx.toml";
+pub(crate) const PROJECT_MANIFEST: &str = "rticx.toml";
 
 /// Default system view path below the project root.
 const SYSTEM_FILE: &str = "system.json";
@@ -488,7 +494,7 @@ fn system_from_env() -> Option<SystemMode> {
 
 /// Walks up from `CARGO_MANIFEST_DIR` to the nearest directory holding a
 /// `rticx.toml`.
-fn project_root_from_env() -> Option<PathBuf> {
+pub(crate) fn project_root_from_env() -> Option<PathBuf> {
     let mut dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR")?);
     loop {
         if dir.join(PROJECT_MANIFEST).is_file() {
