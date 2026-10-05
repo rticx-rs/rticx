@@ -368,7 +368,7 @@ impl XbinPass {
                     .as_ref()
                     .and_then(|system| system.package.as_deref())
             })
-            .or_else(|| match &self.topology {
+            .or(match &self.topology {
                 TopologySource::Project { package, .. } => package.as_deref(),
                 _ => None,
             })

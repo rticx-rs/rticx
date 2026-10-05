@@ -73,6 +73,7 @@ receiver). Section 6 walks through `e2e/`.
 | `package` | string | yes | Cargo package name |
 | `target` | table | yes | `{ kind = "bin", name = "<bin>", triple = "<triple>"? }`; `kind` is `"bin"` in v1, `triple` overrides `.cargo/config.toml` |
 | `core_ids` | array of integers | yes | local core index `i` maps to the globally unique id `core_ids[i]` |
+| `external_cores` | array of integers | no | global core ids in other binaries this application can see; must be disjoint from its own `core_ids` |
 
 That is the whole schema: since M6.9 the project declares **no IPC memory**.
 The distribution owns it and exposes a *capability binding* — which core pairs
@@ -80,7 +81,7 @@ it can reach, through which pool, with each core's view and a shared per-dual
 budget — which each application records in its metadata manifest. A leftover
 `[ipc.regions]` table is a hard `sync` error naming the removal. Addresses and
 pool budgets are the distribution author's concern (section 7.5); the project
-author only maps applications to cores.
+author only maps applications to cores and declares their visibility.
 
 Example (the `crates/mock/fixtures/e2e` topology):
 
@@ -91,19 +92,22 @@ schema = 1
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
 core_ids = [0]
+external_cores = [1]
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
+external_cores = [0]
 ```
 
-`core_ids` is the only place global core ids are declared: the `#[app]` macro
+`rticx.toml` is the only place global core ids are declared: the `#[app]` macro
 uses them in the runtime core checks, `external_cores`/`spawn_by` refer to
-them, and the system view records them. Each application also reports the
-distribution's **physical core id** for its cores; the driver matches the two
-endpoints of a dual through it and allocates both directions of the pair inside
-one shared pool budget (M6.9-T4).
+them, and the system view records them. `#[app]` no longer accepts `core_ids` or
+`external_cores` — the pass reads them from here (section 5). Each application
+also reports the distribution's **physical core id** for its cores; the driver
+matches the two endpoints of a dual through it and allocates both directions of
+the pair inside one shared pool budget (M6.9-T4).
 
 ## 4. Writing `ipc-types.toml`
 
@@ -187,9 +191,6 @@ use my_distro::app;
 
 #[app(
     device = my_pac,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0],
     ipc_dispatchers = [IPC_LINE_0]
 )]
 mod app {
@@ -257,7 +258,7 @@ synced system view):
 ```rust
 use my_distro::app;
 
-#[app(device = my_pac, cores = 1, core_ids = [0], external_cores = [1])]
+#[app(device = my_pac)]
 mod app {
     // ... `#[idle]`, `#[init]`, local tasks ...
 
@@ -290,18 +291,24 @@ error semantics match the single-binary `cross_spawn`:
 
 ### `#[app]` arguments
 
+Topology is not declared in `#[app]` any more: `cores`, `core_ids` and
+`external_cores` come from `rticx.toml` (section 3). A leftover `core_ids` or
+`external_cores` key is a hard error naming the migration; `cores` is optional
+and must equal the project's `core_ids.len()` when present. The pass injects the
+resolved `cores`/`core_ids` for the core pass.
+
 | Key | Required | Meaning |
 |---|---|---|
-| `core_ids = [g...]` | no | local core index `i` → global id `g_i` (identity `0..cores` by default); native to `rticx-core` since M5, understood with or without the pass |
-| `external_cores = [g...]` | no | global ids of cores in other binaries visible to this application; consumed by the pass |
+| `cores = N` | no | derived from `rticx.toml` `core_ids`; declare it only for a single-binary multicore application, and it must equal `core_ids.len()` |
 | `ipc_dispatchers = [IRQ...]` | yes (when the application has cross-binary receivers) | per-core interrupt lines of the cross-binary line dispatchers: one entry per `(source, priority)` cross line of the core, in ascending `(source, priority)` order; consumed by the pass |
 
 ### `spawn_by` resolution
 
-`spawn_by` names the producer core. Without `external_cores` the native
-local-index reading applies (`spawn_by < cores`, validated by `rticx-sw-pass`).
-In an application that declares `external_cores`, the pass resolves it in the
-**global** namespace:
+`spawn_by` names the producer core. Without `external_cores` in the
+application's `[[application]]` entry the native local-index reading applies
+(`spawn_by < cores`, validated by `rticx-sw-pass`). In an application whose
+entry declares `external_cores`, the pass resolves it in the **global**
+namespace:
 
 | `spawn_by` | Classification |
 |---|---|
@@ -328,19 +335,21 @@ Rejected with a precise error: unknown, duplicate or multi-segment keys;
 non-integer `priority`/`capacity`/`core`; `capacity = 0`; `priority = 0` on a
 cross receiver; `spawn_by` as an array (a task has exactly one producer core);
 a receiver without an `impl RticSwTask { type SpawnInput = …; }` block; a
-receiver `core` outside `0..cores`; `external_cores` overlapping or repeating
-the application's own `core_ids`; an `ipc_dispatchers` shape, count, duplicate
+receiver `core` outside `0..cores`; an `ipc_dispatchers` shape, count, duplicate
 or `dispatchers`-overlap violation (the error names the affected core and,
-for a missing entry, the cross line).
+for a missing entry, the cross line). A leftover `core_ids`/`external_cores`
+`#[app]` key, or a `cores` that disagrees with the project's `core_ids`, is a
+hard error naming the migration; `rticx.toml` rejects an `external_cores` that
+repeats or overlaps the application's own `core_ids` (section 3).
 
 The pass is bound **before** `rticx-sw-pass` and requires the distribution's
 `swtasks` feature: the software pass generates the `RticSwTask` trait and the
 core pass compiles the receiver through its external `task_trait` mechanism.
 Without the feature `RticSwTask` is undefined and the receiver fails to
-compile. A distribution that does **not** bind the extension pass only warns
-about `external_cores` as an unknown `#[app]` argument (`core_ids` is
-understood natively with or without the pass) and treats `spawn_by` as a local
-index, so cross-binary declarations require the pass.
+compile. A distribution that does **not** bind the extension pass never reads
+`rticx.toml`: `core_ids` is understood natively by `rticx-core` (M5) and
+`external_cores` only warns as an unknown `#[app]` argument, while `spawn_by`
+keeps the local-index reading — so cross-binary declarations require the pass.
 
 ## 6. Worked example: the two-application fixture
 
@@ -390,9 +399,6 @@ use xbin_mock_distro::app;
 
 #[app(
     device = mock_pac,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0],
     ipc_dispatchers = [XBIN_IPC_LINE_0]
 )]
 mod app {
@@ -431,7 +437,7 @@ task at all.
 ```rust
 use xbin_mock_distro::app;
 
-#[app(device = mock_pac, cores = 1, core_ids = [0], external_cores = [1])]
+#[app(device = mock_pac)]
 mod app {
     #[idle]
     struct Idle;
@@ -568,8 +574,8 @@ cargo test -p rticx-xbin-pass --test e2e_runtime
 The mock capability binding provides one pool per dual (`mock-0-1`,
 `mock-1-2`, `mock-0-2`), each with its own 4096-byte shared budget; the `0->1`
 and `2->1` directions each carry two FIFOs inside their dual's pool. The
-project's `rticx.toml` still declares only the three applications and their
-`core_ids`.
+project's `rticx.toml` still declares only the three applications, their
+`core_ids` and their `external_cores`.
 
 The receiver lists one dispatcher line per cross line, in ascending
 `(source, priority)` order, and the two producers use disjoint priorities:
@@ -577,9 +583,6 @@ The receiver lists one dispatcher line per cross line, in ascending
 ```rust
 #[app(
     device = mock_pac,
-    cores = 1,
-    core_ids = [1],
-    external_cores = [0, 2],
     ipc_dispatchers = [XBIN_IPC_LINE_0, XBIN_IPC_LINE_1]  // (0, 3), then (2, 4)
 )]
 mod app {
@@ -622,9 +625,8 @@ declarations since M5.5, the driver infers each task's single producer
 application from the receivers' `spawn_by` — and are then merged and validated
 (M1-T5): every receiver's `spawn_by` must name a single core in another
 application, be listed in the receiver's `external_cores`, and the producer
-application must list the receiver's core in its `external_cores`; every
-`[[application]]`'s `core_ids`/`external_cores` must be consistent with
-`rticx.toml`; every referenced type must exist in the IDL; and the per-task
+application must list the receiver's core in its `external_cores` (both read
+from `rticx.toml`); every referenced type must exist in the IDL; and the per-task
 FIFOs must fit their dual's shared distro pool budget. The same
 deterministic pass allocates every FIFO address (8-byte aligned, plan order,
 depth `capacity + 1`) inside the pool, sharing one budget between both
@@ -862,6 +864,8 @@ build instead of corrupting IPC at runtime.
 | ``missing required top-level key `schema` `` | add `schema = 1` |
 | ``package `x` is declared by more than one `[[application]]` `` | give each binary a unique `package` |
 | ``global core id N is declared by both ...`` | core ids must be unique across applications |
+| ```application[0].external_cores` lists core id N more than once`` | list each foreign core once |
+| ```application[0].external_cores` lists core id N, which this application owns via `core_ids` `` | `external_cores` must be disjoint from the application's own `core_ids` |
 | ```[ipc.regions]` was removed: IPC memory is owned by the distribution's capability binding `` | delete the table; since M6.9 the distribution owns the IPC pools (section 7.5) |
 | ``references unknown type `T` `` | declare `[message.T]` or `[enum.T]` in `ipc-types.toml` |
 | ``cyclic message reference: A -> B -> A`` | break the cycle; messages are stored inline |
@@ -882,8 +886,10 @@ build instead of corrupting IPC at runtime.
 |---|---|
 | ``application `x` has no manifest`` | the `#[app]` macro of `x` must bind the cross-binary pass |
 | ``manifest for package `x` has no matching `[[application]]` `` | remove the stale manifest and re-run `cargo xbin sync` |
-| ``rticx.toml maps N core(s) for `x`, but its manifest declares `cores = M` `` | keep `core_ids` in `rticx.toml` and `#[app(cores = …)]` in sync |
-| ``… declares `core_ids = …`, but rticx.toml maps …`` | `rticx.toml` is authoritative; reconcile the mapping |
+| ```core_ids` moved to `rticx.toml`…`` | remove `core_ids` from `#[app]`; declare the local→global mapping in the application's `[[application]]` entry |
+| ```external_cores` moved to `rticx.toml`…`` | remove `external_cores` from `#[app]`; declare the visible foreign cores in `[[application]]` |
+| ```{package}` declares `cores = {n}`, but rticx.toml maps {m} core(s) via `core_ids`…`` | remove the `#[app(cores)]` argument, or reconcile it with the project's `core_ids` |
+| ```the application `{package}` is not listed in the nearest `rticx.toml`…`` | add an `[[application]]` entry for the package |
 | ``references global core id N … but no application declares it`` | fix the id or declare the owning application |
 | ``receiver `T` in `x` is spawned by global core N, but the application does not list it in `external_cores` `` | add the producer core to the receiver application's `external_cores` |
 | ``task `T` runs on global core N, but its producer application `x` does not list that core in `external_cores` `` | add the receiver's core to the producer application's `external_cores` |

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// Manifest file identifying the root of a multi-binary project.
 pub const PROJECT_MANIFEST: &str = "rticx.toml";
 
-/// Type-only IDL file at the project root 
+/// Type-only IDL file at the project root
 pub const IDL_MANIFEST: &str = "ipc-types.toml";
 
 /// Driver-owned output directory, relative to the project root.

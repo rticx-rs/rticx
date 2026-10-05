@@ -45,7 +45,7 @@ by an out-of-tree distribution.
 | v1 scope | Native `#[sw_task]` control-plane spawn only; no async |
 | Async | Explicitly out of scope; no extension of `rticx-async-pass`. The xbin pass requires the distribution's `swtasks` feature (sync `#[sw_task]` only) until a later milestone adds async |
 | Cross-binary channels / shared resources | Out of scope |
-| Task syntax | Cross-binary receivers are native `#[sw_task]` items with `impl RticSwTask`; no xbin-specific attributes or traits. In applications declaring `external_cores`, `spawn_by` names a **global** core (`∈ core_ids` → in-app, mapped back to a local index for sw-pass; `∈ external_cores` → cross receiver; else error); `core` stays a local index. `SpawnInput: CrossCoreMessage` (the pass-injected marker trait) is enforced by a generated const assertion |
+| Task syntax | Cross-binary receivers are native `#[sw_task]` items with `impl RticSwTask`; no xbin-specific attributes or traits. In applications whose `[[application]]` entry declares `external_cores`, `spawn_by` names a **global** core (`∈ core_ids` → in-app, mapped back to a local index for sw-pass; `∈ external_cores` → cross receiver; else error); `core` stays a local index. `SpawnInput: CrossCoreMessage` (the pass-injected marker trait) is enforced by a generated const assertion |
 | Receiver transport | Per-task shared FIFO, direct dispatcher drain; the per-pair router only routes task ids and pends dispatchers — it never forwards payloads (no forwarder ISR) |
 | Sender-side lock | v1: `core_local_interrupt_free` inside generated spawn. Future: `Producer` as a shared resource with SRP lock |
 | Type discovery | TOML IDL at workspace root, types only; driver generates a shared `ipc_types` module the pass re-emits into each `#[app]` |
@@ -58,6 +58,7 @@ by an out-of-tree distribution.
 | Pass internals | The external pass reimplements needed internals for now, marked `TODO(extract): ...`; may later be promoted/shared with `rticx-sw-pass` |
 | Development home | In-tree experimental workspace under `experiments/multibinary/`; extract to its own repo later |
 | Core changes | M5 added the native `core_ids` mapping to `rticx-core`. The generated multi-binary code keeps using only the frozen public surface (external `task_trait` paths, etc.) |
+| Topology source | `rticx.toml` is the single user-facing topology source (M7-T2): each `[[application]]` carries `core_ids` and the optional `external_cores`. `#[app(core_ids)]` / `#[app(external_cores)]` are hard errors naming the migration; the pass resolves the nearest project file and injects `cores`/`core_ids` into the core pass, so `rticx-core` is unchanged. `cores` stays optional and must equal `core_ids.len()` when present. The application manifest (schema 3) carries no topology echo |
 | Boot sequencing | Distribution-owned; the framework defines no cross-core boot handshake. The pass emits `configure_shared_memory` on every core (before its user `init`) and zeroes the FIFOs each core produces (its outbound pool half) before its `post_init`; the distribution releases/wakes its peers and handles resets itself |
 | IPC memory ownership | Distro-owned (M6.9): the project declares **no** IPC addresses or regions. The distro exposes a capability binding — which core pairs can reach each other, through which pool, with per-core views and a shared per-dual budget — and ships the linker reservations. One shared pool per unordered core pair; **no** project-level override |
 | Link-time verification | `cargo xbin build --verify-elf` / `cargo xbin verify` parse the linked ELF with `object`: no `SHF_ALLOC` section or stack bound symbol may intersect a pool view of the application's cores, and distro pool bound symbols must match `system.json` (M6.9-T7) |
@@ -97,7 +98,7 @@ by an out-of-tree distribution.
 
 ```
 Application sources (Rust)          IDL (types only)         Project + distro
-  #[app(core_ids, external_cores)]     ipc-types.toml          rticx.toml (apps, core_ids)
+  #[app(device, ipc_dispatchers)]      ipc-types.toml          rticx.toml (apps, core_ids, external_cores)
   #[sw_task] receiver (spawn_by)                               distro capability binding (pools, M6.9)
           |                                |                       |
           v                                v                       v
@@ -182,16 +183,17 @@ the root generation.
 | `rticx-xbin-proto` | `idl.rs` | Parse `ipc-types.toml`; validate the 32-bit-safe type subset |
 | | `layout.rs` | Canonical little-endian layout (natural alignment capped at 4) |
 | | `codegen.rs` | Generate the `ipc_types` module (types, marker impls, consts, asserts, `LAYOUT_HASH`) with change-detecting writes |
-| | `project.rs` | Parse `rticx.toml` (`[[application]]`, `core_ids`; rejects the removed `[ipc.regions]`) |
-| | `manifest.rs` | `<app>.xbin.json` schema (written by the pass in metadata mode: receivers + per-core distro capability binding) |
+| | `project.rs` | Parse `rticx.toml` (`[[application]]` with `core_ids` + optional `external_cores`; rejects the removed `[ipc.regions]`) |
+| | `manifest.rs` | `<app>.xbin.json` schema 3 (written by the pass in metadata mode: source hash, receivers, per-local-core distro capability binding; no topology echo) |
 | | `merge.rs` | Merge manifests, validate topology/priority/type/core-id rules, match the distro pool graph, reject impossible links, allocate FIFOs in the shared pool budgets |
 | | `alloc.rs` | Emit the sealed system view (FIFO offsets, doorbell lines, hashes) |
 | | `system.rs` | `system.json` schema (`seal`, `canonical_topology_text`, `verify_topology_hash`) |
 | | `fifo.rs` | Canonical in-region FIFO image and sizing (shared with the runtime) |
 | | `hash.rs` | Deterministic FNV-1a 64-bit hash (source/layout/topology) |
 | `rticx-xbin-pass` | `lib.rs` | `XbinPass`: mode detection (`RTICX_XBIN_META_OUT` / `RTICX_XBIN_SYSTEM`), view load, pass orchestration |
-| | `parse.rs` | `#[app]` args (`external_cores`, `ipc_dispatchers`; reads `core_ids`), native `#[sw_task]` receiver extraction + `spawn_by` resolution, receiver injection/strip |
-| | `codegen.rs` | Sender stubs, receiver FIFO views, line dispatchers, doorbell routers, ring/read functions, init hooks, freshness anchors, `XbinPassBackend` |
+| | `parse.rs` | `#[app]` args (`device`, optional `cores`, `ipc_dispatchers`; rejects the moved `core_ids`/`external_cores` and injects the resolved topology), native `#[sw_task]` receiver extraction + `spawn_by` resolution, receiver injection/strip |
+| | `topology.rs` | Resolve an application's topology from the nearest `rticx.toml` (`AppTopology`, `resolve_app_topology`); shared with the distribution macros |
+| | `codegen.rs` | Sender stubs, receiver FIFO views, line dispatchers, doorbell routers, ring/read functions, init hooks, freshness anchors (`system.json`, `ipc_types.rs`, `rticx.toml`), `XbinPassBackend` |
 | | `priority.rs` | Build-phase priority-line validation over raw sw/async declarations + view receivers |
 | `rticx-xbin-rt` | `fifo.rs` | Atomic SPSC ring (`Fifo`), producer/consumer split, `view_at` placement |
 | | `lib.rs` | `Fifo` re-exports and the `Queue` re-export for ready queues; a pure data-structure runtime — the pool base and core id are baked by `XbinPassBackend`, and the `CrossCoreMessage` trait is injected by `rticx-xbin-pass`, not defined here |
@@ -283,24 +285,31 @@ schema = 1
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
 core_ids = [0]                  # local core index i -> global core id core_ids[i]
+external_cores = [1]            # foreign global core ids this application can see
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
+external_cores = [0]
 ```
 
 > **Since M6.9-T3:** the manifest declares **no** IPC memory. The distribution
 > owns the IPC pools and exposes a capability binding (reachable core pairs,
 > pool id, per-core base views, shared per-dual budget) that each application
 > records in its metadata manifest, so `rticx.toml` carries only
-> `[[application]]`/`core_ids`. A leftover `[ipc.regions]` table is a hard
-> `sync` error naming the removal.
+> `[[application]]`/`core_ids`/`external_cores`. A leftover `[ipc.regions]`
+> table is a hard `sync` error naming the removal.
 
 Notes:
 
 - `core_ids` maps local core indices to globally unique ids used in task attributes
-  and the JSON view.
+  and the JSON view. It is the single source of the mapping: `#[app]` no longer
+  accepts `core_ids` (§6.4).
+- `external_cores` (optional) lists the global core ids in other binaries this
+  application can see. It must be disjoint from its own `core_ids`; it selects
+  the global `spawn_by` namespace (§6.5) and is validated against the merged
+  topology by `sync`.
 - `target` may include an optional target triple; otherwise it comes from
   `.cargo/config.toml`.
 
@@ -362,15 +371,24 @@ const _: () = {
 The file carries no inner attributes and no `rticx-xbin-rt` dependency: the
 pass injects the trait and wraps the re-emitted items in the module.
 
-### 6.4 `#[app(...)]` additions
+### 6.4 `#[app(...)]` arguments
 
-- `core_ids = [g0, g1, ...]` — maps local core index `i` to the global core id
-  `core_ids[i]`; length must equal `cores` (or `len == 1` when `cores` defaults to
-  1). Defaults to the identity mapping `0..cores`, so `cores = N` alone keeps the
-  historical behavior. Parsed and validated natively by `rticx-core` (M5).
-- `external_cores = [g...]` — global ids of cores in other binaries visible to this
-  application. Consumed (stripped) by the multi-binary pass; `rticx-core` does not
-  know this key, so other distributions only see an unknown-key warning for it.
+Topology is **not** declared in `#[app]` any more (M7-T2): the application's
+`cores`, `core_ids` and `external_cores` come from the nearest `rticx.toml`
+(§6.1). The pass injects the resolved `cores`/`core_ids` into the argument token
+stream it hands to the core pass, so `rticx-core` needs no change.
+
+- `core_ids = [g0, g1, ...]` — **moved to `rticx.toml`**; a leftover key is a hard
+  error naming the migration. `rticx-core` still owns the key natively (M5) and
+  receives the value the pass injects.
+- `external_cores = [g...]` — **moved to `rticx.toml`**; a leftover key is a hard
+  error naming the migration. The pass reads it from the project file and consumes
+  it (it never reaches the core pass).
+- `cores = N` — optional. When present it must equal the resolved
+  `core_ids.len()`, otherwise a hard error explains that `cores` is derived from
+  `core_ids` in a multi-binary project and that only a single-binary multicore
+  application should declare it. With no governing `rticx.toml` the pass falls
+  back to the identity mapping `0..cores` (default 1).
 - `ipc_dispatchers = [IRQ...]` / `[[IRQ...], ...]` — pass-owned per-core list of
   interrupt lines used by the generated cross-binary **line dispatchers**; same
   shape as `dispatchers` (a single array when `cores = 1`, one inner array per core
@@ -380,9 +398,9 @@ pass injects the trait and wraps the re-emitted items in the module.
   entries; the list must be disjoint from `dispatchers`.
 
 Task `core` syntax stays local (`0..cores`). Natively `spawn_by` is a local index
-too; in an application that declares `external_cores`, the xbin pass resolves
-`spawn_by` in the global namespace instead (see §6.5). The generated runtime core
-checks and the multi-binary metadata translate through `core_ids`.
+too; in an application whose `[[application]]` entry declares `external_cores`, the
+xbin pass resolves `spawn_by` in the global namespace instead (see §6.5). The
+generated runtime core checks and the system view translate through `core_ids`.
 
 ### 6.5 Task syntax (native `#[sw_task]`)
 
@@ -423,7 +441,8 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
   attributes or traits; `#[cross_bin_task]`, `#[cross_bin_spawn]`, `CrossBinTask`
   and `CrossBinSpawn` were deleted outright with no compatibility shim.
 - `spawn_by` is the producer core. Natively it is a local index; in an application
-  that declares `external_cores`, the pass resolves it in the **global** namespace:
+  whose `[[application]]` entry declares `external_cores`, the pass resolves it in
+  the **global** namespace:
   - value ∈ `core_ids` → the task is spawned by one of the application's own cores
     (in-app cross-core task); the pass maps it back to the local index for sw-pass.
   - value ∈ `external_cores` (validated disjoint from `core_ids`) → the task is a
@@ -438,10 +457,11 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
   application from `spawn_by`.
 - Defaults: `priority = 1` (cross receivers require `priority >= 1`; native
   `#[sw_task]` defaults to 0), `capacity = 1` (minimum 1), `init = generated`.
-  Unknown, duplicate and multi-segment keys, malformed values, an out-of-range
-  receiver `core`, and `external_cores` overlapping the application's own
-  `core_ids` are hard errors. `shared = [...]` is passed through to the core pass,
-  which computes the SRP ceilings.
+  Unknown, duplicate and multi-segment keys, malformed values, and an
+  out-of-range receiver `core` are hard errors. `external_cores` overlapping the
+  application's own `core_ids` is rejected when `rticx.toml` is parsed (§6.1).
+  `shared = [...]` is passed through to the core pass, which computes the SRP
+  ceilings.
 - The receiver's `SpawnInput` must implement the pass-injected
   `CrossCoreMessage` (see §8); the pass emits a const assertion for it instead
   of relying on a trait bound in the generated `RticSwTask`.
@@ -469,12 +489,13 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
    - run `cargo clean -p <package>` (metadata env changes are invisible to cargo
      fingerprints), then `cargo check` with `RTICX_XBIN_META_OUT=<dir>`;
    - the extension helper (detected at the macro level) writes `<app>.xbin.json`:
-     package/target, source hash, local cores + core_ids, external cores, cross
-     receivers (native `#[sw_task]` items), their `SpawnInput` type paths,
-     priorities, capacities, and the per-local-core distro capability binding
-     (physical core id + IPC pools; M6.9-T2). There are no sender declarations:
-     the driver infers each task's single producer application from the
-     receivers' `spawn_by`;
+     package/target, source hash, cross receivers (native `#[sw_task]` items),
+     their `SpawnInput` type paths, priorities, capacities, and the per-local-core
+     distro capability binding (physical core id + IPC pools; M6.9-T2). The
+     manifest (schema 3) carries no topology echo: the application's
+     `core_ids`/`external_cores` are read from `rticx.toml` by the pass. There are
+     no sender declarations: the driver infers each task's single producer
+     application from the receivers' `spawn_by`;
    - the pass then terminates the compiler: the metadata `cargo check` is a
      vessel for the macro side effect, not a correctness gate. The application
      is never parsed, analyzed, code-generated or type-checked in phase 1 —
@@ -1122,11 +1143,18 @@ distro may use them internally, but no new framework mechanism).
   system-view task whose `spawner_core` is one of its cores; producer sources do
   not declare it.
 - **Local core index** — a core's position in an application's `0..cores`, as used
-  by task `core` syntax and `pacs` (and by `spawn_by` in applications that do not
-  declare `external_cores`).
+  by task `core` syntax and `pacs` (and by `spawn_by` in applications whose
+  `[[application]]` entry declares no `external_cores`).
 - **Global core id** — the project-wide id used by runtime core checks,
   `external_cores` and the system view: local index `i` maps to `core_ids[i]`
-  (identity by default).
+  (identity by default when no `rticx.toml` governs the application).
+- **`external_cores`** — the optional `[[application]]` key listing the global core
+  ids in other binaries this application can see (disjoint from its own
+  `core_ids`); it selects the global `spawn_by` namespace and is validated by
+  `sync` against the merged topology.
+- **Topology** — an application's `core_ids`/`external_cores`, read from the
+  nearest `rticx.toml`; the pass resolves it (`AppTopology` /
+  `resolve_app_topology`) and injects `cores`/`core_ids` into the core pass.
 - **Renode harness** — the dual-core STM32H7 platform, startup script and
   `run.sh` launcher under `experiments/multibinary/rticx-stm32h7/renode/` used
   as the M7 acceptance target (§11.1).
