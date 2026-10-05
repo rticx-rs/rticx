@@ -1,17 +1,6 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Architecture Reference
 
-**Status:** M0–M6.5 complete (skeleton, IDL, layout, runtime, codegen, fixtures,
-native `core_ids`, native `#[sw_task]` receivers, dispatcher pool + doorbell
-routing, multi-source, docs), **M6.9-T1..T9** (distro capability
-binding, manifest schema 2, `[ipc.regions]` removal, pool graph + shared
-budget, `system.json` schema 2, pool-aware codegen/runtime, linked-ELF
-verification, pool-panel visualization, docs and fixtures), **M7-T1**
-(in-tree STM32H7 M7+M4 distribution, Renode boot acceptance) and **M7-T2**
-(cross-binary M7↔M4 ping-pong under Renode) complete.
-Remaining work: **M7-T3** (extraction), see
-[§13](#13-remaining-milestones).
-**Last updated:** 2026-10-04 (M7-T2; Renode demo; phase 1 halts instead of
-shimming sender stubs).
+**Status:** complete and some parts of this plan are being obsoleted/updated/simplified so DO NOT rely on this as a source of truth just a general architectural direction and context.
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
