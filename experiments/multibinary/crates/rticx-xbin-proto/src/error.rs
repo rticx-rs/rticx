@@ -207,34 +207,6 @@ pub enum MergeError {
         found: String,
     },
 
-    /// `rticx.toml` and the manifest disagree on the local core count.
-    #[error(
-        "rticx.toml maps {mapped} core(s) for `{package}`, but its manifest declares \
-         `cores = {declared}`"
-    )]
-    CoreCountMismatch {
-        /// The package.
-        package: String,
-        /// Local core count recorded in the manifest.
-        declared: u32,
-        /// Number of `core_ids` entries in `rticx.toml`.
-        mapped: usize,
-    },
-
-    /// The manifest declares a `core_ids` mapping different from `rticx.toml`.
-    #[error(
-        "`{package}` declares `core_ids = {found:?}` in its `#[app]`, but rticx.toml maps \
-         `core_ids = {expected:?}`; rticx.toml is authoritative"
-    )]
-    CoreIdsMismatch {
-        /// The package.
-        package: String,
-        /// Mapping declared in `rticx.toml`.
-        expected: Vec<u32>,
-        /// Mapping recorded in the manifest.
-        found: Vec<u32>,
-    },
-
     /// A referenced global core id is not declared by any application.
     #[error(
         "`{package}` references global core id {core} in {context}, but no application declares it"
@@ -246,18 +218,6 @@ pub enum MergeError {
         core: u32,
         /// Where the id appeared, for example `` `external_cores` ``.
         context: String,
-    },
-
-    /// `external_cores` lists an id owned by the same application.
-    #[error(
-        "`external_cores` of `{package}` lists global core id {core}, which the application \
-         owns; external cores must belong to another binary"
-    )]
-    OwnExternalCore {
-        /// The package.
-        package: String,
-        /// The locally owned core id.
-        core: u32,
     },
 
     /// A receiver's local `core` index is outside `0..cores`.

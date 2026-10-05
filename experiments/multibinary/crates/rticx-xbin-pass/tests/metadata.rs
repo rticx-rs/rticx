@@ -15,7 +15,7 @@ use rticx_xbin_pass::{
     AppTopology, CachePolicy, IpcPool, META_OUT_ENV, PhysicalCore, PoolId, XbinPass,
     XbinPassBackend,
 };
-use rticx_xbin_proto::AppManifest;
+use rticx_xbin_proto::{AppManifest, MANIFEST_SCHEMA_VERSION};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -229,12 +229,9 @@ fn receiver_fixture_produces_the_expected_manifest() {
         "m4",
     );
 
-    assert_eq!(manifest.schema_version, 2);
+    assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
     assert_eq!(manifest.package, "app-m4");
     assert_eq!(manifest.target.name, "m4");
-    assert_eq!(manifest.cores, 1);
-    assert_eq!(manifest.core_ids.as_deref(), Some(&[1][..]));
-    assert_eq!(manifest.external_cores, &[0][..]);
     assert_eq!(manifest.types, vec!["EncryptReq".to_string()]);
 
     assert_eq!(manifest.receivers.len(), 1);
@@ -253,36 +250,18 @@ fn receiver_fixture_produces_the_expected_manifest() {
     );
 
     let json = manifest.to_json();
-    assert!(json.contains("\"schema_version\": 2"), "{json}");
+    assert!(
+        json.contains(&format!("\"schema_version\": {MANIFEST_SCHEMA_VERSION}")),
+        "{json}"
+    );
     assert!(json.contains("\"spawn_by\": 0"), "{json}");
     assert!(!json.contains("senders"), "no sender declarations: {json}");
+    assert!(
+        !json.contains("\"core_ids\"") && !json.contains("\"external_cores\""),
+        "schema 3 carries no topology echo: {json}"
+    );
     assert!(json.contains("\"kind\": \"bin\""), "{json}");
     assert!(json.contains("\"source_hash\": \"0x"), "{json}");
-}
-
-#[test]
-fn manifest_records_the_resolved_core_ids() {
-    // A declared mapping is recorded as written.
-    let (_dir, manifest) = run_manifest(
-        receiver_app(),
-        AppTopology::new(vec![4, 5], vec![0]),
-        quote!(device = mypac, ipc_dispatchers = [[IRQ0], []]),
-        "app-m4",
-        "m4",
-    );
-    assert_eq!(manifest.core_ids.as_deref(), Some(&[4, 5][..]));
-
-    // Without a project mapping, the manifest records the identity default
-    // the core pass resolves (M5-T3), so the driver always validates it
-    // against `rticx.toml`.
-    let (_dir, manifest) = run_manifest(
-        receiver_app(),
-        AppTopology::identity(1),
-        quote!(device = mypac),
-        "app-m4",
-        "m4",
-    );
-    assert_eq!(manifest.core_ids.as_deref(), Some(&[0][..]));
 }
 
 #[test]
@@ -298,7 +277,10 @@ fn producer_fixture_produces_an_empty_manifest() {
 
     assert!(manifest.receivers.is_empty());
     assert!(manifest.types.is_empty());
-    assert_eq!(manifest.external_cores, [1]);
+    assert!(
+        manifest.capabilities.is_empty(),
+        "no distribution backend is bound"
+    );
 }
 
 #[test]
@@ -580,7 +562,7 @@ fn manifest_records_the_identity_capability_default() {
         "m4",
     );
 
-    assert_eq!(manifest.schema_version, 2);
+    assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
     assert_eq!(
         manifest.capabilities.len(),
         2,

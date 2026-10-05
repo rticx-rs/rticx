@@ -10,9 +10,9 @@
 //! Validation rules (each with a focused [`MergeError`]):
 //!
 //! - **core-id consistency**: every `[[application]]` has exactly one
-//!   manifest; `cores` and `core_ids` agree with `rticx.toml` (which is
-//!   authoritative); every referenced external core exists and is owned by
-//!   another binary;
+//!   manifest; every referenced external core exists and is owned by another
+//!   binary (the `rticx.toml` parser already rejects duplicates and
+//!   self-references);
 //! - **receiver topology**: task names are unique, each receiver's local
 //!   `core` is in range, its single `spawn_by` names an existing producer in
 //!   another application, both applications list the peer's core in
@@ -246,22 +246,6 @@ pub fn merge_project(
                 found: manifest.target.name.clone(),
             });
         }
-        if manifest.cores as usize != application.core_ids().len() {
-            return Err(MergeError::CoreCountMismatch {
-                package: manifest.package.clone(),
-                declared: manifest.cores,
-                mapped: application.core_ids().len(),
-            });
-        }
-        if let Some(declared) = &manifest.core_ids
-            && declared.as_slice() != application.core_ids()
-        {
-            return Err(MergeError::CoreIdsMismatch {
-                package: manifest.package.clone(),
-                expected: application.core_ids().to_vec(),
-                found: declared.clone(),
-            });
-        }
     }
     for application in applications {
         if !manifest_of.contains_key(application.package()) {
@@ -296,20 +280,15 @@ pub fn merge_project(
     }
 
     // -- external cores ------------------------------------------------------
+    // Duplicates and self-references are rejected by the `rticx.toml` parser;
+    // only cross-application existence is left to check here.
     for application in applications {
-        let manifest = manifest_of[application.package()];
-        for &global in &manifest.external_cores {
-            let Some((app, _)) = owner.get(&global) else {
+        for &global in application.external_cores() {
+            if !owner.contains_key(&global) {
                 return Err(MergeError::UnknownCore {
                     package: application.package().to_string(),
                     core: global,
                     context: "`external_cores`".to_string(),
-                });
-            };
-            if *app == application.package() {
-                return Err(MergeError::OwnExternalCore {
-                    package: application.package().to_string(),
-                    core: global,
                 });
             }
         }
@@ -365,17 +344,19 @@ pub fn merge_project(
                     core: decl.spawn_by,
                 });
             }
-            if !manifest.external_cores.contains(&decl.spawn_by) {
+            if !application.external_cores().contains(&decl.spawn_by) {
                 return Err(MergeError::SpawnerCoreNotVisible {
                     package: manifest.package.clone(),
                     task: decl.name.clone(),
                     core: decl.spawn_by,
                 });
             }
-            let producer = manifest_of[producer_app];
-            if !producer.external_cores.contains(&core) {
+            let producer = config
+                .application(producer_app)
+                .expect("the producer application is declared in rticx.toml");
+            if !producer.external_cores().contains(&core) {
                 return Err(MergeError::TargetCoreNotVisible {
-                    package: producer.package.clone(),
+                    package: producer.package().to_string(),
                     task: decl.name.clone(),
                     core,
                 });
@@ -539,7 +520,7 @@ pub fn merge_project(
                 target: manifest.target.clone(),
                 source_hash: manifest.source_hash,
                 core_ids: application.core_ids().to_vec(),
-                external_cores: manifest.external_cores.clone(),
+                external_cores: application.external_cores().to_vec(),
             }
         })
         .collect();

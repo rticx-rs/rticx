@@ -668,12 +668,6 @@ fn build_manifest(
         package: package.to_string(),
         target: TargetRef::bin(target),
         source_hash,
-        cores: extensions.cores,
-        // The pass records the mapping the core pass resolves (the identity
-        // `0..cores` when the application does not declare `core_ids`), so
-        // the driver always validates it against `rticx.toml` (M5-T3).
-        core_ids: Some(extensions.core_ids),
-        external_cores: extensions.external_cores,
         types,
         receivers: decls.receivers,
         capabilities,

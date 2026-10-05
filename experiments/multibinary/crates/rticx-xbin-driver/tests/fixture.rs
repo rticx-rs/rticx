@@ -49,8 +49,6 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
 
     let producer = outcome.manifest("m7").expect("m7 manifest");
     assert_eq!(producer.package, "app-m7");
-    assert_eq!(producer.core_ids.as_deref(), Some(&[0][..]));
-    assert_eq!(producer.external_cores, [1]);
     assert!(
         producer.receivers.is_empty(),
         "the producer declares nothing (M5.5)"
@@ -58,8 +56,6 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
 
     let receiver = outcome.manifest("m4").expect("m4 manifest");
     assert_eq!(receiver.package, "app-m4");
-    assert_eq!(receiver.core_ids.as_deref(), Some(&[1][..]));
-    assert_eq!(receiver.external_cores, [0]);
     assert_eq!(receiver.receivers.len(), 1);
     let task = &receiver.receivers[0];
     assert_eq!(task.name, "EncryptTask");
@@ -112,6 +108,22 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
         .merged
         .as_ref()
         .expect("the fixture manifests merge and validate");
+    assert_eq!(
+        merged
+            .apps()
+            .iter()
+            .map(|app| (
+                app.package.as_str(),
+                app.core_ids.as_slice(),
+                app.external_cores.as_slice()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("app-m7", &[0][..], &[1][..]),
+            ("app-m4", &[1][..], &[0][..]),
+        ],
+        "the merged view carries the topology from rticx.toml"
+    );
     assert_eq!(merged.tasks().len(), 1);
     let task = &merged.tasks()[0];
     assert_eq!(task.id(), 1);

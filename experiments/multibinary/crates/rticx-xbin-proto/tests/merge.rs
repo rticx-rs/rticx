@@ -11,9 +11,9 @@
 //! manifest records, not from `rticx.toml`.
 
 use rticx_xbin_proto::{
-    AppManifest, CoreCapability, FIFO_HEADER, Hash64, IpcTypes, MergeError, PoolCachePolicy,
-    PoolDecl, ProjectConfig, ReceiverDecl, TargetRef, TypeKind, merge_project, parse_idl_str,
-    parse_project_str,
+    AppManifest, CoreCapability, FIFO_HEADER, Hash64, IpcTypes, MANIFEST_SCHEMA_VERSION,
+    MergeError, PoolCachePolicy, PoolDecl, ProjectConfig, ReceiverDecl, TargetRef, TypeKind,
+    merge_project, parse_idl_str, parse_project_str,
 };
 
 const IDL: &str = r#"
@@ -37,15 +37,18 @@ schema = 1
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
 core_ids = [0]
+external_cores = [1]
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
+external_cores = [0]
 "#;
 
-/// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2).
-const THREE_APPS: &str = r#"
+/// The two-application fixture with the two applications unable to see each
+/// other's core: a cross receiver is then not visible to its producer.
+const TWO_APPS_HIDDEN: &str = r#"
 schema = 1
 
 [[application]]
@@ -57,11 +60,47 @@ core_ids = [0]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
+"#;
+
+/// The two-application fixture where the receiver sees its producer, but the
+/// producer does not list the receiver's core.
+const TWO_APPS_PRODUCER_BLIND: &str = r#"
+schema = 1
+
+[[application]]
+package = "app-m7"
+target = { kind = "bin", name = "m7" }
+core_ids = [0]
+
+[[application]]
+package = "app-m4"
+target = { kind = "bin", name = "m4" }
+core_ids = [1]
+external_cores = [0]
+"#;
+
+/// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2), each able to
+/// see the other two.
+const THREE_APPS: &str = r#"
+schema = 1
+
+[[application]]
+package = "app-m7"
+target = { kind = "bin", name = "m7" }
+core_ids = [0]
+external_cores = [1, 2]
+
+[[application]]
+package = "app-m4"
+target = { kind = "bin", name = "m4" }
+core_ids = [1]
+external_cores = [0, 2]
 
 [[application]]
 package = "app-m5"
 target = { kind = "bin", name = "m5" }
 core_ids = [2]
+external_cores = [0, 1]
 "#;
 
 /// The mock fixture's pool bases (see `xbin-mock-distro::fixture_pools`).
@@ -79,15 +118,12 @@ fn idl(source: &str) -> IpcTypes {
     parse_idl_str(source).expect("valid IDL")
 }
 
-fn manifest(package: &str, target: &str, core_ids: &[u32], external_cores: &[u32]) -> AppManifest {
+fn manifest(package: &str, target: &str) -> AppManifest {
     AppManifest {
-        schema_version: 2,
+        schema_version: MANIFEST_SCHEMA_VERSION,
         package: package.to_string(),
         target: TargetRef::bin(target),
         source_hash: Hash64::of(package.as_bytes()),
-        cores: core_ids.len() as u32,
-        core_ids: Some(core_ids.to_vec()),
-        external_cores: external_cores.to_vec(),
         types: Vec::new(),
         receivers: Vec::new(),
         capabilities: Vec::new(),
@@ -141,7 +177,7 @@ fn m7_manifest() -> AppManifest {
 /// `app-m7` with the `p01` dual carved to `budget` bytes. Both endpoints must
 /// report the same budget, so pair this with [`m4_with_budget`].
 fn m7_with_budget(budget: u32) -> AppManifest {
-    let mut manifest = manifest("app-m7", "m7", &[0], &[1]);
+    let mut manifest = manifest("app-m7", "m7");
     manifest.capabilities = vec![capability(
         0,
         0,
@@ -160,7 +196,7 @@ fn m4_manifest() -> AppManifest {
 
 /// `app-m4` with the `p01` dual carved to `budget` bytes.
 fn m4_with_budget(budget: u32) -> AppManifest {
-    let mut manifest = manifest("app-m4", "m4", &[1], &[0]);
+    let mut manifest = manifest("app-m4", "m4");
     manifest.types = vec!["ipc_types::EncryptReq".to_string()];
     manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, 0, "ipc_types::EncryptReq")];
     manifest.capabilities = vec![capability(
@@ -176,7 +212,7 @@ fn m4_with_budget(budget: u32) -> AppManifest {
 
 /// `app-m5`: no declarations of its own (global core 2, physical 2).
 fn m5_manifest() -> AppManifest {
-    let mut manifest = manifest("app-m5", "m5", &[2], &[]);
+    let mut manifest = manifest("app-m5", "m5");
     manifest.capabilities = vec![capability(
         0,
         2,
@@ -328,7 +364,7 @@ fn a_project_without_a_capability_binding_allocates_unbounded() {
     // its manifests carry no capability table: the merge still allocates the
     // FIFOs deterministically and emits no pool (M6.9-T4; T9 supplies the mock
     // capability table to the fixtures).
-    let mut m7 = manifest("app-m7", "m7", &[0], &[1]);
+    let mut m7 = manifest("app-m7", "m7");
     m7.capabilities = Vec::new();
     let mut m4 = m4_manifest();
     m4.capabilities = Vec::new();
@@ -359,7 +395,7 @@ fn rejects_missing_manifest() {
 
 #[test]
 fn rejects_undeclared_application() {
-    let extra = manifest("app-extra", "extra", &[9], &[]);
+    let extra = manifest("app-extra", "extra");
     let error = error(TWO_APPS, &[m7_manifest(), m4_manifest(), extra]);
     assert!(
         matches!(
@@ -398,56 +434,20 @@ fn rejects_target_mismatch() {
 }
 
 #[test]
-fn rejects_core_count_mismatch() {
-    let mut m7 = m7_manifest();
-    m7.cores = 2;
-    m7.core_ids = None;
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::CoreCountMismatch { package, declared: 2, mapped: 1 } if package == "app-m7"
-        ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_core_ids_mismatch() {
-    let mut m7 = m7_manifest();
-    m7.core_ids = Some(vec![7]);
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(
-            &error,
-            MergeError::CoreIdsMismatch { package, expected, found }
-                if package == "app-m7" && expected == &[0] && found == &[7]
-        ),
-        "{error}"
-    );
-}
-
-#[test]
 fn rejects_unknown_external_core() {
-    let mut m7 = m7_manifest();
-    m7.external_cores = vec![9];
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
+    // `external_cores` is authoritative in `rticx.toml`; an id no application
+    // owns is rejected by the merge.
+    let project = "schema = 1\n\n\
+         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
+         core_ids = [0]\nexternal_cores = [9]\n\n\
+         [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
+         core_ids = [1]\nexternal_cores = [0]\n";
+    let error = error(project, &[m7_manifest(), m4_manifest()]);
     assert!(
         matches!(
             &error,
             MergeError::UnknownCore { core: 9, context, .. } if context == "`external_cores`"
         ),
-        "{error}"
-    );
-}
-
-#[test]
-fn rejects_own_external_core() {
-    let mut m7 = m7_manifest();
-    m7.external_cores = vec![0];
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
-    assert!(
-        matches!(&error, MergeError::OwnExternalCore { core: 0, .. }),
         "{error}"
     );
 }
@@ -512,9 +512,8 @@ fn rejects_duplicate_receiver() {
 
 #[test]
 fn rejects_spawner_core_not_visible_to_the_receiver() {
-    let mut m4 = m4_manifest();
-    m4.external_cores = Vec::new();
-    let error = error(TWO_APPS, &[m7_manifest(), m4]);
+    // `app-m4` does not list its producer core 0 in `rticx.toml`.
+    let error = error(TWO_APPS_HIDDEN, &[m7_manifest(), m4_manifest()]);
     assert!(
         matches!(
             &error,
@@ -526,9 +525,8 @@ fn rejects_spawner_core_not_visible_to_the_receiver() {
 
 #[test]
 fn rejects_receiver_core_not_visible_to_the_producer() {
-    let mut m7 = m7_manifest();
-    m7.external_cores = Vec::new();
-    let error = error(TWO_APPS, &[m7, m4_manifest()]);
+    // `app-m7` does not list the receiver core 1 in `rticx.toml`.
+    let error = error(TWO_APPS_PRODUCER_BLIND, &[m7_manifest(), m4_manifest()]);
     assert!(
         matches!(
             &error,
@@ -561,15 +559,12 @@ fn rejects_unknown_receiver_input_type() {
 #[test]
 fn rejects_priority_conflict_between_sources() {
     let mut m4 = m4_manifest();
-    m4.external_cores = vec![0, 2];
     m4.receivers = vec![
         receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq"),
         receiver("Beta", 3, 1, 0, 2, "ipc_types::EncryptReq"),
     ];
-    let mut m5 = m5_manifest();
-    m5.external_cores = vec![1];
 
-    let error = error(THREE_APPS, &[m7_manifest(), m4, m5]);
+    let error = error(THREE_APPS, &[m7_manifest(), m4, m5_manifest()]);
     assert!(
         matches!(
             &error,
@@ -602,17 +597,14 @@ fn allows_same_priority_from_the_same_source() {
 
 #[test]
 fn allows_the_same_priority_on_different_targets() {
-    let mut m7 = m7_manifest();
-    m7.external_cores = vec![1, 2];
-
     let mut m4 = m4_manifest();
     m4.receivers = vec![receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq")];
 
     let mut m5 = m5_manifest();
-    m5.external_cores = vec![0];
     m5.receivers = vec![receiver("Beta", 3, 1, 0, 0, "ipc_types::EncryptReq")];
 
-    let merged = merge(THREE_APPS, &[m7, m4, m5]).expect("different targets do not conflict");
+    let merged =
+        merge(THREE_APPS, &[m7_manifest(), m4, m5]).expect("different targets do not conflict");
     assert_eq!(merged.tasks().len(), 2);
 }
 
@@ -702,7 +694,7 @@ fn rejects_a_used_direction_without_a_pool_path() {
 #[test]
 fn rejects_overlapping_pool_views() {
     // Core 0 sees two pools at overlapping addresses.
-    let mut m7 = manifest("app-m7", "m7", &[0], &[]);
+    let mut m7 = manifest("app-m7", "m7");
     m7.capabilities = vec![capability(
         0,
         0,
@@ -711,9 +703,9 @@ fn rejects_overlapping_pool_views() {
             pool("p02", 2, 0x3000_0800, BUDGET),
         ],
     )];
-    let mut m4 = manifest("app-m4", "m4", &[1], &[]);
+    let mut m4 = manifest("app-m4", "m4");
     m4.capabilities = vec![capability(0, 1, vec![pool("p01", 0, 0x3000_0000, BUDGET)])];
-    let mut m5 = manifest("app-m5", "m5", &[2], &[]);
+    let mut m5 = manifest("app-m5", "m5");
     m5.capabilities = vec![capability(0, 2, vec![pool("p02", 0, 0x3000_0800, BUDGET)])];
 
     let error = error(THREE_APPS, &[m7, m4, m5]);
@@ -737,7 +729,7 @@ fn rejects_overlapping_pool_views() {
 #[test]
 fn allows_adjacent_pool_views() {
     // Adjacent, non-overlapping views of core 0 are fine.
-    let mut m7 = manifest("app-m7", "m7", &[0], &[]);
+    let mut m7 = manifest("app-m7", "m7");
     m7.capabilities = vec![capability(
         0,
         0,
@@ -746,9 +738,9 @@ fn allows_adjacent_pool_views() {
             pool("p02", 2, 0x3000_1000, BUDGET),
         ],
     )];
-    let mut m4 = manifest("app-m4", "m4", &[1], &[]);
+    let mut m4 = manifest("app-m4", "m4");
     m4.capabilities = vec![capability(0, 1, vec![pool("p01", 0, 0x3000_0000, BUDGET)])];
-    let mut m5 = manifest("app-m5", "m5", &[2], &[]);
+    let mut m5 = manifest("app-m5", "m5");
     m5.capabilities = vec![capability(0, 2, vec![pool("p02", 0, 0x3000_1000, BUDGET)])];
 
     let merged = merge(THREE_APPS, &[m7, m4, m5]).expect("adjacent views do not overlap");

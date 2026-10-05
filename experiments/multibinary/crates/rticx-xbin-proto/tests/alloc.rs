@@ -7,9 +7,9 @@
 //! doorbell line assignment and byte-identical output across runs.
 
 use rticx_xbin_proto::{
-    AppManifest, CoreCapability, DoorbellEntry, FifoEntry, Hash64, IpcTypes, PoolCachePolicy,
-    PoolDecl, ProjectConfig, ReceiverDecl, SystemView, TargetRef, layout_hash, merge_project,
-    parse_idl_str, parse_project_str, system_view,
+    AppManifest, CoreCapability, DoorbellEntry, FifoEntry, Hash64, IpcTypes,
+    MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl, ProjectConfig, ReceiverDecl, SystemView,
+    TargetRef, layout_hash, merge_project, parse_idl_str, parse_project_str, system_view,
 };
 
 const IDL: &str = r#"
@@ -33,14 +33,17 @@ schema = 1
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
 core_ids = [0]
+external_cores = [1]
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
+external_cores = [0]
 "#;
 
-/// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2).
+/// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2), each able to
+/// see the other two.
 const THREE_APPS: &str = r#"
 schema = 1
 
@@ -48,16 +51,19 @@ schema = 1
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
 core_ids = [0]
+external_cores = [1, 2]
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
 core_ids = [1]
+external_cores = [0, 2]
 
 [[application]]
 package = "app-m5"
 target = { kind = "bin", name = "m5" }
 core_ids = [2]
+external_cores = [0, 1]
 "#;
 
 /// The mock fixture's pool bases (see `xbin-mock-distro::fixture_pools`).
@@ -74,15 +80,12 @@ fn idl(source: &str) -> IpcTypes {
     parse_idl_str(source).expect("valid IDL")
 }
 
-fn manifest(package: &str, target: &str, core_ids: &[u32], external_cores: &[u32]) -> AppManifest {
+fn manifest(package: &str, target: &str) -> AppManifest {
     AppManifest {
-        schema_version: 2,
+        schema_version: MANIFEST_SCHEMA_VERSION,
         package: package.to_string(),
         target: TargetRef::bin(target),
         source_hash: Hash64::of(package.as_bytes()),
-        cores: core_ids.len() as u32,
-        core_ids: Some(core_ids.to_vec()),
-        external_cores: external_cores.to_vec(),
         types: Vec::new(),
         receivers: Vec::new(),
         capabilities: Vec::new(),
@@ -128,7 +131,7 @@ fn capability(local_core: u32, physical_core: u32, pools: Vec<PoolDecl>) -> Core
 
 /// `app-m7`: the producer of global core 0 (physical 0), no declarations.
 fn m7_manifest() -> AppManifest {
-    let mut manifest = manifest("app-m7", "m7", &[0], &[1]);
+    let mut manifest = manifest("app-m7", "m7");
     manifest.capabilities = vec![capability(
         0,
         0,
@@ -139,7 +142,7 @@ fn m7_manifest() -> AppManifest {
 
 /// `app-m4`: executes `EncryptTask` for global core 0 (physical 1).
 fn m4_manifest() -> AppManifest {
-    let mut manifest = manifest("app-m4", "m4", &[1], &[0]);
+    let mut manifest = manifest("app-m4", "m4");
     manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, 0, "ipc_types::EncryptReq")];
     manifest.capabilities = vec![capability(
         0,
@@ -151,7 +154,7 @@ fn m4_manifest() -> AppManifest {
 
 /// `app-m5`: no declarations of its own (global core 2, physical 2).
 fn m5_manifest() -> AppManifest {
-    let mut manifest = manifest("app-m5", "m5", &[2], &[1]);
+    let mut manifest = manifest("app-m5", "m5");
     manifest.capabilities = vec![capability(
         0,
         2,
@@ -350,7 +353,6 @@ fn offsets_are_shared_within_a_pool() {
 fn doorbell_lines_are_unique_per_target_and_shared_within_a_line() {
     let m5 = m5_manifest();
     let mut m4 = m4_manifest();
-    m4.external_cores = vec![0, 2];
     m4.receivers = vec![
         receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq"),
         receiver("Beta", 3, 1, 0, 0, "ipc_types::EncryptReq"),

@@ -1,7 +1,7 @@
 //! Per-application metadata manifest, `<target>.xbin.json`.
 //!
 //! The compilation pass writes one manifest per application during phase 1.
-//! The driver then merges all manifests, validates the cross-application 
+//! The driver then merges all manifests, validates the cross-application
 //! topology and emits the single `system.json` system view.
 //!
 //! A manifest records:
@@ -9,9 +9,6 @@
 //! - package and Cargo target (`<target>.xbin.json` is named after the target);
 //! - a [`Hash64`] of the application source as the pass saw it, used by the
 //!   phase-2 freshness check;
-//! - the local core count plus the local -> global `core_ids` mapping (the
-//!   identity `0..cores` when the application does not declare the key) and
-//!   the `external_cores` visible to this application;
 //! - the native `#[sw_task]` cross-binary receivers declared by this
 //!   application, including the full `SpawnInput` paths. There are no
 //!   sender declarations: the driver infers each task's single producer
@@ -34,7 +31,11 @@ use crate::hash::Hash64;
 use crate::project::TargetKind;
 
 /// Schema version of `<target>.xbin.json` understood by this crate.
-pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
+///
+/// Schema 3 removed the topology echo (`cores`, `core_ids`, `external_cores`):
+/// `rticx.toml` is the single topology source and the driver reads it directly
+/// (M7-T2). The manifest only reports source-discovered facts.
+pub const MANIFEST_SCHEMA_VERSION: u32 = 3;
 
 /// File-name suffix of an application manifest.
 pub const MANIFEST_FILE_SUFFIX: &str = ".xbin.json";
@@ -52,21 +53,6 @@ pub struct AppManifest {
     /// Hash of the application source as the pass saw it (arguments plus the
     /// annotated module, *before* pass-owned attributes are stripped).
     pub source_hash: Hash64,
-    /// Number of local cores (`#[app(cores = N)]`, default 1).
-    pub cores: u32,
-    /// Local core index -> global core id mapping as resolved from
-    /// `#[app(core_ids = [..])]`; the identity `0..cores` when the
-    /// application does not declare the key (M5).
-    ///
-    /// The pass always writes the resolved mapping; the field stays optional
-    /// for hand-written manifests and views, which skip the `rticx.toml`
-    /// consistency check when it is absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub core_ids: Option<Vec<u32>>,
-    /// `#[app(external_cores = [..])]`: global ids of cores in other binaries
-    /// visible to this application.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub external_cores: Vec<u32>,
     /// Full paths of every IDL type referenced by the declarations below,
     /// sorted and deduplicated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

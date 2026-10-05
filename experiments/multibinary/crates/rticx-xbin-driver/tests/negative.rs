@@ -5,14 +5,15 @@
 //!
 //! - **build-phase freshness** over a copy of the checked-in `crates/mock/fixtures/e2e`
 //!   project: a plain `cargo build` without a synced view (missing sync), a
-//!   source changed after `sync` (source hash mismatch) and a hand-edited
-//!   `system.json` (topology hash mismatch). These run the real proc-macro
+//!   source changed after `sync` (source hash mismatch), a hand-edited
+//!   `system.json` (topology hash mismatch) and an edited `rticx.toml`
+//!   (resolved topology vs. the synced view). These run the real proc-macro
 //!   path (project discovery and environment-based mode selection), not the
 //!   pass in isolation;
 //! - **merge/validation** through `cargo xbin sync` over generated metadata
-//!   projects: a priority line shared by two source cores, an input type
-//!   missing from the IDL and a leftover `[ipc.regions]` table (removed in
-//!   M6.9-T3).
+//!   projects: the moved `#[app(core_ids)]`/`#[app(external_cores)]` keys, a
+//!   priority line shared by two source cores, an input type missing from the
+//!   IDL and a leftover `[ipc.regions]` table (removed in M6.9-T3).
 //!
 //! Every assertion checks the exact documented message, so a wording change
 //! in the user guide or the error enum fails here.
@@ -199,6 +200,29 @@ fn plain_build_rejects_a_missing_or_stale_sync() {
     assert!(stderr.contains("run `cargo xbin sync`"), "{stderr}");
 }
 
+#[test]
+fn plain_build_rejects_a_topology_edited_after_sync() {
+    let dir = fixture_copy();
+    let root = dir.path().join("e2e");
+    sync(&root).expect("the copied fixture syncs");
+
+    // `rticx.toml` is the single topology source: editing it without a new
+    // sync leaves the resolved mapping out of step with the synced view.
+    let config_path = root.join("rticx.toml");
+    let config = std::fs::read_to_string(&config_path).expect("rticx.toml");
+    let edited = config.replacen("core_ids = [0]", "core_ids = [5]", 1);
+    assert_ne!(edited, config, "the fixture maps app-m7 to global core 0");
+    std::fs::write(&config_path, edited).expect("edit rticx.toml");
+
+    let output = cargo_build(&root, "app-m7", "m7");
+    assert!(
+        !output.status.success(),
+        "an edited rticx.toml must fail a plain build"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("run `cargo xbin sync`"), "{stderr}");
+}
+
 // ---------------------------------------------------------------------------
 // Merge/validation negatives through `cargo xbin sync`
 // ---------------------------------------------------------------------------
@@ -340,6 +364,43 @@ fn write_metadata_project(root: &Path, config: &str, idl: &str, apps: &[(&str, &
 
     std::fs::write(root.join("rticx.toml"), config).expect("rticx.toml");
     std::fs::write(root.join("ipc-types.toml"), idl).expect("ipc-types.toml");
+}
+
+/// `rticx.toml` for a single metadata application.
+const SINGLE_APP: &str = "schema = 1\n\n\
+     [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
+     core_ids = [0]\n";
+
+#[test]
+fn sync_rejects_the_moved_topology_arguments() {
+    // Since M7-T2 the topology lives in `rticx.toml`; the old `#[app]` keys
+    // are hard errors that name the migration.
+    for (arg, expected) in [
+        ("core_ids = [0]", "`core_ids` moved to `rticx.toml`"),
+        (
+            "external_cores = [1]",
+            "`external_cores` moved to `rticx.toml`",
+        ),
+    ] {
+        let dir = tempdir().expect("tempdir");
+        let source = format!(
+            "use metadata_macro::app;\n\n#[app(device = fixture, {arg})]\nmod app {{}}\n\nfn main() {{}}\n"
+        );
+        write_metadata_project(
+            dir.path(),
+            SINGLE_APP,
+            ENCRYPT_IDL,
+            &[("app-m7", "m7", source.as_str())],
+        );
+
+        let error = sync(dir.path())
+            .expect_err("a moved topology argument must be rejected at sync")
+            .to_string();
+        assert!(
+            error.contains(expected),
+            "expected `{expected}` in `{error}`"
+        );
+    }
 }
 
 #[test]

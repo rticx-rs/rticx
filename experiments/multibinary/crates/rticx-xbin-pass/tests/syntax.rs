@@ -163,11 +163,6 @@ fn identity_default_keeps_the_native_local_spawn_by() {
     };
     let args = quote!(device = mypac);
     let (_dir, manifest) = manifest_for(AppTopology::identity(2), args.clone(), app_mod.clone());
-    assert_eq!(
-        manifest.core_ids.as_deref(),
-        Some(&[0, 1][..]),
-        "the identity mapping is recorded"
-    );
     assert!(manifest.receivers.is_empty(), "no cross receiver");
 
     let (_, out) = run(AppTopology::identity(2), args, app_mod).expect("pass succeeds");
