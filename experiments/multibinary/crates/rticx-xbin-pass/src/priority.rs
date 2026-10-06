@@ -145,7 +145,7 @@ mod tests {
         AppEntry {
             package: "app".to_string(),
             target: TargetRef::bin("app"),
-            source_hash: Hash64::ZERO,
+            interface_hash: Hash64::ZERO,
             core_ids: core_ids.to_vec(),
             external_cores: Vec::new(),
         }

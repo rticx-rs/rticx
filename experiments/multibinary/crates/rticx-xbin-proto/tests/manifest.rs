@@ -1,7 +1,8 @@
 //! `<target>.xbin.json` schema tests (M6.9-T2).
 //!
-//! Schema 3 drops the topology echo (`cores`/`core_ids`/`external_cores`):
-//! `rticx.toml` is the single topology source. The schema keeps the distro
+//! Schema 3 dropped the topology echo (`cores`/`core_ids`/`external_cores`):
+//! `rticx.toml` is the single topology source. Schema 4 renamed the freshness
+//! hash to `interface_hash`. The schema keeps the distro
 //! capability binding ([`CoreCapability`]): one entry per local core with its
 //! physical core id and the IPC pools that physical core can reach. These
 //! tests pin the JSON shape, the deterministic serialization (empty
@@ -17,7 +18,7 @@ fn manifest() -> AppManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
         package: "app-m4".to_string(),
         target: TargetRef::bin("m4"),
-        source_hash: Hash64::of(b"app-m4"),
+        interface_hash: Hash64::of(b"app-m4"),
         types: Vec::new(),
         receivers: Vec::new(),
         capabilities: vec![
@@ -47,8 +48,8 @@ fn capabilities_round_trip() {
     let manifest = manifest();
     let json = manifest.to_json();
 
-    assert_eq!(MANIFEST_SCHEMA_VERSION, 3);
-    assert!(json.contains("\"schema_version\": 3"), "{json}");
+    assert_eq!(MANIFEST_SCHEMA_VERSION, 4);
+    assert!(json.contains("\"schema_version\": 4"), "{json}");
     assert!(
         !json.contains("\"core_ids\"")
             && !json.contains("\"external_cores\"")
@@ -64,6 +65,19 @@ fn capabilities_round_trip() {
     );
 
     assert_eq!(AppManifest::from_json(&json).expect("round trip"), manifest);
+}
+
+#[test]
+fn schema_four_names_the_freshness_hash_interface_hash() {
+    assert_eq!(MANIFEST_SCHEMA_VERSION, 4);
+
+    let json = manifest().to_json();
+    assert!(json.contains("\"schema_version\": 4"), "{json}");
+    assert!(json.contains("\"interface_hash\": \"0x"), "{json}");
+    assert!(
+        !json.contains("source_hash"),
+        "the freshness hash is the interface hash: {json}"
+    );
 }
 
 #[test]
@@ -86,6 +100,6 @@ fn schema_version_one_is_rejected() {
     let mut manifest = manifest();
     manifest.schema_version = 1;
 
-    let error = AppManifest::from_json(&manifest.to_json()).expect_err("v1 is not schema 3");
+    let error = AppManifest::from_json(&manifest.to_json()).expect_err("v1 is not schema 4");
     assert!(error.to_string().contains("schema version 1"), "{error}");
 }

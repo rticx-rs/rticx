@@ -1395,12 +1395,15 @@ pub(crate) fn check_application<'a>(
 /// The pass runs this check after the declaration checks: a source change that
 /// also breaks a task declaration is reported by the more specific mismatch
 /// first.
-pub(crate) fn check_source_hash(application: &AppEntry, source_hash: Hash64) -> syn::Result<()> {
-    if application.source_hash != source_hash {
+pub(crate) fn check_interface_hash(
+    application: &AppEntry,
+    interface_hash: Hash64,
+) -> syn::Result<()> {
+    if application.interface_hash != interface_hash {
         return Err(error(format!(
             "application `{}` changed since the last `cargo xbin sync` (the system view records \
              source hash {}, the source hashes to {}); run `cargo xbin sync`",
-            application.package, application.source_hash, source_hash
+            application.package, application.interface_hash, interface_hash
         )));
     }
     Ok(())
@@ -1418,7 +1421,7 @@ pub(crate) fn check_source_hash(application: &AppEntry, source_hash: Hash64) -> 
 ///   tracks topology edits through dep-info (M7-T2).
 ///
 /// The anchors complement the hard errors of [`crate::load_system`] (stale
-/// `topology_hash`) and [`check_source_hash`] (source changed after `sync`).
+/// `topology_hash`) and [`check_interface_hash`] (source changed after `sync`).
 pub(crate) fn generate_freshness_items(
     view: &SystemView,
     path: &Path,

@@ -77,7 +77,7 @@ impl Drop for EnvGuard {
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 2,
+  "schema_version": 3,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -85,14 +85,14 @@ const SYSTEM_JSON: &str = r#"{
     {
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
-      "source_hash": "0x26a74c0569235dd7",
+      "interface_hash": "0x26a74c0569235dd7",
       "core_ids": [0],
       "external_cores": [1]
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
-      "source_hash": "0x70b1fa36c7b61323",
+      "interface_hash": "0x70b1fa36c7b61323",
       "core_ids": [1],
       "external_cores": [0]
     }
@@ -279,7 +279,10 @@ fn write_system_without_ipc_types(contents: &str) -> (tempfile::TempDir, PathBuf
 
 /// Records the source hash of every `(package, args, module)` patch in the
 /// fixture view and returns the resealed JSON.
-fn with_source_hashes(contents: &str, patches: &[(&str, &TokenStream, &syn::ItemMod)]) -> String {
+fn with_interface_hashes(
+    contents: &str,
+    patches: &[(&str, &TokenStream, &syn::ItemMod)],
+) -> String {
     let mut view = SystemView::from_json(contents).expect("fixture JSON");
     for (package, args, app_mod) in patches {
         let application = view
@@ -287,7 +290,7 @@ fn with_source_hashes(contents: &str, patches: &[(&str, &TokenStream, &syn::Item
             .iter_mut()
             .find(|application| application.package == *package)
             .unwrap_or_else(|| panic!("fixture has no application `{package}`"));
-        application.source_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
+        application.interface_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
     }
     view.seal();
     view.to_json()
@@ -296,7 +299,7 @@ fn with_source_hashes(contents: &str, patches: &[(&str, &TokenStream, &syn::Item
 /// Writes a fixture view whose producer application records the hash of
 /// `(sender_args, sender_app)`, as `cargo xbin sync` would (M3-T4).
 fn write_sender_system() -> (tempfile::TempDir, PathBuf) {
-    write_system(&with_source_hashes(
+    write_system(&with_interface_hashes(
         SYSTEM_JSON,
         &[("app-m7", &sender_args(), &sender_app())],
     ))
@@ -304,7 +307,7 @@ fn write_sender_system() -> (tempfile::TempDir, PathBuf) {
 
 /// Like [`write_sender_system`] for the receiver fixture application.
 fn write_receiver_system() -> (tempfile::TempDir, PathBuf) {
-    write_system(&with_source_hashes(
+    write_system(&with_interface_hashes(
         SYSTEM_JSON,
         &[("app-m4", &receiver_args(), &receiver_app())],
     ))
@@ -312,7 +315,7 @@ fn write_receiver_system() -> (tempfile::TempDir, PathBuf) {
 
 /// Like [`write_sender_system`] for both fixture applications.
 fn write_both_system() -> (tempfile::TempDir, PathBuf) {
-    write_system(&with_source_hashes(
+    write_system(&with_interface_hashes(
         SYSTEM_JSON,
         &[
             ("app-m7", &sender_args(), &sender_app()),
@@ -325,7 +328,7 @@ fn write_both_system() -> (tempfile::TempDir, PathBuf) {
 /// source hashes.
 ///
 /// Used by tests whose error is raised before the freshness checks; the
-/// hard-coded `source_hash` values of [`SYSTEM_JSON`] then never match, which
+/// hard-coded `interface_hash` values of [`SYSTEM_JSON`] then never match, which
 /// is irrelevant for those tests.
 fn write_base_system() -> (tempfile::TempDir, PathBuf) {
     write_system(&system_with(|_| {}))
@@ -345,7 +348,7 @@ fn system_with_patches(
 ) -> String {
     let mut value: serde_json::Value = serde_json::from_str(SYSTEM_JSON).expect("fixture JSON");
     mutate(&mut value);
-    with_source_hashes(&serde_json::to_string(&value).expect("JSON"), patches)
+    with_interface_hashes(&serde_json::to_string(&value).expect("JSON"), patches)
 }
 
 /// Parses [`SYSTEM_JSON`], lets `mutate` edit the raw JSON and re-serializes
@@ -664,7 +667,7 @@ fn missing_ipc_types_file_is_reported() {
     // A view with types but no generated module (a plain `cargo build` after a
     // stale/absent `cargo xbin sync`) is a hard error, not a silent empty
     // module (M1-T7).
-    let (_dir, path) = write_system_without_ipc_types(&with_source_hashes(
+    let (_dir, path) = write_system_without_ipc_types(&with_interface_hashes(
         SYSTEM_JSON,
         &[("app-m7", &sender_args(), &sender_app())],
     ));
@@ -688,7 +691,7 @@ fn user_defined_ipc_types_module_is_rejected() {
             mod ipc_types {}
         }
     };
-    let (_dir, path) = write_system(&with_source_hashes(
+    let (_dir, path) = write_system(&with_interface_hashes(
         SYSTEM_JSON,
         &[("app-m7", &sender_args(), &app_mod)],
     ));
@@ -710,7 +713,7 @@ fn user_defined_cross_core_message_is_rejected() {
             trait CrossCoreMessage {}
         }
     };
-    let (_dir, path) = write_system(&with_source_hashes(
+    let (_dir, path) = write_system(&with_interface_hashes(
         SYSTEM_JSON,
         &[("app-m7", &sender_args(), &app_mod)],
     ));
@@ -1715,7 +1718,7 @@ fn applications_without_cross_declarations_still_load_the_view() {
             struct Plain;
         }
     };
-    let (_dir, path) = write_system(&with_source_hashes(
+    let (_dir, path) = write_system(&with_interface_hashes(
         SYSTEM_JSON,
         &[(
             "app-m4",
@@ -1748,7 +1751,7 @@ fn codegen_mode_is_detected_from_the_environment() {
     let system = dir.path().join("system.json");
     std::fs::write(
         &system,
-        with_source_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+        with_interface_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
     )
     .expect("system.json");
     std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
@@ -1784,7 +1787,7 @@ fn codegen_mode_resolves_the_application_without_cargo_bin_name() {
     let system = dir.path().join("system.json");
     std::fs::write(
         &system,
-        with_source_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+        with_interface_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
     )
     .expect("system.json");
     std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
@@ -1821,7 +1824,7 @@ fn project_topology_anchor_is_embedded() {
     let system = dir.path().join("system.json");
     std::fs::write(
         &system,
-        with_source_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+        with_interface_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
     )
     .expect("system.json");
     std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
@@ -1847,7 +1850,7 @@ fn project_topology_anchor_is_embedded() {
 }
 
 #[test]
-fn source_hash_ignores_token_spacing() {
+fn interface_hash_ignores_token_spacing() {
     // rustc and rust-analyzer's proc-macro server represent the same token
     // tree with different punctuation `Spacing` and render it very
     // differently; the freshness hash must not depend on either.
@@ -1871,7 +1874,7 @@ fn source_hash_ignores_token_spacing() {
 }
 
 #[test]
-fn source_hash_ignores_ra_synthetic_statement_semicolons() {
+fn interface_hash_ignores_ra_synthetic_statement_semicolons() {
     // rust-analyzer's proc-macro server (`hir-expand`'s `fixup_syntax`)
     // appends a semicolon to an expression statement that lacks one whose
     // expression is not a bare block, so `if c { .. }` reaches the macro as

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use rticx_xbin_driver::{IPC_TYPES_FILE, SYSTEM_FILE, sync};
 use rticx_xbin_proto::{
-    DoorbellEntry, FifoEntry, FileChange, Hash64, PoolEntry, RTICX_GENERATION, SystemView,
-    layout_hash,
+    DoorbellEntry, FifoEntry, FileChange, Hash64, PoolEntry, RTICX_GENERATION,
+    SYSTEM_SCHEMA_VERSION, SystemView, layout_hash,
 };
 use tempfile::tempdir;
 
@@ -160,7 +160,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(bytes, system.to_json(), "the emitted bytes match the view");
     assert!(system.verify_topology_hash());
     assert_eq!(SystemView::from_json(&bytes).expect("parse"), *system);
-    assert_eq!(system.schema_version, 2);
+    assert_eq!(system.schema_version, SYSTEM_SCHEMA_VERSION);
     assert_eq!(system.rticx_generation, RTICX_GENERATION);
     assert_eq!(
         system.layout_hash,

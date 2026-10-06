@@ -518,7 +518,7 @@ pub fn merge_project(
             AppEntry {
                 package: application.package().to_string(),
                 target: manifest.target.clone(),
-                source_hash: manifest.source_hash,
+                interface_hash: manifest.interface_hash,
                 core_ids: application.core_ids().to_vec(),
                 external_cores: application.external_cores().to_vec(),
             }

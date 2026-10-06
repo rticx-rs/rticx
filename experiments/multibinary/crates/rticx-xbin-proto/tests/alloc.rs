@@ -8,8 +8,9 @@
 
 use rticx_xbin_proto::{
     AppManifest, CoreCapability, DoorbellEntry, FifoEntry, Hash64, IpcTypes,
-    MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl, ProjectConfig, ReceiverDecl, SystemView,
-    TargetRef, layout_hash, merge_project, parse_idl_str, parse_project_str, system_view,
+    MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl, ProjectConfig, ReceiverDecl,
+    SYSTEM_SCHEMA_VERSION, SystemView, TargetRef, layout_hash, merge_project, parse_idl_str,
+    parse_project_str, system_view,
 };
 
 const IDL: &str = r#"
@@ -85,7 +86,7 @@ fn manifest(package: &str, target: &str) -> AppManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
         package: package.to_string(),
         target: TargetRef::bin(target),
-        source_hash: Hash64::of(package.as_bytes()),
+        interface_hash: Hash64::of(package.as_bytes()),
         types: Vec::new(),
         receivers: Vec::new(),
         capabilities: Vec::new(),
@@ -188,7 +189,7 @@ fn emits_the_reference_system_view() {
     let view = system_view(&merged, &idl, rticx_xbin_proto::RTICX_GENERATION)
         .expect("layout hash is computable");
 
-    assert_eq!(view.schema_version, 2);
+    assert_eq!(view.schema_version, SYSTEM_SCHEMA_VERSION);
     assert_eq!(view.rticx_generation, "0.2");
     assert_eq!(
         view.layout_hash,

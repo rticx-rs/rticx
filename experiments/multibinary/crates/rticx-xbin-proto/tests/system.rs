@@ -2,8 +2,9 @@
 //! schema (M1-T1).
 
 use rticx_xbin_proto::{
-    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, PoolEntry, SystemError,
-    SystemView, TargetRef, TaskEntry, TypeEntry, TypeKind, VariantEntry,
+    AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, PoolEntry,
+    SYSTEM_SCHEMA_VERSION, SystemError, SystemView, TargetRef, TaskEntry, TypeEntry, TypeKind,
+    VariantEntry,
 };
 
 /// A hand-written system view exercising every part of the schema.
@@ -14,14 +15,14 @@ fn sample_view() -> SystemView {
         AppEntry {
             package: "app-m7".to_string(),
             target: TargetRef::bin("m7"),
-            source_hash: Hash64::of(b"app-m7 source"),
+            interface_hash: Hash64::of(b"app-m7 source"),
             core_ids: vec![0],
             external_cores: vec![1],
         },
         AppEntry {
             package: "app-m4".to_string(),
             target: TargetRef::bin("m4"),
-            source_hash: Hash64::of(b"app-m4 source"),
+            interface_hash: Hash64::of(b"app-m4 source"),
             core_ids: vec![1],
             external_cores: vec![0],
         },
@@ -120,6 +121,19 @@ fn sample_view() -> SystemView {
 }
 
 #[test]
+fn schema_three_names_the_freshness_hash_interface_hash() {
+    assert_eq!(SYSTEM_SCHEMA_VERSION, 3);
+
+    let json = sample_view().to_json();
+    assert!(json.contains("\"schema_version\": 3"), "{json}");
+    assert!(json.contains("\"interface_hash\": \"0x"), "{json}");
+    assert!(
+        !json.contains("source_hash"),
+        "the freshness hash is the interface hash: {json}"
+    );
+}
+
+#[test]
 fn serialization_round_trips() {
     let view = sample_view();
     let json = view.to_json();
@@ -210,21 +224,21 @@ fn addresses_and_hashes_are_hex_strings_in_json() {
 fn unknown_schema_version_is_rejected() {
     let mut value: serde_json::Value =
         serde_json::from_str(&sample_view().to_json()).expect("valid JSON");
-    value["schema_version"] = serde_json::Value::from(3u32);
+    value["schema_version"] = serde_json::Value::from(4u32);
 
-    let error = SystemView::from_json(&value.to_string()).expect_err("schema 3 is rejected");
+    let error = SystemView::from_json(&value.to_string()).expect_err("schema 4 is rejected");
     assert!(
         matches!(
             error,
             SystemError::Schema {
-                found: 3,
-                expected: 2
+                found: 4,
+                expected: 3
             }
         ),
         "unexpected error: {error}"
     );
     assert_eq!(
         error.to_string(),
-        "unsupported system.json schema version 3; this tool supports schema = 2"
+        "unsupported system.json schema version 4; this tool supports schema = 3"
     );
 }

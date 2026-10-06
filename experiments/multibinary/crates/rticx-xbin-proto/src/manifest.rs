@@ -7,8 +7,8 @@
 //! A manifest records:
 //!
 //! - package and Cargo target (`<target>.xbin.json` is named after the target);
-//! - a [`Hash64`] of the application source as the pass saw it, used by the
-//!   phase-2 freshness check;
+//! - the application's `interface_hash`: a [`Hash64`] of the source as the
+//!   pass saw it, used by the phase-2 freshness check;
 //! - the native `#[sw_task]` cross-binary receivers declared by this
 //!   application, including the full `SpawnInput` paths. There are no
 //!   sender declarations: the driver infers each task's single producer
@@ -35,7 +35,10 @@ use crate::project::TargetKind;
 /// Schema 3 removed the topology echo (`cores`, `core_ids`, `external_cores`):
 /// `rticx.toml` is the single topology source and the driver reads it directly
 /// (M7-T2). The manifest only reports source-discovered facts.
-pub const MANIFEST_SCHEMA_VERSION: u32 = 3;
+///
+/// Schema 4 renamed the per-application freshness hash to `interface_hash`;
+/// the value is still the whole-source hash in this schema.
+pub const MANIFEST_SCHEMA_VERSION: u32 = 4;
 
 /// File-name suffix of an application manifest.
 pub const MANIFEST_FILE_SUFFIX: &str = ".xbin.json";
@@ -50,9 +53,10 @@ pub struct AppManifest {
     pub package: String,
     /// Cargo target the `#[app]` module lives in.
     pub target: TargetRef,
-    /// Hash of the application source as the pass saw it (arguments plus the
-    /// annotated module, *before* pass-owned attributes are stripped).
-    pub source_hash: Hash64,
+    /// Hash of the application interface as the pass saw it (arguments plus the
+    /// annotated module, *before* pass-owned attributes are stripped). In this
+    /// schema it is still the whole-source hash.
+    pub interface_hash: Hash64,
     /// Full paths of every IDL type referenced by the declarations below,
     /// sorted and deduplicated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

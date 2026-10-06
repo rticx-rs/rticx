@@ -63,7 +63,7 @@ use rticx_xbin_proto::{
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 2,
+  "schema_version": 3,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -71,14 +71,14 @@ const SYSTEM_JSON: &str = r#"{
     {
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
-      "source_hash": "0x26a74c0569235dd7",
+      "interface_hash": "0x26a74c0569235dd7",
       "core_ids": [0],
       "external_cores": [1]
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
-      "source_hash": "0x70b1fa36c7b61323",
+      "interface_hash": "0x70b1fa36c7b61323",
       "core_ids": [1],
       "external_cores": [0]
     }
@@ -702,7 +702,7 @@ fn two_app_system() -> String {
             .iter_mut()
             .find(|application| application.package == package)
             .expect("fixture application");
-        application.source_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
+        application.interface_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
     }
     view.seal();
     view.to_json()
@@ -717,21 +717,21 @@ fn three_app_system() -> String {
         AppEntry {
             package: "app-m7".to_string(),
             target: TargetRef::bin("m7"),
-            source_hash: Hash64::ZERO,
+            interface_hash: Hash64::ZERO,
             core_ids: vec![0],
             external_cores: vec![1],
         },
         AppEntry {
             package: "app-m5".to_string(),
             target: TargetRef::bin("m5"),
-            source_hash: Hash64::ZERO,
+            interface_hash: Hash64::ZERO,
             core_ids: vec![2],
             external_cores: vec![1],
         },
         AppEntry {
             package: "app-m4".to_string(),
             target: TargetRef::bin("m4"),
-            source_hash: Hash64::ZERO,
+            interface_hash: Hash64::ZERO,
             core_ids: vec![1],
             external_cores: vec![0, 2],
         },
@@ -865,7 +865,7 @@ fn three_app_system() -> String {
             .iter_mut()
             .find(|application| application.package == package)
             .expect("fixture application");
-        application.source_hash = rticx_xbin_pass::app_source_hash(&args, &app_mod);
+        application.interface_hash = rticx_xbin_pass::app_source_hash(&args, &app_mod);
     }
     view.seal();
     view.to_json()

@@ -28,8 +28,9 @@ use crate::manifest::TargetRef;
 ///
 /// Schema 2 (M6.9-T5) gives every core its `physical_core`, replaces the
 /// per-direction `regions[]` with the distro `pools[]` and adds the pool id to
-/// every task FIFO.
-pub const SYSTEM_SCHEMA_VERSION: u32 = 2;
+/// every task FIFO. Schema 3 renames the per-application freshness hash to
+/// `interface_hash`; the value is still the whole-source hash.
+pub const SYSTEM_SCHEMA_VERSION: u32 = 3;
 
 /// RTICX generation (major.minor) recorded in every emitted `system.json`.
 ///
@@ -143,11 +144,11 @@ impl SystemView {
         for app in &self.apps {
             let _ = writeln!(
                 out,
-                "app package={} target={:?}:{} source_hash={} core_ids={:?} external_cores={:?}",
+                "app package={} target={:?}:{} interface_hash={} core_ids={:?} external_cores={:?}",
                 app.package,
                 app.target.kind,
                 app.target.name,
-                app.source_hash,
+                app.interface_hash,
                 app.core_ids,
                 app.external_cores
             );
@@ -233,8 +234,9 @@ pub struct AppEntry {
     pub package: String,
     /// Cargo target.
     pub target: TargetRef,
-    /// Hash of the application source, taken from its manifest.
-    pub source_hash: Hash64,
+    /// Hash of the application interface, taken from its manifest. In this
+    /// schema it is still the whole-source hash.
+    pub interface_hash: Hash64,
     /// Local core index -> global core id. Empty when the application did not
     /// declare one and the driver used the identity mapping.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

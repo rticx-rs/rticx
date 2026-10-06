@@ -261,7 +261,7 @@ fn receiver_fixture_produces_the_expected_manifest() {
         "schema 3 carries no topology echo: {json}"
     );
     assert!(json.contains("\"kind\": \"bin\""), "{json}");
-    assert!(json.contains("\"source_hash\": \"0x"), "{json}");
+    assert!(json.contains("\"interface_hash\": \"0x"), "{json}");
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn manifests_are_deterministic() {
 }
 
 #[test]
-fn source_hash_covers_the_source_before_stripping() {
+fn interface_hash_covers_the_source_before_stripping() {
     let app_mod = receiver_app();
     let args = quote!(device = mypac, dispatchers = [IRQ0]);
 
@@ -325,12 +325,14 @@ fn source_hash_covers_the_source_before_stripping() {
         "app-m4",
         "m4",
     );
-    assert_eq!(manifest.source_hash, expected);
+    assert_eq!(manifest.interface_hash, expected);
 
     // Reading the manifest back from disk yields the same hash.
     let on_disk = std::fs::read_to_string(dir.path().join("m4.xbin.json")).expect("manifest");
     assert_eq!(
-        AppManifest::from_json(&on_disk).expect("parse").source_hash,
+        AppManifest::from_json(&on_disk)
+            .expect("parse")
+            .interface_hash,
         expected
     );
 }

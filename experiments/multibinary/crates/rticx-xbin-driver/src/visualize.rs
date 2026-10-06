@@ -438,8 +438,8 @@ fn hash_text(hash: rticx_xbin_proto::Hash64) -> String {
 #[cfg(test)]
 mod tests {
     use rticx_xbin_proto::{
-        AppEntry, CoreEntry, DoorbellEntry, FifoEntry, Hash64, PoolEntry, SystemView, TargetKind,
-        TargetRef, TaskEntry,
+        AppEntry, CoreEntry, DoorbellEntry, FifoEntry, Hash64, PoolEntry, SYSTEM_SCHEMA_VERSION,
+        SystemView, TargetKind, TargetRef, TaskEntry,
     };
 
     use super::*;
@@ -483,14 +483,14 @@ mod tests {
     /// distro pools for the `{0,1}` and `{1,2}` duals.
     fn three_app_view() -> SystemView {
         let mut view = SystemView {
-            schema_version: 2,
+            schema_version: SYSTEM_SCHEMA_VERSION,
             rticx_generation: "0.2".to_string(),
             topology_hash: Hash64::new(0x1234),
             layout_hash: Hash64::new(0x5678),
             apps: vec![AppEntry {
                 package: "app-m7".to_string(),
                 target: target("m7"),
-                source_hash: Hash64::new(0xaaaa),
+                interface_hash: Hash64::new(0xaaaa),
                 core_ids: vec![0],
                 external_cores: vec![1],
             }],

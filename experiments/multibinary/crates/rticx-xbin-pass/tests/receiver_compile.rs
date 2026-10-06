@@ -26,7 +26,7 @@ use rticx_xbin_proto::SystemView;
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 2,
+  "schema_version": 3,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -34,14 +34,14 @@ const SYSTEM_JSON: &str = r#"{
     {
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
-      "source_hash": "0x26a74c0569235dd7",
+      "interface_hash": "0x26a74c0569235dd7",
       "core_ids": [0],
       "external_cores": [1]
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
-      "source_hash": "0x70b1fa36c7b61323",
+      "interface_hash": "0x70b1fa36c7b61323",
       "core_ids": [1],
       "external_cores": [0]
     }
@@ -340,7 +340,8 @@ fn receiver_system() -> String {
         .iter_mut()
         .find(|application| application.package == "app-m4")
         .expect("fixture app-m4");
-    application.source_hash = rticx_xbin_pass::app_source_hash(&receiver_args(), &receiver_app());
+    application.interface_hash =
+        rticx_xbin_pass::app_source_hash(&receiver_args(), &receiver_app());
     view.seal();
     view.to_json()
 }

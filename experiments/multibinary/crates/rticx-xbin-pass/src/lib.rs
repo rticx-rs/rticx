@@ -50,7 +50,7 @@
 //!     changes. The pass hard-errors on a `topology_hash` that does not match
 //!     the view's contents (it was edited after `cargo xbin sync`) and on an
 //!     application whose source changed since the last `sync` (see
-//!     `crate::codegen::check_source_hash`);
+//!     `crate::codegen::check_interface_hash`);
 //!
 //!   - priority lines: the pass analyzes the application's raw
 //!     `#[sw_task]`/`#[async_task]` declarations together with the cross
@@ -108,8 +108,8 @@ use rticx_xbin_proto::{
 use syn::ItemMod;
 
 use crate::codegen::{
-    HookPlan, check_application, check_source_hash, generate_freshness_items, generate_init_hooks,
-    generate_ipc_types_items, generate_receiver_items, generate_sender_items,
+    HookPlan, check_application, check_interface_hash, generate_freshness_items,
+    generate_init_hooks, generate_ipc_types_items, generate_receiver_items, generate_sender_items,
 };
 use crate::parse::{
     AppExtensions, ModuleDecls, inject_receiver_tasks, parse_app_args, parse_module,
@@ -403,10 +403,11 @@ impl RticPass for XbinPass {
         args: TokenStream,
         mut app_mod: ItemMod,
     ) -> syn::Result<(TokenStream, ItemMod)> {
-        // The source hash must describe the application exactly as the user
+        // The interface hash must describe the application exactly as the user
         // wrote it, before this pass strips its own syntax, so that phase 2
-        // can recompute it from the same source.
-        let source_hash = app_source_hash(&args, &app_mod);
+        // can recompute it from the same source. In this schema it still covers
+        // the whole source.
+        let interface_hash = app_source_hash(&args, &app_mod);
 
         // `rticx.toml` is the single user-facing source of topology (M7-T2):
         // resolve the application's `cores`/`core_ids`/`external_cores` from
@@ -445,7 +446,7 @@ impl RticPass for XbinPass {
         if let Some(meta) = &self.meta {
             let manifest = build_manifest(
                 meta,
-                source_hash,
+                interface_hash,
                 extensions.clone(),
                 decls.clone(),
                 self.backend.as_deref(),
@@ -513,7 +514,7 @@ impl RticPass for XbinPass {
             // Freshness runs after the declaration checks so a source change
             // that also breaks a task declaration reports the specific
             // mismatch first; both errors point at `cargo xbin sync`.
-            check_source_hash(application, source_hash)?;
+            check_interface_hash(application, interface_hash)?;
             items.extend(generate_freshness_items(
                 &view,
                 &system.path,
@@ -642,7 +643,7 @@ fn load_system(path: &Path) -> syn::Result<SystemView> {
 /// Builds the application manifest from the parsed syntax.
 fn build_manifest(
     meta: &MetaMode,
-    source_hash: Hash64,
+    interface_hash: Hash64,
     extensions: AppExtensions,
     decls: ModuleDecls,
     backend: Option<&dyn XbinPassBackend>,
@@ -673,7 +674,7 @@ fn build_manifest(
         schema_version: MANIFEST_SCHEMA_VERSION,
         package: package.to_string(),
         target: TargetRef::bin(target),
-        source_hash,
+        interface_hash,
         types,
         receivers: decls.receivers,
         capabilities,
@@ -777,7 +778,7 @@ fn halt_compilation() -> ! {
 /// Deterministic, proc-macro-host-independent hash of the macro arguments and
 /// the annotated module.
 ///
-/// This is the `source_hash` recorded in the application manifest and in
+/// This is the `interface_hash` recorded in the application manifest and in
 /// `system.json` (M1-T2). Phase 2 recomputes it with the same function and
 /// rejects an application that changed after the last `cargo xbin sync`
 /// (M3-T4). It is public so tests and tooling can build views that match a

@@ -83,21 +83,21 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
         AppEntry {
             package: "app-m7".to_string(),
             target: TargetRef::bin("m7"),
-            source_hash: Hash64::ZERO,
+            interface_hash: Hash64::ZERO,
             core_ids: vec![0],
             external_cores: vec![1],
         },
         AppEntry {
             package: "app-m5".to_string(),
             target: TargetRef::bin("m5"),
-            source_hash: Hash64::ZERO,
+            interface_hash: Hash64::ZERO,
             core_ids: vec![2],
             external_cores: vec![1],
         },
         AppEntry {
             package: "app-m4".to_string(),
             target: TargetRef::bin("m4"),
-            source_hash: Hash64::ZERO,
+            interface_hash: Hash64::ZERO,
             core_ids: core_ids.to_vec(),
             external_cores: external_cores.to_vec(),
         },
@@ -262,7 +262,7 @@ fn write_system(
         .iter_mut()
         .find(|application| application.package == "app-m4")
         .expect("fixture app-m4");
-    application.source_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
+    application.interface_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
     view.seal();
 
     let dir = tempfile::tempdir().expect("tempdir");

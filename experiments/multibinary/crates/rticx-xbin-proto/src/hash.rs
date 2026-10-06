@@ -1,7 +1,7 @@
 //! Deterministic 64-bit hashing shared by the driver, the compilation pass
 //! and the generated code.
 //!
-//! All hashes in the multi-binary pipeline (`source_hash`, `layout_hash`,
+//! All hashes in the multi-binary pipeline (`interface_hash`, `layout_hash`,
 //! `topology_hash`) are FNV-1a 64-bit values over a canonical text, so that
 //! identical inputs always produce identical bytes. In JSON they are rendered
 //! as lowercase `0x`-prefixed 16-digit hex strings (`"0x0123456789abcdef"`).

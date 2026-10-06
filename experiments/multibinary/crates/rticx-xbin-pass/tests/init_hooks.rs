@@ -30,7 +30,7 @@ use rticx_xbin_proto::SystemView;
 /// adds a second FIFO produced by the other core, so the executed test proves
 /// that a core initializes exactly the FIFOs it produces (M6-T1).
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 2,
+  "schema_version": 3,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -38,14 +38,14 @@ const SYSTEM_JSON: &str = r#"{
     {
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
-      "source_hash": "0x26a74c0569235dd7",
+      "interface_hash": "0x26a74c0569235dd7",
       "core_ids": [0],
       "external_cores": [1]
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
-      "source_hash": "0x70b1fa36c7b61323",
+      "interface_hash": "0x70b1fa36c7b61323",
       "core_ids": [1],
       "external_cores": [0]
     }
@@ -208,7 +208,7 @@ fn owner_system() -> String {
         .iter_mut()
         .find(|application| application.package == "app-m7")
         .expect("fixture app-m7");
-    application.source_hash = rticx_xbin_pass::app_source_hash(&owner_args(), &owner_app());
+    application.interface_hash = rticx_xbin_pass::app_source_hash(&owner_args(), &owner_app());
     view.seal();
     view.to_json()
 }

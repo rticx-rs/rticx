@@ -123,7 +123,7 @@ fn manifest(package: &str, target: &str) -> AppManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
         package: package.to_string(),
         target: TargetRef::bin(target),
-        source_hash: Hash64::of(package.as_bytes()),
+        interface_hash: Hash64::of(package.as_bytes()),
         types: Vec::new(),
         receivers: Vec::new(),
         capabilities: Vec::new(),
