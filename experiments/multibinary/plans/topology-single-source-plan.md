@@ -454,21 +454,24 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 | # | Session | Task | Status | Notes / commit |
 |---|---|---|---|---|
-| A1 | A | proto `external_cores` in `[[application]]` | [ ] | |
-| A2 | A | pass `topology.rs` resolver + `AppTopology` | [ ] | checkpoint A1 green before starting |
-| A3 | A | `parse_app_args` injection + new errors + `TopologySource` | [ ] | |
-| A4 | A | `rticx.toml` freshness anchor + `check_application` | [ ] | |
-| A5 | A | mock distro + metadata-macro resolve topology | [ ] | |
-| A6 | A | fixtures/examples move topology to `rticx.toml` | [ ] | |
-| A7 | A | migrate pass/unit tests | [ ] | |
-| A* | A | session acceptance + commit | [ ] | |
-| B1 | B | `AppManifest` schema 3 (drop echo fields) | [ ] | |
-| B2 | B | `merge.rs` reads `ProjectConfig`; drop dead errors | [ ] | |
-| B3 | B | migrate proto/driver/pass tests to schema 3 | [ ] | |
-| B* | B | session acceptance + commit | [ ] | |
-| C1 | C | docs sweep (`plan`/`user-guide`/`architecture`) | [ ] | |
-| C2 | C | final verification (workspace + fixtures + h7) | [ ] | |
+| A1 | A | proto `external_cores` in `[[application]]` | [x] | 3ba24c4; `cargo test -p rticx-xbin-proto` green |
+| A2 | A | pass `topology.rs` resolver + `AppTopology` | [x] | 3ba24c4; `cargo test -p rticx-xbin-pass` green; nothing wired into `parse.rs` yet |
+| A3 | A | `parse_app_args` injection + new errors + `TopologySource` | [x] | 0fc5c6e; signature gained a `package: &str` arg (needed by the §5 `cores`-mismatch message) |
+| A4 | A | `rticx.toml` freshness anchor + `check_application` | [x] | 0fc5c6e; `check_application` unchanged, still "run `cargo xbin sync`" |
+| A5 | A | mock distro + metadata-macro resolve topology | [x] | 0fc5c6e; h7 macro docs only |
+| A6 | A | fixtures/examples move topology to `rticx.toml` | [x] | 0fc5c6e; no fixture `#[app]` mentions the moved keys |
+| A7 | A | migrate pass/unit tests | [x] | 0fc5c6e; also migrated `driver/tests/negative.rs` generated sources (needed for `cargo test -p rticx-xbin-driver`; schema-2 assertions untouched, so B3 still has work) |
+| A* | A | session acceptance + commit | [x] | 0fc5c6e; `cargo test -p rticx-xbin-proto -p rticx-xbin-pass` + `-p rticx-xbin-driver` green; e2e/three-app/h7 `cargo xbin build` verified |
+| B1 | B | `AppManifest` schema 3 (drop echo fields) | [x] | c32150c; `MANIFEST_SCHEMA_VERSION = 3`, echo fields removed |
+| B2 | B | `merge.rs` reads `ProjectConfig`; drop dead errors | [x] | c32150c; `CoreCountMismatch`/`CoreIdsMismatch`/`OwnExternalCore` removed |
+| B3 | B | migrate proto/driver/pass tests to schema 3 | [x] | c32150c; `negative.rs` rewrite done (moved-args rejected at `sync`; post-sync `rticx.toml` edit → `check_application`) |
+| B* | B | session acceptance + commit | [x] | c32150c; `cargo test` + e2e/three-app/h7 `cargo xbin build` green (cargo-xbin reinstalled for schema 3) |
+| C1 | C | docs sweep (`plan`/`user-guide`/`architecture`) | [x] | 0445c28; `plans/multibinary-multicore-plan.md` (the `docs/` name never existed), `docs/user-guide.md`, `docs/architecture.md`; README untouched; also fixed pre-existing fmt (`driver/src/project.rs`) + a clippy lint (`pass/src/lib.rs`) |
+| C2 | C | final verification (workspace + fixtures + h7) | [x] | 0445c28; fmt/`cargo test`/clippy green; e2e+three-app `cargo xbin build`, `make -C rticx-stm32h7 all`, optional `renode` green. **Exception (accepted):** `metadata` `cargo xbin build` fails by design (phase-1-only halt fixture) — `cargo xbin sync` is the correct check there. |
 
 ### Session notes
 
-- _(add entries here as sessions complete: date, what landed, anything deferred)_
+- 2026-10-06 — Checkpoint A1 (tasks A1+A2) landed additively in commit `3ba24c4`: `external_cores` in `[[application]]` (proto) and the `topology.rs` resolver + `AppTopology` (pass), re-exported from the pass crate root. Nothing wired into `parse.rs`; workspace green. Two judgement calls flagged for A3+: proto duplicate/overlap error wording and `resolve_app_topology` target-selection semantics (matches `check_application`: `(package, target.name)` when `target` is `Some`).
+- 2026-10-06 — Session A tasks A3–A7 + acceptance landed in commit `0fc5c6e`. `rticx.toml` is now the single topology source; the pass injects `cores`/`core_ids` and rejects `#[app(core_ids)]`/`#[app(external_cores)]`/mismatched `cores` with the exact §5 messages; freshness `include_str!` anchor emitted. Deviations: `parse_app_args` took an extra `package: &str` (for the mismatch message); `driver/tests/negative.rs` generated sources were migrated early (schema-2 assertions untouched, so B3 still has work). Acceptance A green including the three real-driver fixture builds.
+- 2026-10-06 — Session B landed in commit `c32150c`: `AppManifest` schema 3 (echo fields dropped), `merge.rs` reads topology from `ProjectConfig`, dead `MergeError` variants removed, proto/driver/pass tests migrated (incl. the `negative.rs` rewrite). Acceptance B green. `cargo-xbin` was reinstalled (old binary linked schema 2). Deferred to C2: pre-existing `cargo fmt --all -- --check` diffs in untouched files (`crates/rticx-xbin-driver/src/project.rs`, `crates/rticx-xbin-proto/src/manifest.rs`).
+- 2026-10-07 — Session C landed in commit `0445c28`: docs sweep (`plans/multibinary-multicore-plan.md`, `docs/user-guide.md`, `docs/architecture.md`; README had no `#[app(core_ids)]`), plus the pre-existing fmt/clippy fixes. Final verification green: `cargo fmt --all -- --check`, `cargo test`, `cargo clippy --all-targets`, e2e/three-app fixture builds, `make -C rticx-stm32h7 all`, and optional `make -C rticx-stm32h7 renode` (Renode 1.16.1). Accepted exception: `crates/mock/fixtures/metadata` is a phase-1-only halt fixture, so its `cargo xbin build` fails by design; `cargo xbin sync` is the correct acceptance check there. Note: running that failing `build` leaves the fixture's generated state dirty and can make a subsequent `cargo test` flake in `rticx-xbin-driver --test verify`; a clean `cargo test` is green (verified twice).
