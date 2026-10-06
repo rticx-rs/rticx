@@ -12,7 +12,7 @@ use xbin_mock_distro::app;
 
 #[app(
     device = mock_pac,
-    ipc_dispatchers = [XBIN_IPC_LINE_0]
+    dispatchers = [XBIN_IPC_LINE_0]
 )]
 mod app {
     /// Receiver task: one spawn input per execution, `EncryptReq` from the

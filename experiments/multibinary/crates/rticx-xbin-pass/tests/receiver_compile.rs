@@ -322,7 +322,7 @@ fn receiver_app() -> syn::ItemMod {
 }
 
 fn receiver_args() -> TokenStream {
-    quote!(device = pac, ipc_dispatchers = [IRQ0])
+    quote!(device = pac, dispatchers = [IRQ0])
 }
 
 /// The receiver application's topology: local core 0 -> global 1, global core 0

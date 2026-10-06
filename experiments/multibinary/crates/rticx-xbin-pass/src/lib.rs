@@ -29,8 +29,8 @@
 //!     every task whose `spawner_core` belongs to this application.
 //!
 //!   - receiver side: FIFO views, the `SpawnInput: CrossCoreMessage` const assertion against the injected
-//!     marker trait, one generated **line dispatcher** per `(source -> target, priority)` line bound to its
-//!     `ipc_dispatchers` entry, one **doorbell router** per`(source -> target)` pair routing task ids to the line ready queues,
+//!     marker trait, one generated **line dispatcher** per `(source -> target, priority)` line bound to
+//!     its entry stolen from the front of the shared `dispatchers` list, one **doorbell router** per`(source -> target)` pair routing task ids to the line ready queues,
 //!     and the core `#[task(..)]` shape on the native receiver structs themselves;
 //!
 //!   - IDL types: the driver-generated `target/rticx-xbin/ipc_types.rs` is re-emitted into the `#[app]` module
@@ -71,10 +71,14 @@
 //!
 //! Syntax owned by this pass:
 //!
-//! - `#[app(ipc_dispatchers = [..])]` (always consumed, in both modes): the
+//! - the **front of `#[app(dispatchers = [..])]`** (always, in both modes): the
 //!   per-core interrupt pool of the generated cross-binary line dispatchers
-//!   (M6.5-T1). `cores`/`core_ids` are injected from `rticx.toml` (M7-T2) and
-//!   left for the core pass, which owns them since M5 — see `crate::parse`;
+//!   (M6.5-T1). The pass steals one entry per cross line from the front of each
+//!   local core's list and rewrites the remainder into the `#[app]` arguments
+//!   for `rticx-sw-pass`/`rticx-async-pass`; the convention is **cross-binary
+//!   lines first, then the local task dispatchers**. `cores`/`core_ids` are
+//!   injected from `rticx.toml` (M7-T2) and left for the core pass, which owns
+//!   them since M5 — see `crate::parse`;
 //! - native `#[sw_task(..)]` cross-binary receivers (always consumed, in both
 //!   modes), with their input type taken from the matching `impl RticSwTask {
 //!   type SpawnInput = …; }` block. In an application whose topology declares
@@ -109,7 +113,7 @@ use crate::codegen::{
 };
 use crate::parse::{
     AppExtensions, ModuleDecls, inject_receiver_tasks, parse_app_args, parse_module,
-    strip_receiver_tasks, validate_ipc_dispatchers,
+    steal_dispatchers, strip_receiver_tasks,
 };
 use crate::priority::validate_priority_lines;
 
@@ -426,15 +430,17 @@ impl RticPass for XbinPass {
             .map(|resolved| resolved.manifest_path.as_path());
         let package = self.package().unwrap_or_default().to_string();
 
-        let (extensions, args) = parse_app_args(args, &package, topology.as_ref())?;
+        let (mut extensions, mut attr) = parse_app_args(args, &package, topology.as_ref())?;
         let decls = parse_module(&mut app_mod, &extensions)?;
 
-        // The pass-owned `ipc_dispatchers` pool is consumed in both modes: the
-        // core/software/async passes must never see it. Its entries are
-        // matched against the cross lines of the parsed declarations before
-        // either mode runs, so a missing, extra, duplicate or overlapping
-        // entry is a hard error (M6.5-T1).
-        validate_ipc_dispatchers(&extensions, &decls)?;
+        // The shared `dispatchers` list carries the cross-binary line
+        // interrupts at its front (one per cross line, ascending
+        // `(source, priority)`) followed by the local software/async task
+        // dispatchers. The pass steals the front and writes the remainder back
+        // into the arguments for `rticx-sw-pass`/`rticx-async-pass`; a short
+        // list (or a duplicate inside the stolen prefix) is a hard error
+        // (M6.5-T1).
+        steal_dispatchers(&mut extensions, &decls, &mut attr)?;
 
         if let Some(meta) = &self.meta {
             let manifest = build_manifest(
@@ -537,7 +543,7 @@ impl RticPass for XbinPass {
             append_items(&mut app_mod, items);
         }
 
-        Ok((args, app_mod))
+        Ok((attr.args_tokens(), app_mod))
     }
 
     fn main_injection(&self, point: &MainInjectionPoint, core: u32) -> Option<TokenStream> {
@@ -922,7 +928,11 @@ mod tests {
                 }
             }
         };
-        let input_args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+        let input_args = quote!(
+            device = mypac,
+            dispatchers = [IRQ0],
+            ipc_dispatchers = [STALE]
+        );
 
         let (args, out) = pass
             .run_pass(input_args, app_mod)
@@ -945,8 +955,16 @@ mod tests {
             "`external_cores` is resolved from `rticx.toml`, never handed on"
         );
         assert!(
-            parsed.get_expr("ipc_dispatchers").is_none(),
-            "the pass-owned dispatcher pool is consumed in both modes (M6.5-T1)"
+            parsed.get_expr("ipc_dispatchers").is_some(),
+            "`ipc_dispatchers` no longer exists; the key stays for the core pass (M6.5-T1)"
+        );
+        assert_eq!(
+            parsed
+                .get_expr("dispatchers")
+                .map(|expr| expr.to_token_stream().to_string())
+                .as_deref(),
+            Some("[]"),
+            "the stolen front is consumed; the empty remainder stays for the software pass"
         );
 
         let app_args = AppArgs::parse(args).expect("the core pass parses the injected `core_ids`");

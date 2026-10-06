@@ -11,16 +11,16 @@
 //!   core 1 over `(1 -> 0)`, and `HeartbeatTask` (priority 6), spawned by
 //!   global core 2 over `(2 -> 0)`.
 //!
-//! `ipc_dispatchers` lists one interrupt per cross line in ascending
-//! `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the `(1, 3)`
-//! dispatcher and `XBIN_IPC_LINE_1` the `(2, 6)` one.
+//! `dispatchers` lists the cross-binary lines first: one interrupt per cross
+//! line in ascending `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the
+//! `(1, 3)` dispatcher and `XBIN_IPC_LINE_1` the `(2, 6)` one.
 #![no_main]
 
 use xbin_mock_distro::app;
 
 #[app(
     device = mock_pac,
-    ipc_dispatchers = [XBIN_IPC_LINE_0, XBIN_IPC_LINE_1]
+    dispatchers = [XBIN_IPC_LINE_0, XBIN_IPC_LINE_1]
 )]
 mod app {
     /// Receiver of `AckTask`, spawned by global core 1.

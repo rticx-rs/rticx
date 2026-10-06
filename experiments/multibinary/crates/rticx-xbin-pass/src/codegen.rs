@@ -37,7 +37,7 @@
 //!     marker trait, so the guarantee lives in generated code instead of the
 //!     trait definition;
 //!   - one generated **line dispatcher** per `(source, target, priority)`
-//!     line: a hardware task bound to the line's `ipc_dispatchers` entry at
+//!     line: a hardware task bound to the line's stolen `dispatchers` entry at
 //!     the line's priority, whose `exec` drains the line's ready queue and,
 //!     per popped task, that task's FIFO until empty (a duplicate
 //!     notification finds an empty FIFO and is a no-op), then calls the
@@ -235,9 +235,9 @@ pub trait XbinPassBackend {
     /// Custom path to the interrupt type used for dispatchers on `core`.
     ///
     /// The generated router pends a line dispatcher as
-    /// `#pend_fn(#interrupt_type::#ipc_dispatchers_entry)`, so the returned
+    /// `#pend_fn(#interrupt_type::#dispatchers_entry)`, so the returned
     /// path must name a **type** whose variants or associated constants match
-    /// the `ipc_dispatchers` entries. Return `None` to use the application's
+    /// the stolen `dispatchers` entries. Return `None` to use the application's
     /// PAC path `pacs[core]::Interrupt`.
     ///
     /// A distribution must return the same path from this method and from
@@ -443,8 +443,8 @@ fn check_stub_collision(app_mod: &ItemMod, task: &TaskEntry) -> syn::Result<()> 
 /// Generates the receiver items for every native cross-binary receiver of an
 /// application (M3-T2, M5.5, M6.5-T3): the `SpawnInput: CrossCoreMessage`
 /// assertion, one hidden FIFO view per task, one **line dispatcher** per
-/// `(source -> target, priority)` line bound to its `ipc_dispatchers` pool
-/// entry and draining the line's ready queue, and one **doorbell router** per
+/// `(source -> target, priority)` line bound to its stolen `dispatchers` entry
+/// and draining the line's ready queue, and one **doorbell router** per
 /// `(source -> target)` pair that routes task ids to the line dispatchers.
 ///
 /// Returns an error naming the offending declaration when a declaration
@@ -487,21 +487,21 @@ pub(crate) fn generate_receiver_items(
         }
     }
 
-    // ~ The pass-owned `ipc_dispatchers` pool assigns one interrupt per line
-    // in ascending `(source, priority)` order (`validate_ipc_dispatchers`
-    // checked the count in `run_pass`), so the line's index in its core's
-    // list names the dispatcher's interrupt line (M6.5-T1/T4).
+    // ~ The stolen front of the shared `dispatchers` list assigns one interrupt
+    // per line in ascending `(source, priority)` order (`steal_dispatchers`
+    // checked the count in `run_pass`), so the line's index in its core's list
+    // names the dispatcher's interrupt line (M6.5-T1/T4).
     let irq_indices = line_irq_indices(receivers);
 
     // ~ One line dispatcher per `(source, target, priority)`: the key of the
-    // tasks' `system.json` doorbell and of the `ipc_dispatchers` entry.
+    // tasks' `system.json` doorbell and of the stolen `dispatchers` entry.
     let mut groups: BTreeMap<(u32, u32, u16), LineGroup<'_>> = BTreeMap::new();
     for receiver in receivers {
         let resolved = resolve_receiver(view, application, receiver)?;
         let task = resolved.task;
         let key = (task.fifo.source, task.fifo.target, task.priority);
         let index = irq_indices[&(resolved.local_core, task.fifo.source, task.priority)];
-        let irq = extensions.ipc_dispatchers[resolved.local_core as usize][index].clone();
+        let irq = extensions.cross_dispatchers[resolved.local_core as usize][index].clone();
         groups
             .entry(key)
             .or_insert_with(|| LineGroup {
@@ -566,7 +566,7 @@ pub(crate) fn generate_receiver_items(
 }
 
 /// One `(source -> target, priority)` line of an application: the receivers
-/// that share the line and the `ipc_dispatchers` entry that wakes its
+/// that share the line and the stolen `dispatchers` entry that wakes its
 /// dispatcher.
 struct LineGroup<'a> {
     /// Producer (source) global core id.
@@ -577,8 +577,8 @@ struct LineGroup<'a> {
     priority: u16,
     /// Local core index running the line's dispatcher (`0..cores`).
     local_core: u32,
-    /// Interrupt line of the line's dispatcher, from the application's
-    /// `ipc_dispatchers` pool.
+    /// Interrupt line of the line's dispatcher, from the stolen front of the
+    /// application's `dispatchers`.
     irq: syn::Path,
     /// The receivers of the line, in declaration (name) order.
     receivers: Vec<ResolvedReceiver<'a>>,
@@ -630,9 +630,10 @@ impl LineGroup<'_> {
     }
 }
 
-/// Index of every cross line in its local core's `ipc_dispatchers` list.
+/// Index of every cross line in the stolen front of its local core's
+/// `dispatchers` list.
 ///
-/// Mirrors [`crate::parse::validate_ipc_dispatchers`]: the pool lists each
+/// Mirrors [`crate::parse::steal_dispatchers`]: the stolen prefix lists each
 /// core's distinct `(source, priority)` lines in ascending order (M6.5-T1),
 /// and a task's line is the `(spawn_by, priority)` pair of its declaration.
 fn line_irq_indices(receivers: &[ReceiverDecl]) -> BTreeMap<(u32, u32, u16), usize> {
@@ -658,7 +659,7 @@ fn line_irq_indices(receivers: &[ReceiverDecl]) -> BTreeMap<(u32, u32, u16), usi
 /// the hidden FIFO views, the task enum and ready queue shared with the
 /// router, and the line dispatcher.
 ///
-/// The dispatcher is a hardware task bound to the line's `ipc_dispatchers`
+/// The dispatcher is a hardware task bound to the line's stolen `dispatchers`
 /// entry at the line priority: it drains its ready queue and, per popped task,
 /// drains that task's FIFO until empty (a duplicate notification finds an
 /// empty FIFO and is a no-op) and calls the receiver's `exec`.

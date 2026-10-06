@@ -35,7 +35,7 @@
 //! The **three-app fixture** (`three_applications_spawn_through_their_own_routers`,
 //! M6-T1) adds a second producer on global core 2: both producers declare
 //! nothing and receive their generated stubs, the receiver runs two line
-//! dispatchers from its `ipc_dispatchers` pool (one per `(source, priority)`
+//! dispatchers from its `dispatchers` pool (one per `(source, priority)`
 //! line) behind two per-pair routers, each producer updates only its own
 //! FIFO, the producer on core 2 initializes its own `(2 -> 1)` FIFO before
 //! its `post_init`, and the two sources backpressure independently.
@@ -466,7 +466,7 @@ fn two_app_receiver_module() -> syn::ItemMod {
 }
 
 fn two_app_receiver_args() -> TokenStream {
-    quote!(device = pac, ipc_dispatchers = [IRQ0])
+    quote!(device = pac, dispatchers = [IRQ0])
 }
 
 /// The two-app receiver's topology: local core 0 -> global 1, global core 0
@@ -479,7 +479,7 @@ fn two_app_receiver_topology() -> AppTopology {
 /// by two producer cores through two pairs, two line dispatchers and the
 /// multi-source scenario driver in `#[idle]`.
 ///
-/// `ipc_dispatchers` lists one interrupt per cross line in ascending
+/// `dispatchers` lists one interrupt per cross line in ascending
 /// `(source, priority)` order, so `IRQ0` wakes the `(0, 3)` dispatcher and
 /// `IRQ1` the `(2, 4)` one.
 fn three_app_receiver_module() -> syn::ItemMod {
@@ -676,7 +676,7 @@ fn three_app_receiver_module() -> syn::ItemMod {
 }
 
 fn three_app_receiver_args() -> TokenStream {
-    quote!(device = pac, ipc_dispatchers = [IRQ0, IRQ1])
+    quote!(device = pac, dispatchers = [IRQ0, IRQ1])
 }
 
 /// The three-app receiver's topology: local core 0 -> global 1, global cores 0

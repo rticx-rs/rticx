@@ -220,7 +220,7 @@ fn pool(
 
 #[test]
 fn receiver_fixture_produces_the_expected_manifest() {
-    let args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+    let args = quote!(device = mypac, dispatchers = [IRQ0]);
     let (_dir, manifest) = run_manifest(
         receiver_app(),
         AppTopology::new(vec![1], vec![0]),
@@ -285,7 +285,7 @@ fn producer_fixture_produces_an_empty_manifest() {
 
 #[test]
 fn manifests_are_deterministic() {
-    let args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+    let args = quote!(device = mypac, dispatchers = [IRQ0]);
     let (first_dir, _) = run_manifest(
         receiver_app(),
         AppTopology::new(vec![1], vec![0]),
@@ -312,7 +312,7 @@ fn manifests_are_deterministic() {
 #[test]
 fn source_hash_covers_the_source_before_stripping() {
     let app_mod = receiver_app();
-    let args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+    let args = quote!(device = mypac, dispatchers = [IRQ0]);
 
     // The hash covers the arguments and module exactly as the user wrote
     // them, before any pass-owned attribute is stripped.
@@ -450,11 +450,8 @@ fn full_pipeline_writes_the_manifest() {
         XbinPass::with_manifest(dir.path(), "app-m4", "m4")
             .with_topology(AppTopology::new(vec![1], vec![0])),
     );
-    let code = builder.build_rtic_macro2(
-        quote!(device = mypac, ipc_dispatchers = [IRQ0]),
-        app_mod,
-        None,
-    );
+    let code =
+        builder.build_rtic_macro2(quote!(device = mypac, dispatchers = [IRQ0]), app_mod, None);
     assert!(
         !code.to_string().contains("compile_error"),
         "pipeline failed: {code}"
@@ -490,10 +487,7 @@ fn manifest_declaration_order_is_normalized() {
     };
     XbinPass::with_manifest(dir.path(), "app", "app")
         .with_topology(AppTopology::new(vec![1], vec![0]))
-        .run_pass(
-            quote!(device = mypac, ipc_dispatchers = [IRQ0, IRQ1]),
-            app_mod,
-        )
+        .run_pass(quote!(device = mypac, dispatchers = [IRQ0, IRQ1]), app_mod)
         .expect("pass succeeds");
 
     let manifest = AppManifest::from_json(

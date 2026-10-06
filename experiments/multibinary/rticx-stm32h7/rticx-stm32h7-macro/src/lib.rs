@@ -75,9 +75,10 @@ const fn physical_core() -> u32 {
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut builder = RticMacroBuilder::new(Stm32H7Rtic::new());
     // The cross-binary pass runs first: it resolves the application's
-    // topology from `rticx.toml`, consumes `ipc_dispatchers` and the native
-    // cross-binary `#[sw_task]` receivers; the software pass then compiles the
-    // rewritten receivers through `RticSwTask`.
+    // topology from `rticx.toml`, steals the cross-binary front of
+    // `dispatchers` and the native cross-binary `#[sw_task]` receivers; the
+    // software pass then compiles the rewritten receivers through
+    // `RticSwTask`.
     builder.bind_pre_core_pass(XbinPass::from_env().with_backend(Stm32H7XbinBackend));
     builder.bind_pre_core_pass(SoftwarePass::new(SwPassBackendImpl));
     builder.build_rtic_macro(args, input)

@@ -35,9 +35,9 @@ tests pass); the fixtures are only updated in Phase 2, and because they are
 
 | Phase | Status | Scope | Notes |
 |---|---|---|---|
-| 1 | TODO | pass internals + pass test suite | `crates/rticx-xbin-pass` only |
-| 2 | TODO | mock distro + fixtures + H7 examples + driver tests | depends on Phase 1 |
-| 3 | TODO | docs (`user-guide.md`, `architecture.md`, `multibinary-multicore-plan.md`) | depends on Phase 1/2 behaviour being final |
+| 1 | DONE | pass internals + pass test suite | `crates/rticx-xbin-pass` only. `cargo fmt --check` clean; `cargo test -p rticx-xbin-pass` green (120 tests, 0 failed). `ipc_dispatchers` no longer consumed; `tests/ipc_dispatchers.rs` → `tests/dispatchers.rs`. |
+| 2 | DONE | mock distro + fixtures + H7 examples + driver tests | depends on Phase 1. `cargo test` and `cargo test -p rticx-xbin-driver` green; `make -C rticx-stm32h7 fmt-check build examples` exit 0 (both apps verified). Deviation: driver `tests/negative.rs` inline sources needed `ipc_dispatchers`→`dispatchers` (plan said no change; no test asserted the old error message). |
+| 3 | DONE | docs (`user-guide.md`, `architecture.md`, `multibinary-multicore-plan.md`) | depends on Phase 1/2 behaviour being final. Acceptance grep clean (text); the doc lives at `plans/multibinary-multicore-plan.md`, not `docs/` (plan path was stale) — updated there. `rticx-stm32h7/README.md` needed no change. |
 
 Status values: `TODO`, `IN PROGRESS`, `DONE`. Add a short note (branch/PR,
 deviations) in the last column when you finish a phase.

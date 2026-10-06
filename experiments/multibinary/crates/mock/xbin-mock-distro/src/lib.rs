@@ -217,10 +217,11 @@ fn declared_cores(args: &TokenStream2) -> u32 {
 ///
 /// A real distribution points `custom_interrupt_path` at its PAC; the mock
 /// provides the enum itself. Its variants are the last path segments of the
-/// application's `ipc_dispatchers` entries, so `#interrupt_type::#entry` in the
-/// generated router pend call resolves.
+/// application's `dispatchers` entries — both the cross-binary lines the xbin
+/// pass steals from the front and the local dispatchers it leaves behind — so
+/// `#interrupt_type::#entry` in the generated router pend call resolves.
 fn inject_interrupt_support(app_mod: &mut ItemMod, args: &TokenStream2) {
-    let variants = ipc_dispatcher_variants(args);
+    let variants = dispatcher_variants(args);
     let Some((_, items)) = app_mod.content.as_mut() else {
         return;
     };
@@ -233,12 +234,12 @@ fn inject_interrupt_support(app_mod: &mut ItemMod, args: &TokenStream2) {
     });
 }
 
-/// Collects the last path segment of every `ipc_dispatchers` entry.
-fn ipc_dispatcher_variants(args: &TokenStream2) -> Vec<syn::Ident> {
+/// Collects the last path segment of every `dispatchers` entry.
+fn dispatcher_variants(args: &TokenStream2) -> Vec<syn::Ident> {
     let Ok(attr) = RticAttr::parse_from_tokens(args.clone(), format_ident!("app")) else {
         return Vec::new();
     };
-    let Some(expr) = attr.get_expr("ipc_dispatchers") else {
+    let Some(expr) = attr.get_expr("dispatchers") else {
         return Vec::new();
     };
     let mut variants = Vec::new();
@@ -246,8 +247,8 @@ fn ipc_dispatcher_variants(args: &TokenStream2) -> Vec<syn::Ident> {
     variants
 }
 
-/// Recursively collects interrupt path idents from an `ipc_dispatchers`
-/// expression (flat or per-core nested arrays).
+/// Recursively collects interrupt path idents from a `dispatchers` expression
+/// (flat or per-core nested arrays).
 fn collect_dispatcher_idents(expr: &Expr, out: &mut Vec<syn::Ident>) {
     match expr {
         Expr::Array(array) => {

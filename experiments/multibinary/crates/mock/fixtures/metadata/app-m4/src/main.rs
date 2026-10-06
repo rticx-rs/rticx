@@ -9,7 +9,7 @@ use metadata_macro::app;
 
 #[app(
     device = fixture,
-    ipc_dispatchers = [IRQ_LINE_0]
+    dispatchers = [IRQ_LINE_0]
 )]
 mod app {
     trait RticSwTask {

@@ -24,7 +24,7 @@ use panic_halt as _;
 
 #[rticx_stm32h7::app(
     device = stm32h7::stm32h747cm4,
-    ipc_dispatchers = [USART3]
+    dispatchers = [USART3]
 )]
 pub mod app {
     use embedded_io::Write as _;

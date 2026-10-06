@@ -229,7 +229,7 @@ fn receiver_app() -> syn::ItemMod {
 }
 
 fn receiver_args() -> TokenStream {
-    quote!(device = mypac, ipc_dispatchers = [IRQ0])
+    quote!(device = mypac, dispatchers = [IRQ0])
 }
 
 /// The receiver fixture's topology: local core 0 -> global 1, global core 0
@@ -241,7 +241,7 @@ fn receiver_topology() -> AppTopology {
 /// Like [`receiver_args`] for an application without cross declarations: the
 /// pass-owned pool must be empty (one entry per cross line, M6.5-T1).
 fn receiver_args_without_cross_declarations() -> TokenStream {
-    quote!(device = mypac, ipc_dispatchers = [])
+    quote!(device = mypac, dispatchers = [])
 }
 
 /// The generated `ipc_types.rs` stand-in: the fixture view's `EncryptReq`
@@ -831,7 +831,7 @@ fn receiver_codegen_snapshot() {
     );
 
     // ---- line dispatcher (M6.5-T3) ----
-    // The dispatcher is bound to the line's `ipc_dispatchers` entry, the same
+    // The dispatcher is bound to the line's `dispatchers` entry, the same
     // interrupt the router pends.
     assert_section_present(
         &generated,
@@ -964,7 +964,7 @@ fn receiver_codegen_router_snapshot() {
 /// Receiver args for the two-line fixture: two cross lines on local core 0,
 /// listed in ascending `(source, priority)` order (M6.5-T1).
 fn two_line_receiver_args() -> TokenStream {
-    quote!(device = mypac, ipc_dispatchers = [IRQ0, IRQ1])
+    quote!(device = mypac, dispatchers = [IRQ0, IRQ1])
 }
 
 /// Receiver module with two tasks on two priority lines of the same
@@ -1291,7 +1291,7 @@ fn fifo_init_follows_the_producing_core() {
             }
         }
     };
-    let receiver_args = quote!(device = mypac, ipc_dispatchers = [IRQ0]);
+    let receiver_args = quote!(device = mypac, dispatchers = [IRQ0]);
     let receiver_topology = AppTopology::new(vec![2], vec![5]);
     let sender_mod: syn::ItemMod = syn::parse_quote! {
         mod app {}
@@ -1539,13 +1539,13 @@ fn stale_receiver_declarations_are_rejected() {
             "declares `spawn_by = 2`, which is not a known core",
         ),
         (
-            quote!(device = mypac, ipc_dispatchers = [IRQ0]),
+            quote!(device = mypac, dispatchers = [IRQ0]),
             AppTopology::new(vec![7], vec![0]),
             receiver_app(),
             "maps its local cores to [7], but the synced system view has [1]",
         ),
         (
-            quote!(device = mypac, ipc_dispatchers = [[], [IRQ0]]),
+            quote!(device = mypac, dispatchers = [[], [IRQ0]]),
             AppTopology::new(vec![1, 7], vec![0]),
             syn::parse_quote! {
                 mod app {

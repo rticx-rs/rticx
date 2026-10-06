@@ -98,7 +98,7 @@ by an out-of-tree distribution.
 
 ```
 Application sources (Rust)          IDL (types only)         Project + distro
-  #[app(device, ipc_dispatchers)]      ipc-types.toml          rticx.toml (apps, core_ids, external_cores)
+  #[app(device, dispatchers)]          ipc-types.toml          rticx.toml (apps, core_ids, external_cores)
   #[sw_task] receiver (spawn_by)                               distro capability binding (pools, M6.9)
           |                                |                       |
           v                                v                       v
@@ -144,7 +144,7 @@ Task::cross_spawn(input)
       → target's doorbell router IRQ                   (one per (source → target) pair)
           → push task id into its priority line's ready queue
           → __rticx_local_irq_pend[_core{N}](line IRQ)  (sw-pass pend fn)
-              → line dispatcher IRQ bound to an ipc_dispatchers entry
+              → line dispatcher IRQ bound to an entry stolen from `dispatchers`
                   → drain the ready queue, per task drain its FIFO until empty
                   → receiver task's exec(input)
 ```
@@ -191,7 +191,7 @@ the root generation.
 | | `fifo.rs` | Canonical in-region FIFO image and sizing (shared with the runtime) |
 | | `hash.rs` | Deterministic FNV-1a 64-bit hash (source/layout/topology) |
 | `rticx-xbin-pass` | `lib.rs` | `XbinPass`: mode detection (`RTICX_XBIN_META_OUT` / `RTICX_XBIN_SYSTEM`), view load, pass orchestration |
-| | `parse.rs` | `#[app]` args (`device`, optional `cores`, `ipc_dispatchers`; rejects the moved `core_ids`/`external_cores` and injects the resolved topology), native `#[sw_task]` receiver extraction + `spawn_by` resolution, receiver injection/strip |
+| | `parse.rs` | `#[app]` args (`device`, optional `cores`, the shared `dispatchers`; rejects the moved `core_ids`/`external_cores` and injects the resolved topology), native `#[sw_task]` receiver extraction + `spawn_by` resolution, receiver injection/strip, and the `dispatchers` steal (cross-line front consumed, remainder re-emitted) |
 | | `topology.rs` | Resolve an application's topology from the nearest `rticx.toml` (`AppTopology`, `resolve_app_topology`); shared with the distribution macros |
 | | `codegen.rs` | Sender stubs, receiver FIFO views, line dispatchers, doorbell routers, ring/read functions, init hooks, freshness anchors (`system.json`, `ipc_types.rs`, `rticx.toml`), `XbinPassBackend` |
 | | `priority.rs` | Build-phase priority-line validation over raw sw/async declarations + view receivers |
@@ -222,7 +222,7 @@ driver `tests/negative.rs` (missing sync, stale view/source, priority conflicts,
 unknown types, region overflow), driver `tests/verify.rs` (linked-ELF
 verification over `crates/mock/fixtures/e2e`: clean pass, injected pool overlap, standalone
 `verify`), driver `tests/driver.rs`/`tests/cli.rs`, pass
-`tests/{codegen,syntax,metadata,core_ids,ipc_dispatchers,init_hooks,receiver_compile}.rs`,
+`tests/{codegen,syntax,metadata,core_ids,dispatchers,init_hooks,receiver_compile}.rs`,
 proto `tests/{idl,layout,generate,generate_compile,alloc,merge,project,system,hash}.rs`,
 rt `tests/{fifo,state}.rs`, mock `tests/backend.rs`.
 
@@ -389,13 +389,15 @@ stream it hands to the core pass, so `rticx-core` needs no change.
   `core_ids` in a multi-binary project and that only a single-binary multicore
   application should declare it. With no governing `rticx.toml` the pass falls
   back to the identity mapping `0..cores` (default 1).
-- `ipc_dispatchers = [IRQ...]` / `[[IRQ...], ...]` — pass-owned per-core list of
-  interrupt lines used by the generated cross-binary **line dispatchers**; same
-  shape as `dispatchers` (a single array when `cores = 1`, one inner array per core
-  otherwise), one entry per `(source, priority)` line on that core in the
-  deterministic `(source, priority)` order. Consumed (stripped) by the multi-binary
-  pass before the core/software/async passes run, so no other pass sees those
-  entries; the list must be disjoint from `dispatchers`.
+- `dispatchers = [IRQ...]` / `[[IRQ...], ...]` — the shared per-core pool of
+  interrupt lines, one list per core (a single array when `cores = 1`). The
+  **cross-binary lines come first**: one entry per `(source, priority)` cross line
+  on that core in the deterministic `(source, priority)` order, consumed (stolen)
+  by the multi-binary pass for the generated **line dispatchers** before the
+  core/software/async passes run. The **remainder is re-emitted** for the
+  software/async pass, which assigns it to the local task priority groups exactly
+  as before; surplus entries are ignored. Within the stolen front the entries must
+  be unique (two cross lines cannot share one interrupt).
 
 Task `core` syntax stays local (`0..cores`). Natively `spawn_by` is a local index
 too; in an application whose `[[application]]` entry declares `external_cores`, the
@@ -596,8 +598,8 @@ longer requires cross-task declarations:
     user's `impl RticSwTask`; the native `spawn` queue is not generated for
     cross receivers — their inputs arrive through the FIFO;
   - one generated **line dispatcher** per `(source → target, priority)` line,
-    bound to the line's `ipc_dispatchers` entry:
-    `#[task(binds = <ipc_dispatchers entry>, priority = <line>, core = N,
+    bound to an entry stolen from the front of `dispatchers`:
+    `#[task(binds = <dispatchers entry>, priority = <line>, core = N,
     init = generated)]` implementing `RticTask`, whose `exec` drains the line's
     ready queue and, per popped task, drains its FIFO until empty (a duplicate
     notification finds an empty FIFO and is a no-op) and calls the receiver
@@ -739,8 +741,8 @@ machinery (no `doorbell_setup` call remains).
   to compile) and `shared` pass-through; priority-line validation tests (cross-bin
   vs core-local sw, vs `#[async_task]`, vs in-app `spawn_by`, cross-producer
   collision error, same-producer sharing, deterministic doorbell numbering);
-  `ipc_dispatchers` pool tests (both shapes, line count, duplicates, overlap
-  with `dispatchers`); router tests (id→line match arm per view task, unknown
+  `dispatchers` pool tests (both shapes, prefix stolen, remainder preserved,
+  too-few error, duplicates in the stolen front); router tests (id→line match arm per view task, unknown
   ids ignored, coalesced/duplicate ids lose no spawns, ready-queue sizing);
   codegen snapshots (auto-generated sender stub, receiver dispatcher, ring and
   read-doorbell functions, router, FIFO views, topology-hash mismatch); JSON
@@ -804,15 +806,16 @@ the H7 distribution must be written against:
 - **User guide (`docs/user-guide.md`):** install `cargo-xbin`; enable the
   distribution's `swtasks` feature; write `rticx.toml` and `ipc-types.toml`;
   declare receivers as native `#[sw_task]` items (`impl RticSwTask`, `SpawnInput`)
-  whose `spawn_by` names the producer core and list one `ipc_dispatchers` entry per
-  cross line (producer stubs are generated by the pass; producer sources only call
-  `Task::cross_spawn`); `cargo xbin build`; run; common errors and fixes. Async
+  whose `spawn_by` names the producer core and put one `dispatchers` entry per
+  cross line at the front of the shared list (producer stubs are generated by the
+  pass; producer sources only call `Task::cross_spawn`); `cargo xbin build`; run;
+  common errors and fixes. Async
   cross-binary tasks are documented as not yet supported.
 - **Architecture doc (`docs/architecture.md`):** phases, JSON schema, memory/priority
   rules, locking, boot and reset, failure modes, cache/MPU notes, the native
   `#[sw_task]` declaration model (global `spawn_by` resolution for apps declaring
   `external_cores`), and the dispatch model (per-pair doorbell routers,
-  `ipc_dispatchers` line dispatchers, task-id routing).
+  shared-`dispatchers` line dispatchers, task-id routing).
 
 ---
 
@@ -1060,7 +1063,7 @@ distro may use them internally, but no new framework mechanism).
 | Risk / open item | Mitigation / note |
 |---|---|
 | `ipc_types` generation location | `target/rticx-xbin/ipc_types.rs` next to `system.json`; regenerated by `sync`, never checked in |
-| Doorbell/IRQ availability per distro | One doorbell IRQ per producer pair plus one dispatcher IRQ per line, supplied by the user's `ipc_dispatchers` list; the router coalesces all lines of a pair onto that one IRQ |
+| Doorbell/IRQ availability per distro | One doorbell IRQ per producer pair plus one dispatcher IRQ per line, supplied by the cross-line front of the user's `dispatchers` list; the router coalesces all lines of a pair onto that one IRQ |
 | Cacheable-region fallback correctness | v1 requires a Normal, Non-cacheable, Shareable pool; there are no cache hooks and a cacheable mapping is unsupported (the transport body would own any maintenance, D2) |
 | Staleness under plain `cargo build` | Only the changed app detects its own staleness; `cargo xbin build` is the safe path |
 | Reimplemented internals drift from `rticx-sw-pass` | `TODO(extract)` markers; periodic manual comparison; possible later shared crate |
@@ -1072,7 +1075,7 @@ distro may use them internally, but no new framework mechanism).
 | Doorbell notification loss/coalescing | The producer sets the task id in the pair's doorbell word and then triggers the IRQ; the router drains until no id remains, and duplicate/coalesced ids are idempotent because the line dispatcher drains FIFOs until empty |
 | Router ready-queue overflow | Sized to the sum of the line's task capacities: each spawn adds exactly one FIFO element and one ready entry, so it cannot overflow |
 | Router priority vs its dispatchers | Each router runs at the highest line priority of its pair, so it is at least as urgent as every dispatcher it pends; enqueueing happens before the pend |
-| Project-dependent `ipc_dispatchers` count | Another binary adding a producer adds a line to the receiver; the receiver can derive its line count from its own declarations, and `build` fails with a precise error naming the missing line when `ipc_dispatchers` is too short |
+| Project-dependent `dispatchers` cross-line count | Another binary adding a producer adds a line to the front of the receiver's `dispatchers`; the receiver can derive its cross-line count from its own declarations, and `build` fails with a precise error naming the missing line when the front is too short. Because the front is stolen before the software/async pass runs, a shortfall for the **local** task dispatchers is reported by that pass with only the leftover remainder as `found`, so its count is confusingly low (accepted; a combined-demand check is future work) |
 | Renode does not model the M7 D-cache | A green Renode run validates boot sequencing, transport and interrupt routing only; the non-cacheable-region/MPU requirement needs hardware evidence or static review (§11.1) |
 | Renode platform drift from upstream | The in-tree copy records its source commit in `renode/README.md`; the upstream simulation repository keeps the canonical Peripheral-Script sources and Python/Robot tests, so platform changes are re-copied deliberately |
 | H7 doorbell wiring | HSEM (IRQ 125/126) and per-core-masked EXTI lines are both available on the harness; the portable per-pair doorbell word + router IRQ fits both, and the router IRQ is armed through the core pass's used-IRQ machinery |
@@ -1109,12 +1112,14 @@ distro may use them internally, but no new framework mechanism).
   element per spawn input.
 - **Doorbell** — hardware signal (mailbox/IPI/HSEM) that wakes a target's
   doorbell router for one `(source → target)` pair.
-- **`ipc_dispatchers`** — pass-owned per-core `#[app]` list of interrupt lines
-  used by the generated cross-binary line dispatchers, one entry per
-  `(source, priority)` line.
-- **Line dispatcher** — the generated hardware task bound to an `ipc_dispatchers`
-  entry at a line's priority; it drains its ready queue and the task FIFOs and
-  calls the receiver tasks' `exec`.
+- **`dispatchers`** — the shared per-core `#[app]` pool of interrupt lines. The
+  cross-binary lines come first (one entry per `(source, priority)` line, stolen
+  by the xbin pass for the generated line dispatchers), followed by the local
+  task dispatchers (one per priority group, assigned by the software/async pass
+  from the re-emitted remainder).
+- **Line dispatcher** — the generated hardware task bound to a `dispatchers`
+  entry from the stolen cross-line front at a line's priority; it drains its
+  ready queue and the task FIFOs and calls the receiver tasks' `exec`.
 - **Doorbell router** — the generated per-`(source → target)` hardware task bound
   to the pair's doorbell IRQ; it reads task ids, enqueues the task in its line's
   ready queue and pends the line dispatcher.

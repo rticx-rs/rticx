@@ -231,13 +231,13 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
     view
 }
 
-/// Receiver `#[app]` arguments of `app-m4`: `ipc_dispatchers` holds one cross
+/// Receiver `#[app]` arguments of `app-m4`: `dispatchers` holds one cross
 /// line per `(source, priority)` pair of `tasks`, in order (M7-T2: the core
 /// mapping comes from `rticx.toml`, not from `#[app]`).
 fn receiver_args(ipc: TokenStream) -> TokenStream {
     quote!(
         device = mypac,
-        ipc_dispatchers = #ipc
+        dispatchers = #ipc
     )
 }
 

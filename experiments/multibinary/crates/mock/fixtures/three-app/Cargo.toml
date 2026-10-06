@@ -15,7 +15,7 @@
 #   spawns;
 # - `app-m4` (bin `m4`, global core id 1) declares four native `#[sw_task]`
 #   receivers on distinct priority lines (two per source core), each with its
-#   own `ipc_dispatchers` entry, and produces `AckTask` (`1 -> 0`) and
+#   own `dispatchers` entry, and produces `AckTask` (`1 -> 0`) and
 #   `StatusTask` (`1 -> 2`);
 # - `xbin-mock-distro` is the `#[app]` macro of the shared mock
 #   distribution (under `crates/mock/` in the experimental workspace). It runs

@@ -11,16 +11,16 @@
 //!   core 0 over `(0 -> 2)`, and `StatusTask` (priority 3), spawned by global
 //!   core 1 over `(1 -> 2)`.
 //!
-//! `ipc_dispatchers` lists one interrupt per cross line in ascending
-//! `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the `(0, 5)`
-//! dispatcher and `XBIN_IPC_LINE_1` the `(1, 3)` one (M6.5-T1).
+//! `dispatchers` lists the cross-binary lines first: one interrupt per cross
+//! line in ascending `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the
+//! `(0, 5)` dispatcher and `XBIN_IPC_LINE_1` the `(1, 3)` one (M6.5-T1).
 #![no_main]
 
 use xbin_mock_distro::app;
 
 #[app(
     device = mock_pac,
-    ipc_dispatchers = [XBIN_IPC_LINE_0, XBIN_IPC_LINE_1]
+    dispatchers = [XBIN_IPC_LINE_0, XBIN_IPC_LINE_1]
 )]
 mod app {
     /// Receiver of `ConfigTask`, spawned by global core 0.

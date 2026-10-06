@@ -16,18 +16,18 @@
 //! - `AckTask` (priority 3) on global core 0 through `(1 -> 0)`;
 //! - `StatusTask` (priority 3) on global core 2 through `(1 -> 2)`.
 //!
-//! `ipc_dispatchers` lists one interrupt per cross line in ascending
-//! `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the `(0, 3)`
-//! dispatcher, `XBIN_IPC_LINE_1` the `(0, 5)` one, `XBIN_IPC_LINE_2` the
-//! `(2, 4)` one and `XBIN_IPC_LINE_3` the `(2, 6)` one (M6.5-T1). The lines are
-//! disjoint across sources, which the pass enforces at build (M6-T1).
+//! `dispatchers` lists the cross-binary lines first: one interrupt per cross
+//! line in ascending `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the
+//! `(0, 3)` dispatcher, `XBIN_IPC_LINE_1` the `(0, 5)` one, `XBIN_IPC_LINE_2`
+//! the `(2, 4)` one and `XBIN_IPC_LINE_3` the `(2, 6)` one (M6.5-T1). The lines
+//! are disjoint across sources, which the pass enforces at build (M6-T1).
 #![no_main]
 
 use xbin_mock_distro::app;
 
 #[app(
     device = mock_pac,
-    ipc_dispatchers = [
+    dispatchers = [
         XBIN_IPC_LINE_0,
         XBIN_IPC_LINE_1,
         XBIN_IPC_LINE_2,

@@ -88,13 +88,13 @@ fn mapped_args() -> TokenStream {
 /// Like [`mapped_args`] with the cross lines of the receiver fixtures: local
 /// core 0 carries `(7, 1)`, local core 1 carries `(7, 3)` (M6.5-T1).
 fn receiver_args() -> TokenStream {
-    quote!(device = mypac, ipc_dispatchers = [[IRQ_IN_0], [IRQ_IN_1]])
+    quote!(device = mypac, dispatchers = [[IRQ_IN_0], [IRQ_IN_1]])
 }
 
 /// Like [`mapped_args`] with the cross line of a single receiver on local core
 /// 0 (`(7, 3)`); local core 1 has no cross line.
 fn one_line_args() -> TokenStream {
-    quote!(device = mypac, ipc_dispatchers = [[IRQ_IN_0], []])
+    quote!(device = mypac, dispatchers = [[IRQ_IN_0], []])
 }
 
 #[test]
@@ -622,9 +622,10 @@ fn other_distributions_only_warn_about_app_extensions() {
         "{code}"
     );
 
-    // With the extension pass bound the arguments are consumed, so no warning
-    // items are generated (M7-T2: `core_ids`/`external_cores` are resolved
-    // from `rticx.toml`).
+    // With the extension pass bound the extension-owned arguments are
+    // resolved/consumed, but the removed `ipc_dispatchers` key is not: it stays
+    // in the arguments and the core pass warns about it like any other unknown
+    // `#[app]` argument (M6.5-T1).
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(XbinPass::disabled().with_topology(AppTopology::identity(1)));
     let code = builder
@@ -635,7 +636,10 @@ fn other_distributions_only_warn_about_app_extensions() {
         )
         .to_string();
     assert!(!code.contains("compile_error"), "{code}");
-    assert!(!code.contains("rticx_warn_unknown_app"), "{code}");
+    assert!(
+        code.contains("rticx_warn_unknown_app_ipc_dispatchers"),
+        "the removed key is left for the core pass to warn about: {code}"
+    );
 }
 
 #[test]

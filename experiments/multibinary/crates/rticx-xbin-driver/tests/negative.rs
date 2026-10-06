@@ -267,7 +267,7 @@ use metadata_macro::app;
 
 #[app(
     device = fixture,
-    ipc_dispatchers = [IRQ0, IRQ1]
+    dispatchers = [IRQ0, IRQ1]
 )]
 mod app {
     trait RticSwTask {
@@ -303,7 +303,7 @@ use metadata_macro::app;
 
 #[app(
     device = fixture,
-    ipc_dispatchers = [IRQ0]
+    dispatchers = [IRQ0]
 )]
 mod app {
     trait RticSwTask {
