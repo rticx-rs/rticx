@@ -1,17 +1,15 @@
-//! Phase-2 code generation for the cross-binary tasks of this application
-//! (M3-T1 sender side, M3-T2 receiver side).
+//! Phase-2 code generation for the cross-binary tasks of this application.
 //!
 //! In codegen mode the pass has loaded the driver-generated `system.json`
 //! and emits code from it:
 //!
 //! - for every view task whose `spawner_core` belongs to this application
-//!   (M5.5: the producer declares nothing; the stubs are generated):
+//!   (the producer declares nothing; the stubs are generated):
 //!   - one **ring function** per `(source -> target)` pair the application
 //!     produces into: `__rticx_xbin_ring_{source}_{target}(task_id)` publishes
 //!     the task id to the target's doorbell and triggers its router. The pass
 //!     generates only the documented signature; the body is the distribution's
-//!     transport, filled through [`XbinPassBackend::ring_doorbell_fn`]
-//!     (M6.5-T2);
+//!     transport, filled through [`XbinPassBackend::ring_doorbell_fn`];
 //!   - a hidden, argument-less **FIFO view** helper returning the
 //!     `rticx_xbin_rt::Fifo` of the task at its synced address: the literal
 //!     pool base recorded in `system.json` plus the task offset, or the
@@ -28,8 +26,7 @@
 //!     - `Err(Some(input))`: nothing was enqueued (the FIFO is full or the
 //!       caller does not run on the expected core); retry later or raise
 //!       `capacity`.
-//! - for every native `#[sw_task]` cross-binary receiver of this application
-//!   (M3-T2, M5.5, M6.5-T3):
+//! - for every native `#[sw_task]` cross-binary receiver of this application:
 //!   - a hidden **FIFO view** helper like the sender's, but resolving the
 //!     consumer view of the pool (`base_from_target`);
 //!   - a const assertion that the receiver's `<Task as
@@ -60,7 +57,7 @@
 //! task static, runs the user's `impl RticSwTask`, and checks the trait
 //! implementation — no core-pass changes are required.
 //!
-//! - **Init hooks** (M3-T3, M6-T1): codegen mode wires the shared-memory
+//! - **Init hooks**: codegen mode wires the shared-memory
 //!   configuration and the FIFO initializers into the generated entry
 //!   functions through [`rticx_core::RticPass::main_injection`]:
 //!   - [`XbinPassBackend::configure_shared_memory`] is inlined on every core at
@@ -70,8 +67,8 @@
 //!   - `__rticx_xbin_init_fifos_core<N>` is generated for every local core
 //!     that produces cross-binary tasks and runs at `BeforePostInit`: it
 //!     zeroes the ring indices of the core's own FIFOs, so a topology whose
-//!     owner core is not an endpoint of a pool initializes correctly
-//!     (M6-T1). The producer is always an endpoint of its pool.
+//!     owner core is not an endpoint of a pool initializes correctly. The
+//!     producer is always an endpoint of its pool.
 //!
 //!   Boot sequencing itself is distribution-owned (for example the H7
 //!   release of the M4 core), typically through
@@ -83,7 +80,7 @@
 //! future `Producer` shared-resource API (SRP) can replace it in one place.
 //! The consumer side needs no lock: each FIFO has one producer core and one
 //! line dispatcher, which runs under its line interrupt at a priority no
-//! higher than the router that feeds its ready queue (M6.5-T3).
+//! higher than the router that feeds its ready queue.
 //!
 //! The generated code only uses the frozen public surface of `rticx-core`
 //! (`__rticx_interrupt_free`, `main_injection`), the injected `ipc_types`
@@ -103,6 +100,7 @@ use rticx_xbin_proto::{
 use syn::{Item, ItemMod, LitInt, LitStr, Type};
 
 use crate::binding::{IpcPool, PhysicalCore};
+use crate::error;
 use crate::parse::AppExtensions;
 
 /// Code-generation configuration of the cross-binary extension.
@@ -128,9 +126,9 @@ pub trait XbinPassBackend {
     ///
     /// `cargo xbin sync` writes the IDL types to `<output dir>/ipc_types.rs`
     /// and the pass re-emits them into the `#[app]` module as
-    /// `pub mod <ipc_types>` (M1-T7). The generated producer stubs reach the
+    /// `pub mod <ipc_types>`. The generated producer stubs reach the
     /// IDL input type as `#ipc_types_path::<InputType>` (the producer declares
-    /// nothing, M5.5). The pass injects a module, so only a single-segment path
+    /// nothing). The pass injects a module, so only a single-segment path
     /// is supported; a distribution that needs a nested path must keep the
     /// default.
     fn ipc_types_path(&self) -> syn::Path {
@@ -138,7 +136,7 @@ pub trait XbinPassBackend {
     }
 
     /// Expression of the global core id of the core executing the generated
-    /// code (D5). Required.
+    /// code. Required.
     ///
     /// `cross_spawn` compares it with the task's synced `source` core and
     /// returns `Err(Some(input))` when they differ, so a multi-core
@@ -151,7 +149,7 @@ pub trait XbinPassBackend {
     fn current_global_core_id(&self) -> syn::Expr;
 
     /// Statement(s) configuring local core `local_core`'s view of every IPC
-    /// pool before any shared access (D1).
+    /// pool before any shared access.
     ///
     /// Memory attributes are per-core, so each core makes its own view of the
     /// pools effectively non-cacheable and shared. The pass inlines the returned
@@ -171,7 +169,7 @@ pub trait XbinPassBackend {
     }
 
     /// Overrides the pool base address of the `(source -> target)` direction
-    /// as seen by endpoint `view_core` (D3).
+    /// as seen by endpoint `view_core`.
     ///
     /// The default is `None`: the pass emits the literal address recorded in
     /// `system.json`, which is what a real fixed-address distribution (the
@@ -186,7 +184,7 @@ pub trait XbinPassBackend {
     }
 
     /// Emits the producer-side ring function of the `(source -> target)`
-    /// doorbell pair (M6.5-T2).
+    /// doorbell pair.
     ///
     /// The pass generates one ring function per pair producing cross-binary
     /// tasks and hands a template with the documented signature
@@ -200,17 +198,17 @@ pub trait XbinPassBackend {
     /// per-pair shared atomic word is the portable choice) and trigger the
     /// router interrupt. `Err(())` reports a notification that could not be
     /// delivered; the spawn input is **already enqueued** in the shared pool,
-    /// so `cross_spawn` maps it to `Err(None)` (D2).
+    /// so `cross_spawn` maps it to `Err(None)`.
     ///
     /// The transport body owns any cache maintenance a cacheable pool mapping
     /// needs: v1 requires an effectively non-cacheable and shared pool, so a
     /// cacheable mapping without transport-owned maintenance is unsupported
     /// until a distribution appears that maintains the caches explicitly
-    /// around every shared access (D2).
+    /// around every shared access.
     fn ring_doorbell_fn(&self, source: u32, target: u32, template: syn::ItemFn) -> syn::ItemFn;
 
     /// Identifier of the interrupt handler bound to the `(source -> target)`
-    /// doorbell — the target's router ISR (M6.5-T3).
+    /// doorbell — the target's router ISR.
     ///
     /// One router is generated per pair; it is a `#[task(binds = <ident>, …)]`
     /// at the highest priority line of the pair, so the identifier must
@@ -219,7 +217,7 @@ pub trait XbinPassBackend {
     fn doorbell_interrupt(&self, target: u32, source: u32) -> syn::Ident;
 
     /// Emits the target-side read function of the `(source -> target)`
-    /// doorbell pair (M6.5-T3).
+    /// doorbell pair.
     ///
     /// The pass generates one read function per pair this application
     /// receives into and hands a template with the documented signature
@@ -249,13 +247,12 @@ pub trait XbinPassBackend {
         None
     }
 
-    /// Physical core this application's local core `local_core` runs on
-    /// (M6.9-T1).
+    /// Physical core this application's local core `local_core` runs on.
     ///
     /// The id is a distribution vocabulary, not a project one: two
     /// applications whose cores run on the same physical core report the same
     /// id even when their local indexes differ, and the driver matches the two
-    /// endpoints of a dual through it (M6.9-T4).
+    /// endpoints of a dual through it.
     ///
     /// The default is the identity mapping, which is correct for a
     /// distribution whose physical-core ids coincide with the local indexes
@@ -265,13 +262,13 @@ pub trait XbinPassBackend {
     }
 
     /// Every IPC pool the physical core running local core `local_core` can
-    /// reach, from this side of the dual (M6.9-T1).
+    /// reach, from this side of the dual.
     ///
     /// The returned pools are the distribution's adjacency. An edge `{A, B}`
     /// exists iff `A` reports a pool whose peer is `B` **and** `B` reports the
     /// matching pool (the same [`PoolId`](crate::PoolId) with the opposite
     /// physical core); the driver builds the global graph from the two
-    /// manifests and rejects a used direction with no pool path (M6.9-T4).
+    /// manifests and rejects a used direction with no pool path.
     /// Both directions of a dual allocate inside one shared
     /// [`budget`](IpcPool::budget).
     ///
@@ -282,7 +279,7 @@ pub trait XbinPassBackend {
     }
 }
 
-/// The init hooks generated for one application (M3-T3).
+/// The init hooks generated for one application.
 pub(crate) struct InitHooks {
     /// Hook functions appended to the `#[app]` module.
     pub(crate) items: Vec<Item>,
@@ -296,13 +293,13 @@ pub(crate) struct HookPlan {
     /// Global core id of each local core index (`core_ids[local]`).
     global_ids: Vec<u32>,
     /// Local cores that produce at least one view task, running
-    /// `__rticx_xbin_init_fifos_core<N>` before their `post_init` (M6-T1).
+    /// `__rticx_xbin_init_fifos_core<N>` before their `post_init`.
     fifo_locals: Vec<u32>,
 }
 
 impl HookPlan {
     /// Returns the tokens to inject at `point` for the entry function of the
-    /// local `core`, using `backend` for the shared-memory configuration (D1).
+    /// local `core`, using `backend` for the shared-memory configuration.
     pub(crate) fn injection(
         &self,
         point: &rticx_core::MainInjectionPoint,
@@ -313,14 +310,14 @@ impl HookPlan {
             rticx_core::MainInjectionPoint::BeforeInit => {
                 self.global_ids.get(core as usize)?;
                 // The distribution's configuration tokens are inlined: there
-                // is no generated wrapper function anymore (D1).
+                // is no generated wrapper function anymore.
                 backend.configure_shared_memory(core)
             }
             rticx_core::MainInjectionPoint::BeforePostInit => {
                 self.global_ids.get(core as usize)?;
                 if self.fifo_locals.contains(&core) {
                     // Each FIFO's indices are zeroed by its producer core,
-                    // before its `post_init` can spawn (M6-T1).
+                    // before its `post_init` can spawn.
                     let init_fn = format_ident!("__rticx_xbin_init_fifos_core{core}");
                     Some(quote! {
                         #init_fn();
@@ -334,7 +331,7 @@ impl HookPlan {
     }
 }
 
-/// Generates the producer-side items of an application (M5.5, M6.5-T2): for
+/// Generates the producer-side items of an application: for
 /// every view task whose `spawner_core` is one of its cores, the generated
 /// `pub struct <Task>;` sender stub, its hidden FIFO view and its
 /// `cross_spawn` impl — plus one ring function per `(source -> target)` pair
@@ -368,10 +365,10 @@ pub(crate) fn generate_sender_items(
     };
 
     let mut items = Vec::with_capacity(stubs.len() * 3 + 1);
-    let mut pairs = BTreeSet::new();
-    for task in &stubs {
-        pairs.insert((task.fifo.source, task.fifo.target));
-    }
+    let pairs: BTreeSet<(u32, u32)> = stubs
+        .iter()
+        .map(|task| (task.fifo.source, task.fifo.target))
+        .collect();
     for (source, target) in pairs {
         items.push(generate_ring_function(source, target, backend));
     }
@@ -382,8 +379,8 @@ pub(crate) fn generate_sender_items(
     Ok(items)
 }
 
-/// Generates the producer ring function of one `(source -> target)` pair
-/// (M6.5-T2): the pass hands [`XbinPassBackend::ring_doorbell_fn`] a template
+/// Generates the producer ring function of one `(source -> target)` pair:
+/// the pass hands [`XbinPassBackend::ring_doorbell_fn`] a template
 /// with the documented signature and appends the filled function to the
 /// `#[app]` module.
 fn generate_ring_function(source: u32, target: u32, backend: &dyn XbinPassBackend) -> Item {
@@ -391,7 +388,7 @@ fn generate_ring_function(source: u32, target: u32, backend: &dyn XbinPassBacken
     let doc = format!(
         "Publishes `task_id` to the `({source} -> {target})` doorbell and triggers the target's \
          router interrupt. The distribution fills the body through \
-         `XbinPassBackend::ring_doorbell_fn` (M6.5-T2)."
+         `XbinPassBackend::ring_doorbell_fn`."
     );
     let template: syn::ItemFn = syn::parse_quote! {
         #[doc = #doc]
@@ -407,8 +404,26 @@ fn generate_ring_function(source: u32, target: u32, backend: &dyn XbinPassBacken
     Item::Fn(backend.ring_doorbell_fn(source, target, template))
 }
 
+/// Name and namespace of a `#[app]` item that can collide with a generated
+/// item: `true` for the type namespace (modules, traits, types), `false` for
+/// the value namespace (functions, consts, statics).
+fn item_name(item: &Item) -> Option<(&Ident, bool)> {
+    match item {
+        Item::Mod(item) => Some((&item.ident, true)),
+        Item::Trait(item) => Some((&item.ident, true)),
+        Item::Struct(item) => Some((&item.ident, true)),
+        Item::Enum(item) => Some((&item.ident, true)),
+        Item::Union(item) => Some((&item.ident, true)),
+        Item::Type(item) => Some((&item.ident, true)),
+        Item::Fn(item) => Some((&item.sig.ident, false)),
+        Item::Const(item) => Some((&item.ident, false)),
+        Item::Static(item) => Some((&item.ident, false)),
+        _ => None,
+    }
+}
+
 /// Rejects a generated sender stub whose name collides with a user item of
-/// the `#[app]` module (M5.5).
+/// the `#[app]` module.
 ///
 /// The producer source never declares the stub, so any same-named item is a
 /// collision; naming the task in the error makes the generated name easy to
@@ -417,32 +432,23 @@ fn check_stub_collision(app_mod: &ItemMod, task: &TaskEntry) -> syn::Result<()> 
     let Some((_, items)) = app_mod.content.as_ref() else {
         return Ok(());
     };
-    for item in items {
-        let name = match item {
-            Item::Struct(item) => Some(&item.ident),
-            Item::Enum(item) => Some(&item.ident),
-            Item::Union(item) => Some(&item.ident),
-            Item::Type(item) => Some(&item.ident),
-            Item::Trait(item) => Some(&item.ident),
-            Item::Fn(item) => Some(&item.sig.ident),
-            Item::Const(item) => Some(&item.ident),
-            Item::Static(item) => Some(&item.ident),
-            _ => None,
-        };
-        if name.is_some_and(|name| *name == task.name) {
-            return Err(error(format!(
-                "the cross-binary pass generates `pub struct {};` for the task spawned by \
-                 global core {}, but the `#[app]` module already defines an item with that \
-                 name; rename the item",
-                task.name, task.spawner_core
-            )));
-        }
+    if items
+        .iter()
+        .filter_map(item_name)
+        .any(|(name, _)| *name == task.name)
+    {
+        return Err(error(format!(
+            "the cross-binary pass generates `pub struct {};` for the task spawned by \
+             global core {}, but the `#[app]` module already defines an item with that \
+             name; rename the item",
+            task.name, task.spawner_core
+        )));
     }
     Ok(())
 }
 
 /// Generates the receiver items for every native cross-binary receiver of an
-/// application (M3-T2, M5.5, M6.5-T3): the `SpawnInput: CrossCoreMessage`
+/// application: the `SpawnInput: CrossCoreMessage`
 /// assertion, one hidden FIFO view per task, one **line dispatcher** per
 /// `(source -> target, priority)` line bound to its stolen `dispatchers` entry
 /// and draining the line's ready queue, and one **doorbell router** per
@@ -491,7 +497,7 @@ pub(crate) fn generate_receiver_items(
     // ~ The stolen front of the shared `dispatchers` list assigns one interrupt
     // per line in ascending `(source, priority)` order (`steal_dispatchers`
     // checked the count in `run_pass`), so the line's index in its core's list
-    // names the dispatcher's interrupt line (M6.5-T1/T4).
+    // names the dispatcher's interrupt line.
     let irq_indices = line_irq_indices(receivers);
 
     // ~ One line dispatcher per `(source, target, priority)`: the key of the
@@ -519,7 +525,7 @@ pub(crate) fn generate_receiver_items(
 
     // ~ The receiver's `SpawnInput` must be a cross-core message; a generated
     // const assertion pins the guarantee to the injected `CrossCoreMessage`
-    // marker trait (M5.5, M1-T7) instead of relying on a bound in its
+    // marker trait instead of relying on a bound in its
     // definition.
     let assertions = receivers
         .iter()
@@ -531,7 +537,7 @@ pub(crate) fn generate_receiver_items(
         })
         .collect::<syn::Result<Vec<TokenStream>>>()?;
     let assert_doc = "Compile-time assertion that every cross-binary receiver's `SpawnInput` \
-         implements `CrossCoreMessage` (M5.5).";
+         implements `CrossCoreMessage`.";
     let mut items = Vec::with_capacity(receivers.len() * 2 + groups.len() * 3 + 1);
     items.push(syn::parse_quote! {
         #[doc = #assert_doc]
@@ -550,7 +556,7 @@ pub(crate) fn generate_receiver_items(
     }
 
     // ~ One router per `(source, target)` pair: it routes every task id of
-    // the pair's doorbell word to its line (M6.5-T3).
+    // the pair's doorbell word to its line.
     let mut pairs: BTreeMap<(u32, u32), Vec<&LineGroup<'_>>> = BTreeMap::new();
     for group in groups.values() {
         pairs
@@ -617,7 +623,7 @@ impl LineGroup<'_> {
     }
 
     /// The ready-queue depth: one slot per pending notification plus the ring
-    /// buffer's spare slot (M6.5-T3).
+    /// buffer's spare slot.
     ///
     /// Each spawn enqueues exactly one FIFO element before ringing, so the
     /// line's pending notifications are bounded by the sum of its tasks'
@@ -635,7 +641,7 @@ impl LineGroup<'_> {
 /// `dispatchers` list.
 ///
 /// Mirrors [`crate::parse::steal_dispatchers`]: the stolen prefix lists each
-/// core's distinct `(source, priority)` lines in ascending order (M6.5-T1),
+/// core's distinct `(source, priority)` lines in ascending order,
 /// and a task's line is the `(spawn_by, priority)` pair of its declaration.
 fn line_irq_indices(receivers: &[ReceiverDecl]) -> BTreeMap<(u32, u32, u16), usize> {
     let mut per_core: BTreeMap<u32, Vec<(u32, u16)>> = BTreeMap::new();
@@ -656,7 +662,7 @@ fn line_irq_indices(receivers: &[ReceiverDecl]) -> BTreeMap<(u32, u32, u16), usi
     indices
 }
 
-/// Generates the items of one `(source -> target, priority)` line (M6.5-T3):
+/// Generates the items of one `(source -> target, priority)` line:
 /// the hidden FIFO views, the task enum and ready queue shared with the
 /// router, and the line dispatcher.
 ///
@@ -708,7 +714,7 @@ fn generate_line_items(
 
     let enum_doc = format!(
         "Tasks of the `({} -> {})` priority-{} line: the router enqueues one \
-         variant per notification (M6.5-T3).",
+         variant per notification.",
         line.source, line.target, line.priority
     );
     items.push(syn::parse_quote! {
@@ -723,7 +729,7 @@ fn generate_line_items(
     let queue_doc = format!(
         "Ready queue of the `({} -> {})` priority-{} line: the router produces, \
          the dispatcher consumes. Sized to the sum of the line's task capacities \
-         plus the ring buffer's spare slot, so it cannot overflow (M6.5-T3).",
+         plus the ring buffer's spare slot, so it cannot overflow.",
         line.source, line.target, line.priority
     );
     items.push(syn::parse_quote! {
@@ -735,7 +741,7 @@ fn generate_line_items(
 
     let dispatcher_doc = format!(
         "Line dispatcher of the `({} -> {})` priority-{} line: drains the \
-         line's ready queue and FIFOs and runs the receiver tasks (M6.5-T3).",
+         line's ready queue and FIFOs and runs the receiver tasks.",
         line.source, line.target, line.priority
     );
     items.push(syn::parse_quote! {
@@ -762,7 +768,7 @@ fn generate_line_items(
     Ok(items)
 }
 
-/// Generates the router of one `(source -> target)` pair (M6.5-T3).
+/// Generates the router of one `(source -> target)` pair.
 ///
 /// The router is a hardware task bound to the pair's doorbell at the highest
 /// line priority of the pair: it loops reading task ids from the pair's
@@ -818,7 +824,7 @@ fn generate_router_items(
     let doc = format!(
         "Doorbell router of the `({source} -> {target})` pair: reads task ids \
          from the pair's doorbell word, enqueues each task in its line's ready \
-         queue and pends that line's dispatcher (M6.5-T3). Unknown ids are \
+         queue and pends that line's dispatcher. Unknown ids are \
          ignored."
     );
     Ok(vec![
@@ -834,7 +840,7 @@ fn generate_router_items(
                 fn exec(&mut self) {
                     // The router drains the pair's doorbell word; duplicate and
                     // coalesced ids lose no spawns because each line
-                    // dispatcher drains its FIFOs until empty (M6.5-T3).
+                    // dispatcher drains its FIFOs until empty.
                     while let Some(__rticx_xbin_task_id) = #read_fn() {
                         match __rticx_xbin_task_id {
                             #(#arms)*
@@ -847,15 +853,15 @@ fn generate_router_items(
     ])
 }
 
-/// Generates the target-side read function of one `(source -> target)` pair
-/// (M6.5-T3): the pass hands [`XbinPassBackend::read_doorbell_msg_fn`] a
+/// Generates the target-side read function of one `(source -> target)` pair:
+/// the pass hands [`XbinPassBackend::read_doorbell_msg_fn`] a
 /// template with the documented signature and appends the filled function.
 fn generate_read_function(source: u32, target: u32, backend: &dyn XbinPassBackend) -> Item {
     let fn_ident = format_ident!("__rticx_xbin_read_{source}_{target}");
     let doc = format!(
         "Returns the next pending task id of the `({source} -> {target})` doorbell, or `None` \
          when it is empty. The distribution fills the body through \
-         `XbinPassBackend::read_doorbell_msg_fn` (M6.5-T3)."
+         `XbinPassBackend::read_doorbell_msg_fn`."
     );
     let template: syn::ItemFn = syn::parse_quote! {
         #[doc = #doc]
@@ -890,7 +896,7 @@ fn interrupt_path(
 /// Name of the software pass's core-local interrupt-pending function.
 ///
 /// Single-core applications keep the plain name; multi-core applications
-/// append the local core index (M6.5-T3).
+/// append the local core index.
 // TODO(extract): mirrors `rticx_sw_pass`'s `local_pend_fn_ident`.
 fn local_pend_fn_ident(core: u32, cores: u32) -> Ident {
     if cores == 1 {
@@ -900,13 +906,13 @@ fn local_pend_fn_ident(core: u32, cores: u32) -> Ident {
     }
 }
 
-/// Generates the init hooks of one application (M3-T3, M6-T1): one
+/// Generates the init hooks of one application: one
 /// argument-less `__rticx_xbin_init_fifos_core<N>` per producing core, whose
 /// body bakes the synced pool addresses.
 ///
 /// The shared-memory configuration is not a generated function: the pass
 /// inlines [`XbinPassBackend::configure_shared_memory`] at
-/// [`rticx_core::MainInjectionPoint::BeforeInit`] (D1). The returned
+/// [`rticx_core::MainInjectionPoint::BeforeInit`]. The returned
 /// [`HookPlan`] is stashed by the pass and consulted from
 /// [`rticx_core::RticPass::main_injection`] to wire both into the generated
 /// entry functions. Boot coordination between cores is distribution-owned and
@@ -918,8 +924,7 @@ pub(crate) fn generate_init_hooks(
 ) -> syn::Result<InitHooks> {
     // Every core zeroes the FIFOs it produces, before its `post_init` can
     // spawn. The producer is always an endpoint of its region, so a topology
-    // whose owner core is not an endpoint still initializes correctly
-    // (M6-T1).
+    // whose owner core is not an endpoint still initializes correctly.
     let mut items = Vec::with_capacity(application.core_ids.len());
     let mut fifo_locals = Vec::new();
     for (local, &global) in application.core_ids.iter().enumerate() {
@@ -931,7 +936,7 @@ pub(crate) fn generate_init_hooks(
         fifo_locals.push(local);
         let init_doc = format!(
             "Zeroes the ring indices of every task FIFO produced by this core (global core \
-             {global}) before its `post_init` can spawn (M6-T1)."
+             {global}) before its `post_init` can spawn."
         );
         let init_fn = format_ident!("__rticx_xbin_init_fifos_core{local}");
         items.push(syn::parse_quote! {
@@ -954,7 +959,7 @@ pub(crate) fn generate_init_hooks(
 }
 
 /// The distro pool a task FIFO was allocated in, or `None` for a project
-/// without a capability table (M6.9-T6).
+/// without a capability table.
 ///
 /// Fails when the view names a pool that has no `pools[]` entry: the FIFO view
 /// would then point into memory the distribution never reserved.
@@ -1001,8 +1006,8 @@ fn base_literal(base: u32) -> syn::Expr {
 /// Resolves the base-address expression of the `(source -> target)` pool as
 /// seen by endpoint `view_core`.
 ///
-/// A distribution override wins (D3: only host/mock backends need one, because
-/// their pools are not at the synced addresses); otherwise the pass emits the
+/// A distribution override wins; only host/mock backends need one, because
+/// their pools are not at the synced addresses. Otherwise the pass emits the
 /// literal address recorded in `system.json`. A view with neither a pool nor an
 /// override cannot be generated and is a hard `cargo xbin sync` error.
 fn pool_base_expr(
@@ -1031,7 +1036,7 @@ fn pool_base_expr(
     Ok(base_literal(base))
 }
 
-/// Pins a task FIFO to its distro pool (M6.9-T6).
+/// Pins a task FIFO to its distro pool.
 ///
 /// Emits the pool id and shared budget beside the FIFO offset and asserts, at
 /// compile time, that the FIFO still fits the pool. A `system.json` whose pools
@@ -1059,7 +1064,7 @@ fn pool_consts(pool: Option<&PoolEntry>, task: &TaskEntry) -> syn::Result<TokenS
         ))
     })?;
     Ok(quote! {
-        // M6.9-T6: pin the distro pool this FIFO was allocated in.
+        // Pin the distro pool this FIFO was allocated in.
         #[allow(dead_code)]
         const __RTICX_XBIN_POOL_ID: &str = #id;
         #[allow(dead_code)]
@@ -1075,7 +1080,7 @@ fn pool_consts(pool: Option<&PoolEntry>, task: &TaskEntry) -> syn::Result<TokenS
 ///
 /// The producer of a FIFO is an endpoint of its `(source -> target)` pool by
 /// construction, so the synced pool address always resolves; a topology whose
-/// owner core is not an endpoint of the pool initializes correctly (M6-T1).
+/// owner core is not an endpoint of the pool initializes correctly.
 /// The base is baked (literal, or the distribution override for host pools),
 /// so the generated initializer is argument-less.
 fn generate_fifo_inits(
@@ -1128,7 +1133,7 @@ fn generate_fifo_inits(
                 // `post_init` can spawn and no consumer acts before a
                 // notification, and `Fifo::init` documents why it must not
                 // race one. The base is the literal synced address, or the
-                // distribution's override for host/mock pools (D3).
+                // distribution's override for host/mock pools.
                 unsafe {
                     (*#rt_path::Fifo::<#ipc_types::#type_ident, #depth>::view_at(
                         #base + __RTICX_XBIN_FIFO_OFFSET,
@@ -1269,40 +1274,38 @@ fn resolve_receiver<'a>(
     })
 }
 
-/// Generates the hidden, argument-less FIFO view of one resolved receiver,
-/// mirroring the sender-side helper but resolving the consumer endpoint's view
-/// of the pool.
-fn generate_receiver_fifo_view(
-    resolved: &ResolvedReceiver<'_>,
+/// Generates the hidden, argument-less FIFO view of a task as seen by
+/// `view_core`, at the base resolved for the `(source -> target)` direction.
+///
+/// The body bakes the synced pool address, the offset and the element layout;
+/// both the sender-side view (the producer endpoint) and the consumer view
+/// (the receiver endpoint) are produced from it.
+fn generate_fifo_view(
+    task: &TaskEntry,
+    input_ty: &Type,
+    view_core: u32,
+    elem_align: usize,
+    pool: Option<&PoolEntry>,
+    doc: String,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<Item> {
-    let task = resolved.task;
-    let input_ty = &resolved.input;
     let rt_path = backend.rt_path();
-
     let source = task.fifo.source;
-    let target_core = task.fifo.target;
+    let target = task.fifo.target;
     let offset = task.fifo.offset as usize;
     let depth = task.fifo.depth as usize;
     let elem_size = task.fifo.elem_size as usize;
-    let elem_align = resolved.elem_align as usize;
-    let pool_consts = pool_consts(resolved.pool, task)?;
-    let base = pool_base_expr(backend, target_core, source, target_core, resolved.pool)?;
-
+    let pool_consts = pool_consts(pool, task)?;
+    let base = pool_base_expr(backend, view_core, source, target, pool)?;
     let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
-    let fifo_doc = format!(
-        "Returns this application's consumer view of the `{}` FIFO, placed at its `({source} -> \
-         {target_core})` pool offset from `system.json`.",
-        task.name
-    );
 
     Ok(syn::parse_quote! {
-        #[doc = #fifo_doc]
+        #[doc = #doc]
         #[doc(hidden)]
         #[allow(non_snake_case)]
         fn #fifo_fn() -> *mut #rt_path::Fifo<#input_ty, #depth> {
             const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
-            const __RTICX_XBIN_TARGET_CORE: u32 = #target_core;
+            const __RTICX_XBIN_TARGET_CORE: u32 = #target;
             const __RTICX_XBIN_FIFO_OFFSET: usize = #offset;
 
             const _: () = assert!(
@@ -1319,12 +1322,12 @@ fn generate_receiver_fifo_view(
             );
             #pool_consts
 
-            // SAFETY: `system.json` places the FIFO at `offset`, 8-byte
-            // aligned, inside the pool; `view_at` documents the remaining
-            // requirements (one producer, one consumer, initialized memory),
-            // which the doorbell/dispatcher protocol upholds. The base is the
-            // literal synced address, or the distribution's override for
-            // host/mock pools (D3).
+            // SAFETY: `system.json` places the FIFO at `offset`, aligned,
+            // inside the pool; `view_at` documents the remaining requirements
+            // (one producer, one consumer, initialized memory), which the
+            // doorbell/dispatcher protocol upholds. The base is the literal
+            // synced address, or the distribution's override for host/mock
+            // pools.
             unsafe {
                 #rt_path::Fifo::<#input_ty, #depth>::view_at(
                     #base + __RTICX_XBIN_FIFO_OFFSET,
@@ -1332,6 +1335,29 @@ fn generate_receiver_fifo_view(
             }
         }
     })
+}
+
+/// Generates the hidden, argument-less FIFO view of one resolved receiver,
+/// resolving the consumer endpoint's view of the pool.
+fn generate_receiver_fifo_view(
+    resolved: &ResolvedReceiver<'_>,
+    backend: &dyn XbinPassBackend,
+) -> syn::Result<Item> {
+    let task = resolved.task;
+    let doc = format!(
+        "Returns this application's consumer view of the `{}` FIFO, placed at its `({} -> {})` \
+         pool offset from `system.json`.",
+        task.name, task.fifo.source, task.fifo.target
+    );
+    generate_fifo_view(
+        task,
+        &resolved.input,
+        task.fifo.target,
+        resolved.elem_align as usize,
+        resolved.pool,
+        doc,
+        backend,
+    )
 }
 
 /// Finds the application in `view` and checks that its core mapping still
@@ -1373,7 +1399,7 @@ pub(crate) fn check_application<'a>(
     }
     // The mapping the core pass resolves (identity when not declared) is what
     // the generated runtime core checks compare against, so it must match the
-    // synced view (M5-T3).
+    // synced view.
     if extensions.core_ids != application.core_ids {
         return Err(error(format!(
             "application `{package}` maps its local cores to {:?}, but the synced system view \
@@ -1385,7 +1411,7 @@ pub(crate) fn check_application<'a>(
 }
 
 /// Rejects an application whose cross-binary interface changed after the last
-/// `cargo xbin sync` (M3-T4).
+/// `cargo xbin sync`.
 ///
 /// `system.json` records the [`app_interface_hash`](crate::app_interface_hash)
 /// of every application at sync time. Phase 2 recomputes the fingerprint of
@@ -1411,8 +1437,7 @@ pub(crate) fn check_interface_hash(
     Ok(())
 }
 
-/// Rejects a project whose IDL changed after the last `cargo xbin sync`
-/// (M3-T4).
+/// Rejects a project whose IDL changed after the last `cargo xbin sync`.
 ///
 /// `system.json` records the layout hash of `ipc-types.toml` at sync time (the
 /// same value `ipc_types::LAYOUT_HASH` carries). Phase 2 recomputes the live
@@ -1439,19 +1464,19 @@ pub(crate) fn check_idl_hash(view: &SystemView, layout_hash: u64) -> syn::Result
     Ok(())
 }
 
-/// Generates the freshness anchors of one application (M3-T4, M7-T2).
+/// Generates the freshness anchors of one application.
 ///
-/// - `__RTICX_XBIN_TOPOLOGY_HASH` is the `TOPOLOGY_HASH` anchor of plan §7.3:
+/// - `__RTICX_XBIN_TOPOLOGY_HASH` is the `TOPOLOGY_HASH` anchor:
 ///   the `topology_hash` of the view the generated code was produced from;
 /// - `__RTICX_XBIN_SYSTEM_JSON` is the system view itself, embedded with
 ///   `include_str!` so rustc records it in the crate's dep-info and rebuilds
 ///   the application whenever the file changes;
 /// - `__RTICX_XBIN_PROJECT_TOML` embeds the `rticx.toml` the topology was
 ///   resolved from, when it came from a project file, so a plain `cargo build`
-///   tracks topology edits through dep-info (M7-T2);
+///   tracks topology edits through dep-info;
 /// - `__RTICX_XBIN_IDL` embeds `ipc-types.toml`, when the project has one, so
 ///   a cargo-cached build re-runs the macro (and [`check_idl_hash`] fires)
-///   after a pure IDL edit (M3-T4).
+///   after a pure IDL edit.
 ///
 /// The anchors complement the hard errors of [`crate::load_system`] (stale
 /// `topology_hash`), [`check_idl_hash`] (IDL changed after `sync`) and
@@ -1472,9 +1497,9 @@ pub(crate) fn generate_freshness_items(
     );
 
     let hash_doc = "Topology hash of the `system.json` this application was generated from; a \
-         stale view or a source change is a hard error until `cargo xbin sync` runs again (M3-T4).";
+         stale view or a source change is a hard error until `cargo xbin sync` runs again.";
     let json_doc = "The synced system view, embedded so rustc records it in dep-info and rebuilds \
-         this application when it changes (M3-T4).";
+         this application when it changes.";
     let mut items = vec![
         syn::parse_quote! {
             #[doc = #hash_doc]
@@ -1496,7 +1521,7 @@ pub(crate) fn generate_freshness_items(
         let project_lit = include_str_path_lit(project_manifest)?;
         let project_doc = "The `rticx.toml` this application's topology was resolved from, \
              embedded so rustc records it in dep-info and rebuilds this application when it \
-             changes (M7-T2).";
+             changes.";
         items.push(syn::parse_quote! {
             #[doc = #project_doc]
             #[doc(hidden)]
@@ -1507,12 +1532,12 @@ pub(crate) fn generate_freshness_items(
 
     // The IDL is only tracked when the project has one. The anchor is what
     // makes a cargo-cached build re-run the macro (and therefore
-    // `check_idl_hash`) after a pure `ipc-types.toml` edit (M3-T4).
+    // `check_idl_hash`) after a pure `ipc-types.toml` edit.
     if let Some(idl) = idl.filter(|idl| idl.is_file()) {
         let idl_lit = include_str_path_lit(idl)?;
         let idl_doc = "The project IDL `ipc-types.toml`, embedded so rustc records it in dep-info \
              and rebuilds this application when it changes; without it a cached build would not \
-             re-run the macro and a stale IDL could slip through (M3-T4).";
+             re-run the macro and a stale IDL could slip through.";
         items.push(syn::parse_quote! {
             #[doc = #idl_doc]
             #[doc(hidden)]
@@ -1547,9 +1572,9 @@ fn include_str_path_lit(path: &Path) -> syn::Result<LitStr> {
 }
 
 /// Generates the injected `CrossCoreMessage` marker trait and the `ipc_types`
-/// module of this application (M1-T7).
+/// module of this application.
 ///
-/// Since M1-T7 the IDL types are no longer a separate crate: `cargo xbin sync`
+/// The IDL types are not a separate crate: `cargo xbin sync`
 /// writes `<output dir>/ipc_types.rs` next to `system.json`, and this pass
 /// re-emits the file's tokens into the `#[app]` module as
 /// `pub mod <ipc_types> { … }`. Re-emitting (rather than `include!` or
@@ -1601,7 +1626,7 @@ pub(crate) fn generate_ipc_types_items(
     let trait_doc = "Marker trait for a type that may cross a cross-binary IPC boundary. Every \
          type of `ipc-types.toml` implements it; the injected declaration is what lets the \
          generated `ipc_types` module re-emit the `unsafe impl`s without depending on the runtime \
-         crate (M5.5, M1-T7).";
+         crate.";
     let trait_item: Item = syn::parse_quote! {
         #[doc = #trait_doc]
         pub unsafe trait CrossCoreMessage: Copy + 'static {}
@@ -1609,7 +1634,7 @@ pub(crate) fn generate_ipc_types_items(
 
     let module_doc = format!(
         "IDL types of `ipc-types.toml`, generated by `cargo xbin sync` into `{}` and re-emitted \
-         into the `#[app]` module (M1-T7).",
+         into the `#[app]` module.",
         file.display()
     );
     let module_item: Item = syn::parse_quote! {
@@ -1623,7 +1648,7 @@ pub(crate) fn generate_ipc_types_items(
 
     let path_lit = include_str_path_lit(&file)?;
     let anchor_doc = "The generated `ipc_types.rs`, embedded so rustc records it in dep-info and \
-         rebuilds this application when it changes (M1-T7).";
+         rebuilds this application when it changes.";
     let anchor: Item = syn::parse_quote! {
         #[doc = #anchor_doc]
         #[doc(hidden)]
@@ -1635,7 +1660,7 @@ pub(crate) fn generate_ipc_types_items(
 }
 
 /// Rejects a user item that collides with the injected `CrossCoreMessage`
-/// marker trait or the injected `ipc_types` module (M1-T7).
+/// marker trait or the injected `ipc_types` module.
 ///
 /// The pass appends both items to the `#[app]` module; a same-named user item
 /// would otherwise fail with rustc's generic "the name is defined multiple
@@ -1646,17 +1671,8 @@ fn check_ipc_types_collision(app_mod: &ItemMod, module_ident: &Ident) -> syn::Re
         return Ok(());
     };
     for item in items {
-        let (name, is_type_namespace) = match item {
-            Item::Mod(item) => (&item.ident, true),
-            Item::Trait(item) => (&item.ident, true),
-            Item::Struct(item) => (&item.ident, true),
-            Item::Enum(item) => (&item.ident, true),
-            Item::Union(item) => (&item.ident, true),
-            Item::Type(item) => (&item.ident, true),
-            Item::Fn(item) => (&item.sig.ident, false),
-            Item::Const(item) => (&item.ident, false),
-            Item::Static(item) => (&item.ident, false),
-            _ => continue,
+        let Some((name, is_type_namespace)) = item_name(item) else {
+            continue;
         };
         if name == module_ident {
             return Err(error(format!(
@@ -1702,7 +1718,7 @@ fn injected_ipc_types_ident(backend: Option<&dyn XbinPassBackend>) -> syn::Resul
 }
 
 /// Generates the sender stub of one view task: the `pub struct <Task>;` the
-/// producer's source does not declare (M5.5), its FIFO view and its
+/// producer's source does not declare, its FIFO view and its
 /// `cross_spawn` impl.
 fn generate_sender(
     view: &SystemView,
@@ -1711,19 +1727,14 @@ fn generate_sender(
 ) -> syn::Result<Vec<Item>> {
     let task_ident = ident(&task.name)?;
     let input_ty = input_type(task, backend)?;
-    let rt_path = backend.rt_path();
     let current_core = backend.current_global_core_id();
 
     let source = task.fifo.source;
     let target_core = task.fifo.target;
     let task_id = task.id;
-    let offset = task.fifo.offset as usize;
-    let depth = task.fifo.depth as usize;
     let elem_size = task.fifo.elem_size as usize;
     let elem_align = input_align(view, task)? as usize;
     let pool = pool_of(view, task)?;
-    let pool_consts = pool_consts(pool, task)?;
-    let base = pool_base_expr(backend, source, source, target_core, pool)?;
 
     let fifo_fn = format_ident!("__rticx_xbin_fifo_{}", task.name);
     let ring_fn = format_ident!("__rticx_xbin_ring_{source}_{target_core}");
@@ -1745,7 +1756,7 @@ fn generate_sender(
         task.name
     );
     let stub_doc = format!(
-        "Generated sender stub of the cross-binary task `{}` (M5.5). The producer application \
+        "Generated sender stub of the cross-binary task `{}`. The producer application \
          declares nothing; `cargo xbin sync` derived this stub from the synced system view.",
         task.name
     );
@@ -1755,34 +1766,7 @@ fn generate_sender(
             #[doc = #stub_doc]
             pub struct #task_ident;
         },
-        syn::parse_quote! {
-            #[doc = #fifo_doc]
-            #[doc(hidden)]
-            #[allow(non_snake_case)]
-            fn #fifo_fn() -> *mut #rt_path::Fifo<#input_ty, #depth> {
-                const __RTICX_XBIN_SOURCE_CORE: u32 = #source;
-                const __RTICX_XBIN_TARGET_CORE: u32 = #target_core;
-                const __RTICX_XBIN_FIFO_OFFSET: usize = #offset;
-
-                const _: () = assert!(
-                    __RTICX_XBIN_FIFO_OFFSET % #rt_path::FIFO_ALIGN == 0,
-                    "`cargo xbin sync` allocated a misaligned FIFO offset",
-                );
-                #pool_consts
-
-                // SAFETY: `system.json` places the FIFO at `offset`, 8-byte
-                // aligned, inside the pool; `view_at` documents the remaining
-                // requirements (one producer, one consumer, initialized memory),
-                // which the doorbell/dispatcher protocol upholds. The base is
-                // the literal synced address, or the distribution's override
-                // for host/mock pools (D3).
-                unsafe {
-                    #rt_path::Fifo::<#input_ty, #depth>::view_at(
-                        #base + __RTICX_XBIN_FIFO_OFFSET,
-                    )
-                }
-            }
-        },
+        generate_fifo_view(task, &input_ty, source, elem_align, pool, fifo_doc, backend)?,
         syn::parse_quote! {
             impl #task_ident {
                 #[doc = #spawn_doc]
@@ -1802,7 +1786,7 @@ fn generate_sender(
                     );
 
                     // The caller must run on the task's synced producer core;
-                    // a single-core binary folds this guard away (D5).
+                    // a single-core binary folds this guard away.
                     if #current_core != __RTICX_XBIN_SOURCE_CORE {
                         return Err(Some(input));
                     }
@@ -1817,7 +1801,7 @@ fn generate_sender(
                         }
                         // The ring function publishes the task id to the
                         // target's doorbell and triggers its router; a failed
-                        // notification leaves the input enqueued (M6.5-T2).
+                        // notification leaves the input enqueued.
                         match #ring_fn(__RTICX_XBIN_TASK_ID) {
                             Ok(()) => Ok(()),
                             Err(()) => Err(None),
@@ -1863,11 +1847,6 @@ fn ident(name: &str) -> syn::Result<Ident> {
     })
 }
 
-/// Builds a code-generation error at the macro call site.
-fn error(message: impl Into<String>) -> syn::Error {
-    syn::Error::new(Span::call_site(), message.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1887,7 +1866,7 @@ mod tests {
     }
 
     /// The pool lists each core's lines in ascending `(source, priority)`
-    /// order (M6.5-T1), independent of the declaration order.
+    /// order, independent of the declaration order.
     #[test]
     fn line_irq_indices_follow_the_pool_order() {
         let receiver = |name: &str, core: u32, spawn_by: u32, priority: u16| ReceiverDecl {
@@ -1910,9 +1889,9 @@ mod tests {
     }
 
     /// A backend that does not adopt the capability binding keeps the identity
-    /// physical core and reports no reachable pool (M6.9-T1), and the hardware
+    /// physical core and reports no reachable pool, and the hardware
     /// codegen hooks default to "nothing": no shared-memory configuration and
-    /// no base override. Only `current_global_core_id` is required (D5).
+    /// no base override. Only `current_global_core_id` is required.
     #[test]
     fn backend_defaults_are_identity_no_pools_and_no_hooks() {
         struct BareBackend;

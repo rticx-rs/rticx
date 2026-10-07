@@ -765,9 +765,7 @@ source of runtime-only failures:
 Everything in this section is the **distribution author's** responsibility.
 Since M6.9 the project (`rticx.toml`) declares no IPC memory: the distribution
 owns the pools, their addresses and aliases, the shared budget, and the linker
-reservations that keep them out of every binary's allocated data. The
-[plan §10](multibinary-multicore-plan.md#10-distributionbackend-contract)
-is the normative contract; this is the practical checklist.
+reservations that keep them out of every binary's allocated data. 
 
 **1. Report the capability binding and the hardware codegen.** A
 distribution's `#[app]` macro binds `rticx-xbin-pass` with an `XbinPassBackend`

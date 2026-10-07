@@ -1,7 +1,7 @@
-//! Build-phase priority-line validation (M6-T1).
+//! Build-phase priority-line validation.
 //!
-//! Plan §4/§8: on one target core, each priority level belongs to exactly one
-//! origin core. The driver's `sync` merge enforces the rule across the
+//! On one target core, each priority level belongs to exactly one origin core.
+//! The driver's `sync` merge enforces the rule across the
 //! cross-binary receivers of the whole project (producer-vs-producer,
 //! `MergeError::PriorityConflict`); the target application's own
 //! `#[sw_task]`/`#[async_task]` declarations only exist at build time, so
@@ -46,7 +46,7 @@ impl LineTask<'_> {
 }
 
 /// Rejects a cross-binary receiver that shares its priority line with a task
-/// from another origin core (M6-T1).
+/// from another origin core.
 ///
 /// `decls.local_tasks` carry the application's own `#[sw_task]`/`#[async_task]`
 /// declarations (parsed by [`crate::parse::parse_module`]); the cross

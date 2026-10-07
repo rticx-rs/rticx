@@ -1,7 +1,7 @@
-//! M5-T3/M7-T2 acceptance: the multi-binary pass injects `core_ids` for the
-//! core pass.
+//! Acceptance tests: the multi-binary pass injects `core_ids` for the core
+//! pass.
 //!
-//! Since M7-T2 the local -> global mapping comes from `rticx.toml`, not from
+//! The local -> global mapping comes from `rticx.toml`, not from
 //! `#[app]`: the pass injects the resolved `cores`/`core_ids` into the
 //! arguments, and `rticx-core` consumes them natively. A `cores = 2,
 //! core_ids = [1, 2]` application must therefore compile without an

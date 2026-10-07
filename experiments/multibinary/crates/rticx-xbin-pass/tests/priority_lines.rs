@@ -1,4 +1,4 @@
-//! M6-T1 acceptance: build-phase priority-line validation.
+//! Acceptance tests for the build-phase priority-line validation.
 //!
 //! On one target core, each priority level belongs to exactly one origin
 //! core. `sync` already rejects producer-vs-producer collisions through the
@@ -232,7 +232,7 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
 }
 
 /// Receiver `#[app]` arguments of `app-m4`: `dispatchers` holds one cross
-/// line per `(source, priority)` pair of `tasks`, in order (M7-T2: the core
+/// line per `(source, priority)` pair of `tasks`, in order (the core
 /// mapping comes from `rticx.toml`, not from `#[app]`).
 fn receiver_args(ipc: TokenStream) -> TokenStream {
     quote!(
@@ -248,7 +248,7 @@ fn receiver_topology(core_ids: &[u32]) -> AppTopology {
 }
 
 /// Writes the fixture view with `app-m4`'s interface fingerprint recorded, as
-/// `cargo xbin sync` would (M3-T4).
+/// `cargo xbin sync` would.
 fn write_system(
     core_ids: &[u32],
     tasks: &[TaskSpec],
@@ -417,7 +417,7 @@ fn receiver_from_another_producer_on_one_line_is_rejected() {
         }
     };
     // Two distinct lines need two pool entries before the priority check can
-    // reject them (the pool is validated first, M6.5-T1).
+    // reject them (the pool is validated first).
     let args = receiver_args(quote!([IRQ0, IRQ1]));
     let (_dir, path) = write_system(&[1], &tasks, &[0, 2], &args, &app_mod);
 
@@ -487,7 +487,7 @@ fn a_receiver_colliding_with_an_async_task_is_rejected() {
 fn a_receiver_colliding_with_an_in_app_spawn_by_task_is_rejected() {
     let args = receiver_args(quote!([IRQ0, IRQ1]));
     // `spawn_by = 1` is this application's own global core, so the task is an
-    // in-app cross-core task with origin core 1 (M5.5 global resolution).
+    // in-app cross-core task with origin core 1.
     let app_mod = receiver_module(quote! {
         #[sw_task(priority = 3, spawn_by = 1)]
         struct InAppTask;
@@ -625,7 +625,7 @@ fn the_same_priority_on_different_target_cores_is_accepted() {
 fn metadata_mode_does_not_validate_local_priority_lines() {
     // `sync` cannot see the application's local tasks, so the metadata pass
     // accepts the same collision the build-phase check rejects: the driver
-    // catches producer-vs-producer conflicts only (plan §8).
+    // catches producer-vs-producer conflicts only.
     let app_mod = receiver_module(quote! {
         #[sw_task(priority = 3)]
         struct LocalTask;

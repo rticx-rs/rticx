@@ -90,7 +90,7 @@ pub fn resolve_app_topology(
     };
     let manifest_path = root.join(crate::PROJECT_MANIFEST);
     let config = parse_project_file(&manifest_path).map_err(|error| {
-        crate::meta_error(format!(
+        crate::error(format!(
             "failed to parse the nearest `rticx.toml` (`{}`): {error}",
             manifest_path.display()
         ))
@@ -104,7 +104,7 @@ pub fn resolve_app_topology(
                 && target.is_none_or(|target| application.target().name() == target)
         })
         .ok_or_else(|| {
-            crate::meta_error(format!(
+            crate::error(format!(
                 "the application `{package}` is not listed in the nearest `rticx.toml` (`{}`); \
                  add an `[[application]]` entry for it",
                 manifest_path.display()

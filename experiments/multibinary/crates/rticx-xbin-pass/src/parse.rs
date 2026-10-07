@@ -1,11 +1,11 @@
 //! Parsing of the `#[app]` additions and the native cross-binary task
-//! declarations (M5.5).
+//! declarations.
 //!
 //! This module owns the syntax that the multi-binary extension adds on top of
 //! the core RTIC syntax:
 //!
 //! - the **front of `#[app(dispatchers = [..])]`**: the shared interrupt pool
-//!   also read by `rticx-sw-pass`/`rticx-async-pass` (M6.5). The xbin pass
+//!   also read by `rticx-sw-pass`/`rticx-async-pass`. The xbin pass
 //!   steals the first `K` entries of each local core's list — one per distinct
 //!   `(source, priority)` cross line of that core, in ascending
 //!   `(source, priority)` order — and binds them to the generated cross-binary
@@ -14,7 +14,7 @@
 //!   groups. Convention: **cross-binary lines first, then the local task
 //!   dispatchers**; duplicates inside the stolen prefix are rejected.
 //!
-//! `rticx.toml` is the single user-facing source of project topology (M7-T2):
+//! `rticx.toml` is the single user-facing source of project topology:
 //! [`parse_app_args`] resolves the application's `cores`/`core_ids`/
 //! `external_cores` (or takes a `Fixed`/identity topology) and **injects**
 //! `cores`/`core_ids` into the arguments for `rticx-core`. The old
@@ -32,15 +32,15 @@
 //!   - anything else → a hard error naming the unknown core.
 //!
 //! Task `core` always stays a **local** index (`0..cores`), like RTIC's task
-//! `core`. The xbin-specific task attributes and traits of the M1–M4
-//! prototype were deleted outright in M5.5: there is no compatibility shim,
-//! no warning and no migration error (the extension has no released users).
+//! `core`. The xbin-specific task attributes and traits of an earlier
+//! prototype do not exist: there is no compatibility shim, no warning and no
+//! migration error (the extension has no released users).
 //!
 //! Besides the cross receivers, [`parse_module`] records every local
 //! `#[sw_task]`/`#[async_task]` declaration (its `priority`, `core` and
 //! resolved origin core) in [`ModuleDecls::local_tasks`]. Phase 2 combines
 //! them with the synced view in [`crate::priority::validate_priority_lines`],
-//! which enforces one origin core per `(target core, priority)` line (M6-T1);
+//! which enforces one origin core per `(target core, priority)` line;
 //! the declarations themselves are left untouched, so the software and async
 //! passes keep owning their syntax and errors.
 //!
@@ -50,24 +50,24 @@
 //! dispatchers run against (see [`inject_receiver_tasks`]); in metadata mode
 //! their parsed attributes are stripped from the emitted module.
 //!
-//! Confirmed syntax (M5.5):
+//! Confirmed syntax:
 //!
 //! - receiver `core` is a **local** core index (`0..cores`);
 //! - cross receivers declare exactly one global producer core in `spawn_by`
-//!   (an array is rejected: multi-producer tasks land in M6-T1);
+//!   (an array is rejected: a task has exactly one producer core);
 //! - defaults: `priority = 1` (cross receivers require `priority >= 1`),
 //!   `capacity = 1` (minimum 1), receiver `core = 0`;
 //! - unknown, duplicate and multi-segment keys as well as malformed values
 //!   are hard errors; `external_cores` is validated against the `core_ids`
-//!   mapping the project topology resolves (M7-T2);
+//!   mapping the project topology resolves;
 //! - stripping happens in both modes and for every distribution that binds
 //!   the pass. `ipc_dispatchers` no longer exists: an application still
 //!   declaring it keeps the key in its arguments and the core pass warns
 //!   about it as an unknown `#[app]` argument (`core_ids` is native to
-//!   `rticx-core` since M5 and is understood with or without the pass).
+//!   `rticx-core` and is understood with or without the pass).
 //!
 //! The producer application declares nothing: its `Task::cross_spawn` stubs
-//! are generated in codegen mode from the synced system view (M5.5).
+//! are generated in codegen mode from the synced system view.
 //!
 //! TODO(extract): `parse_attr_int` and `type_path_string` duplicate helpers in
 //! `rticx-sw-pass`'s internal modules. They may be promoted into `rticx-core`
@@ -95,24 +95,23 @@ use syn::{
 pub(crate) const CORE_IDS_ARG: &str = "core_ids";
 /// `#[app(external_cores = [..])]`: global ids of cores in other binaries.
 pub(crate) const EXTERNAL_CORES_ARG: &str = "external_cores";
-/// Hard error for the `#[app(core_ids = ..)]` key, which moved to `rticx.toml`
-/// (M7-T2).
+/// Hard error for the `#[app(core_ids = ..)]` key, which moved to `rticx.toml`.
 pub(crate) const CORE_IDS_MOVED: &str = "`core_ids` moved to `rticx.toml`: declare the local \
      core index to global core id mapping in this application's `[[application]]` entry and \
      remove `core_ids` from `#[app]`";
 /// Hard error for the `#[app(external_cores = ..)]` key, which moved to
-/// `rticx.toml` (M7-T2).
+/// `rticx.toml`.
 pub(crate) const EXTERNAL_CORES_MOVED: &str = "`external_cores` moved to `rticx.toml`: declare \
      the foreign cores this application can see in its `[[application]]` entry and remove \
      `external_cores` from `#[app]`";
 /// The shared `#[app(dispatchers = [..])]` argument: the xbin pass steals the
 /// front (one entry per cross line) and rewrites the remainder for
-/// `rticx-sw-pass`/`rticx-async-pass` (M6.5).
+/// `rticx-sw-pass`/`rticx-async-pass`.
 const DISPATCHERS_ARG: &str = "dispatchers";
 /// Native software-task attribute.
 pub(crate) const SW_TASK_ATTR: &str = "sw_task";
 /// Native async-task attribute, read (never consumed) by this pass for the
-/// priority-line validation (M6-T1); the async pass owns its syntax.
+/// priority-line validation; the async pass owns its syntax.
 pub(crate) const ASYNC_TASK_ATTR: &str = "async_task";
 /// `#[sw_task(spawn_by = G)]`: the (global, in apps declaring
 /// `external_cores`) producer core id.
@@ -143,18 +142,18 @@ pub(crate) struct AppExtensions {
     /// Resolved `core_ids` mapping (local index -> global id), the identity
     /// `0..cores` when the application does not declare the key.
     ///
-    /// Parsed and validated by `rticx-core` (M5), which owns `core_ids`; this
+    /// Parsed and validated by `rticx-core`, which owns `core_ids`; this
     /// pass only reads the mapping (and leaves the key in the arguments).
     pub core_ids: Vec<u32>,
     /// Resolved `device` PAC paths, one per local core (`pacs[core]`).
     ///
     /// The router pends its line dispatchers through the same interrupt type
     /// the software pass uses: `pacs[core]::Interrupt` unless the backend
-    /// provides a `custom_interrupt_path` (M6.5-T3).
+    /// provides a `custom_interrupt_path`.
     pub pacs: Vec<syn::Path>,
     /// `external_cores`, empty when not declared.
     pub external_cores: Vec<u32>,
-    /// The application's `dispatchers` argument, per local core (M6.5).
+    /// The application's `dispatchers` argument, per local core.
     ///
     /// `dispatchers[local]` is the full list as written by the user. The xbin
     /// pass steals its first `K` entries (one per cross line of the core, in
@@ -162,7 +161,7 @@ pub(crate) struct AppExtensions {
     /// [`Self::cross_dispatchers`]; the remainder is written back into the
     /// `#[app]` arguments for the software/async passes.
     pub dispatchers: Vec<Vec<Path>>,
-    /// The stolen front of [`Self::dispatchers`], per local core (M6.5).
+    /// The stolen front of [`Self::dispatchers`], per local core.
     ///
     /// `cross_dispatchers[local]` holds one interrupt path per distinct
     /// `(spawn_by, priority)` cross line of that core, in ascending
@@ -177,11 +176,11 @@ pub(crate) struct ModuleDecls {
     pub receivers: Vec<ReceiverDecl>,
     /// Local `#[sw_task]`/`#[async_task]` declarations (excluding the cross
     /// receivers), sorted by name, recorded for the build-phase priority-line
-    /// validation (M6-T1). Their attributes are left for the software/async
+    /// validation. Their attributes are left for the software/async
     /// passes.
     pub local_tasks: Vec<LocalTaskDecl>,
     /// Span of every cross-binary receiver declaration, keyed by task name,
-    /// so the priority-line validation can point at the receiver (M6-T1).
+    /// so the priority-line validation can point at the receiver.
     pub receiver_spans: BTreeMap<String, Span>,
 }
 
@@ -205,7 +204,7 @@ impl LocalTaskKind {
 }
 
 /// A local task declaration, reduced to what the build-phase priority-line
-/// validation needs (M6-T1).
+/// validation needs.
 #[derive(Debug, Clone)]
 pub(crate) struct LocalTaskDecl {
     /// Task struct name.
@@ -228,10 +227,10 @@ pub(crate) struct LocalTaskDecl {
 /// with the parsed attribute, so [`steal_dispatchers`] can rewrite the shared
 /// `dispatchers` argument once the receivers are known.
 ///
-/// `rticx.toml` is the single user-facing source of topology (M7-T2): the
+/// `rticx.toml` is the single user-facing source of topology: the
 /// `core_ids` / `external_cores` keys are rejected with a migration error and
 /// the resolved `topology` is injected into the arguments as `cores` and
-/// `core_ids`, which `rticx-core` owns and validates (M5). `device` is left
+/// `core_ids`, which `rticx-core` owns and validates. `device` is left
 /// untouched for the core pass; `dispatchers` is parsed here but **not**
 /// consumed (the cross-binary front is stolen later).
 ///
@@ -248,7 +247,7 @@ pub(crate) fn parse_app_args(
 
     let mut attr = parse_attr_tokens(args, format_ident!("app"))?;
 
-    // `core_ids` and `external_cores` moved to `rticx.toml` (M7-T2): reject
+    // `core_ids` and `external_cores` moved to `rticx.toml`: reject
     // them with a migration error before anything else can consume them.
     if let Some(expr) = attr.get_expr(CORE_IDS_ARG) {
         return Err(syn::Error::new(expr.span(), CORE_IDS_MOVED));
@@ -259,7 +258,7 @@ pub(crate) fn parse_app_args(
 
     // `cores` stays optional: in a multi-binary project it is derived from the
     // project's `core_ids`, so a declared value must agree with the resolved
-    // mapping (M7-T2).
+    // mapping.
     let declared_cores = match attr.get_expr("cores") {
         Some(_) => Some(parse_attr_int::<u32>(&attr, "cores", 0)?),
         None => None,
@@ -293,7 +292,7 @@ pub(crate) fn parse_app_args(
     }
 
     // Inject the resolved topology for the core pass: it owns and validates
-    // `cores`/`core_ids` (M5), so the pass hands it the values `rticx.toml`
+    // `cores`/`core_ids`, so the pass hands it the values `rticx.toml`
     // resolved (the core pass never sees the removed `#[app]` keys).
     let cores = topology.cores();
     let core_ids = topology.core_ids().to_vec();
@@ -310,16 +309,16 @@ pub(crate) fn parse_app_args(
         syn::parse_quote!([#(#core_id_lits),*]),
     );
 
-    // `rticx-core` owns `core_ids` (M5): parsing through `AppArgs` validates
+    // `rticx-core` owns `core_ids`: parsing through `AppArgs` validates
     // the injected `cores`/`core_ids` (length and uniqueness) with the core
     // pass's own errors and resolves the `device` PAC paths.
     let app_args = AppArgs::parse(attr.args_tokens())?;
     let pacs = app_args.pacs;
 
-    // M6.5: the shared `dispatchers` argument is parsed here with the same
-    // shape rules as `rticx-sw-pass`. The key is left in `attr` (not
-    // consumed): [`steal_dispatchers`] takes the cross-binary front once the
-    // receivers are known and rewrites the remainder for the software pass.
+    // The shared `dispatchers` argument is parsed here with the same shape
+    // rules as `rticx-sw-pass`. The key is left in `attr` (not consumed):
+    // [`steal_dispatchers`] takes the cross-binary front once the receivers
+    // are known and rewrites the remainder for the software pass.
     let dispatchers = match attr.get_expr(DISPATCHERS_ARG) {
         Some(expr) => parse_dispatchers(expr, cores)?,
         None => vec![Vec::new(); cores as usize],
@@ -337,7 +336,7 @@ pub(crate) fn parse_app_args(
 }
 
 /// Parses the shared `#[app(dispatchers = [..])]` argument into per-local-core
-/// path lists (M6.5).
+/// path lists.
 ///
 /// The shape rules mirror `rticx-sw-pass`'s `AppParameters::parse`: an array
 /// is required; a flat array of interrupt paths is the single-core shape
@@ -444,7 +443,7 @@ fn dispatcher_path(element: &Expr) -> syn::Result<Path> {
 }
 
 /// Steals the cross-binary front of the shared `dispatchers` list and rewrites
-/// the argument to the remainder (M6.5).
+/// the argument to the remainder.
 ///
 /// For each local core the pass computes its distinct cross lines
 /// `(spawn_by, priority)` (ascending) and takes that many leading entries of
@@ -572,7 +571,7 @@ pub(crate) fn parse_module(
         };
 
         // Native async tasks are only *read* here for the build-phase
-        // priority-line validation (M6-T1); the async pass owns their syntax,
+        // priority-line validation; the async pass owns their syntax,
         // so malformed arguments are left for it to report.
         if let Some(index) = find_attr(&item_struct.attrs, ASYNC_TASK_ATTR)
             && let Ok(attr) = RticAttr::from_meta(&item_struct.attrs[index].meta)
@@ -681,7 +680,7 @@ enum SpawnByNamespace {
 }
 
 /// Records a local (non-cross) task for the build-phase priority-line
-/// validation (M6-T1).
+/// validation.
 ///
 /// Reads `priority`, `core` and `spawn_by` without consuming them, so the
 /// software and async passes still own their syntax and errors. A declaration
@@ -735,7 +734,7 @@ fn record_local_task(
 /// Reads the singular `spawn_by` producer core id.
 ///
 /// Arrays are rejected outright: v1 has one SPSC FIFO and one priority line
-/// per task, so a task has exactly one producer core (M6-T1 lifts this).
+/// per task, so a task has exactly one producer core.
 fn take_spawn_by(attr: &mut RticAttr, span: Span) -> syn::Result<u32> {
     if let Some(Expr::Array(array)) = attr.get_expr(SPAWN_BY_ARG) {
         return Err(syn::Error::new(
@@ -834,7 +833,7 @@ fn parse_receiver(
 }
 
 /// Rewrites every cross-binary receiver struct into the `#[task(..)]` item
-/// the core pass consumes (M5.5).
+/// the core pass consumes.
 ///
 /// Only codegen mode calls this: the injected attribute is what makes the
 /// core pass generate the task static and enforce the user's `impl

@@ -1,4 +1,4 @@
-//! Acceptance tests for the metadata mode (M1-T2, M5.5): a fixture
+//! Acceptance tests for the metadata mode: a fixture
 //! application run through the pass produces the expected `<target>.xbin.json`
 //! from the native `#[sw_task]` receiver syntax.
 //!
@@ -41,7 +41,7 @@ fn receiver_app() -> syn::ItemMod {
     }
 }
 
-/// A producer application: since M5.5 it declares nothing (the pass generates
+/// A producer application: it declares nothing (the pass generates
 /// its sender stubs from the synced view).
 fn producer_app() -> syn::ItemMod {
     syn::parse_quote! {
@@ -76,7 +76,7 @@ fn run_manifest(
 }
 
 /// Like [`run_manifest`], but binds a distribution backend so the manifest
-/// records its capability binding (M6.9-T2).
+/// records its capability binding.
 fn run_manifest_with_backend<B: XbinPassBackend + 'static>(
     backend: B,
     app_mod: syn::ItemMod,
@@ -100,7 +100,7 @@ fn run_manifest_with_backend<B: XbinPassBackend + 'static>(
 }
 
 /// The code-generation bindings that metadata mode never calls; keeping them
-/// inert lets the capability tests implement only the two queries of M6.9-T2.
+/// inert lets the capability tests implement only the two binding queries.
 macro_rules! inert_bindings {
     () => {
         fn current_global_core_id(&self) -> syn::Expr {
@@ -146,7 +146,7 @@ impl XbinPassBackend for IdentityBackend {
 }
 
 /// A multi-core backend with an explicit physical-core mapping and pools,
-/// used to pin the manifest extraction (M6.9-T2).
+/// used to pin the manifest extraction.
 struct CapabilityBackend {
     /// Local core index -> physical core id.
     physical: Vec<u32>,
@@ -360,7 +360,7 @@ fn env_detection_switches_on_metadata_mode() {
     // terminates the compiler once the manifest is written, which would kill
     // the test harness. The real `cargo check` path — including the manifest
     // naming from `CARGO_PKG_NAME`/`CARGO_BIN_NAME` — is covered end to end by
-    // the driver's `crates/mock/fixtures/metadata` sync test (M7-T2).
+    // the driver's `crates/mock/fixtures/metadata` sync test.
 }
 
 #[test]
@@ -504,7 +504,7 @@ fn malformed_extensions_are_rejected_with_precise_errors() {
     }
 }
 
-/// M6.9-T2: a multi-core application records one capability entry per local
+/// A multi-core application records one capability entry per local
 /// core, and a backend that leaves `physical_core`/`ipc_pools` at their trait
 /// defaults yields the identity physical id and no pools.
 #[test]
@@ -543,7 +543,7 @@ fn manifest_records_the_identity_capability_default() {
     assert!(!json.contains("\"pools\""), "no pools are recorded: {json}");
 }
 
-/// M6.9-T2: the manifest records the bound distribution's physical ids and
+/// The manifest records the bound distribution's physical ids and
 /// pools for every local core, with pool entries sorted by `(peer, id)`.
 #[test]
 fn manifest_records_multi_core_backend_capabilities() {

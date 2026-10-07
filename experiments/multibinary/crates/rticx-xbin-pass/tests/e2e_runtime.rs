@@ -1,4 +1,4 @@
-//! M4-T2/M6-T1 acceptance: spawn from the producer applications, execute on
+//! Acceptance tests: spawn from the producer applications, execute on
 //! the receiver application's generated line dispatchers, verify the input
 //! values, and observe the FIFO backpressure semantics.
 //!
@@ -32,8 +32,8 @@
 //! The **two-app fixture** (`mock_runtime_spawn_reaches_the_receiver_dispatcher`)
 //! has one producer on global core 0 and one receiver on global core 1.
 //!
-//! The **three-app fixture** (`three_applications_spawn_through_their_own_routers`,
-//! M6-T1) adds a second producer on global core 2: both producers declare
+//! The **three-app fixture** (`three_applications_spawn_through_their_own_routers`)
+//! adds a second producer on global core 2: both producers declare
 //! nothing and receive their generated stubs, the receiver runs two line
 //! dispatchers from its `dispatchers` pool (one per `(source, priority)`
 //! line) behind two per-pair routers, each producer updates only its own
@@ -130,7 +130,7 @@ const SYSTEM_JSON: &str = r#"{
 "#;
 
 /// The generated `ipc_types.rs` stand-in: the fixture's `EncryptReq` type, as
-/// `cargo xbin sync` emits it next to `system.json` (M1-T7). The pass re-emits
+/// `cargo xbin sync` emits it next to `system.json`. The pass re-emits
 /// it into each `#[app]` module, so the retired checked-in crate is replaced by
 /// the injected module.
 const IPC_TYPES_RS: &str = "\
@@ -198,7 +198,7 @@ impl XbinPassBackend for TestBackend {
 /// Software-task backend of the receiver harness.
 ///
 /// Binding [`SoftwarePass`] gives the receivers the generated `RticSwTask`
-/// trait and the generated `__rticx_local_irq_pend` the routers call (M6.5-T5).
+/// trait and the generated `__rticx_local_irq_pend` the routers call.
 /// The mock has no interrupt controller, so the generated pend body runs the
 /// bound dispatcher ISR synchronously (tail-chaining). `irqs` names the
 /// dispatcher interrupt entries of the fixture (one per line), so the pend
@@ -286,7 +286,7 @@ fn producer_module(core: u32) -> syn::ItemMod {
 }
 
 /// `#[app]` arguments of a producer; a single local core, so the global id is
-/// `core` itself (the mapping comes from `rticx.toml`, M7-T2).
+/// `core` itself (the mapping comes from `rticx.toml`).
 fn producer_args() -> TokenStream {
     quote!(device = pac)
 }
@@ -306,7 +306,7 @@ fn producer_topology(core: u32, external: u32) -> AppTopology {
 /// entry boots the application (init, init hooks, idle). The driver runs after
 /// the boot sequence, from the idle task, and calls the generated **router
 /// ISR** directly; the router pends the line dispatcher through the generated
-/// pend function, which runs the dispatcher ISR synchronously (M6.5-T3).
+/// pend function, which runs the dispatcher ISR synchronously.
 fn two_app_receiver_module() -> syn::ItemMod {
     syn::parse_quote! {
         pub mod receiver_app {
@@ -368,7 +368,7 @@ fn two_app_receiver_module() -> syn::ItemMod {
                         .expect("the first spawn enqueues");
                     assert!(
                         backend.router_wait(0, 1, std::time::Duration::from_millis(10)),
-                        "the ring publishes the task id on the pair doorbell (M6.5-T2)"
+                        "the ring publishes the task id on the pair doorbell"
                     );
                     assert!(
                         RECEIVED.lock().expect("the receiver log").is_empty(),
@@ -475,7 +475,7 @@ fn two_app_receiver_topology() -> AppTopology {
     AppTopology::new(vec![1], vec![0])
 }
 
-/// The three-app receiver fixture application (M6-T1): two cross receivers fed
+/// The three-app receiver fixture application: two cross receivers fed
 /// by two producer cores through two pairs, two line dispatchers and the
 /// multi-source scenario driver in `#[idle]`.
 ///
@@ -547,7 +547,7 @@ fn three_app_receiver_module() -> syn::ItemMod {
 
                     // -- complete the mock boot. Each producer core
                     // initializes its own FIFO before its `post_init` would
-                    // spawn (M6-T1); boot sequencing between the simulated
+                    // spawn; boot sequencing between the simulated
                     // cores is distribution-owned.
                     crate::producer_0::test_init_fifos();
 
@@ -565,7 +565,7 @@ fn three_app_receiver_module() -> syn::ItemMod {
                     assert_eq!(
                         unsafe { (*sensor_fifo).len() },
                         0,
-                        "the producer on core 2 initializes its own pool (M6-T1)"
+                        "the producer on core 2 initializes its own pool"
                     );
 
                     // -- first source: spawn -> ring -> its router -> its line
@@ -686,7 +686,7 @@ fn three_app_receiver_topology() -> AppTopology {
 }
 
 /// The fixture view with both applications' interface fingerprints recorded,
-/// as `cargo xbin sync` would (M3-T4).
+/// as `cargo xbin sync` would.
 fn two_app_system() -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     for (package, args, app_mod, topology) in [
@@ -716,7 +716,7 @@ fn two_app_system() -> String {
     view.to_json()
 }
 
-/// Builds the three-application fixture view (M6-T1): `app-m7` (global core 0)
+/// Builds the three-application fixture view: `app-m7` (global core 0)
 /// and `app-m5` (global core 2) each spawn onto `app-m4` (global core 1)
 /// through their own `(source -> target)` pool, priority line and doorbell.
 fn three_app_system() -> String {
@@ -959,7 +959,7 @@ fn write_project(root: &Path, modules: &[(&str, &str)], pools: &[(u32, u32)]) {
     .expect("project manifest");
 
     let mut main = String::from(
-        "// @generated by the M4-T2/M6-T1 end-to-end runtime test\n\
+        "// @generated by the end-to-end runtime test\n\
          #![no_main]\n\
          #![allow(dead_code, unused_imports, unused_variables, non_snake_case, \
          non_upper_case_globals, static_mut_refs)]\n\n\
@@ -1088,7 +1088,7 @@ fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
     run_project(&project, "xbin: e2e ok", "two-app");
 }
 
-/// The M4-T2 runtime harness extended to the three-application fixture (M6-T1).
+/// The runtime harness extended to the three-application fixture.
 #[test]
 fn three_applications_spawn_through_their_own_routers() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1097,7 +1097,7 @@ fn three_applications_spawn_through_their_own_routers() {
     std::fs::write(dir.path().join("ipc_types.rs"), IPC_TYPES_RS).expect("ipc_types.rs");
 
     // Both producers declare nothing: their stubs and ring functions come
-    // from the pass (M5.5). The second producer's stub is generated even
+    // from the pass. The second producer's stub is generated even
     // though the application never declares it.
     let first = expand_producer(&system_path, "app-m7", "m7", 0, 1);
     assert!(

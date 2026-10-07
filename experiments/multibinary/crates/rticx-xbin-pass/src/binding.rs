@@ -1,13 +1,12 @@
 //! Distribution capability binding of the cross-binary code-generation
-//! contract (M6.9-T1).
+//! contract.
 //!
-//! Starting with M6.9 the distribution is the single owner of IPC memory: it
-//! reports, per physical core, which other physical cores it can reach and
-//! through which pool. The project (`rticx.toml`) carries no IPC address at
-//! all. The driver matches the two endpoints of every dual and allocates both
-//! directions inside one shared budget (M6.9-T4); the distribution ships the
-//! linker reservations that keep the pools out of every binary's
-//! `.data`/`.bss` (M6.9-T7).
+//! The distribution is the single owner of IPC memory: it reports, per
+//! physical core, which other physical cores it can reach and through which
+//! pool. The project (`rticx.toml`) carries no IPC address at all. The driver
+//! matches the two endpoints of every dual and allocates both directions
+//! inside one shared budget; the distribution ships the linker reservations
+//! that keep the pools out of every binary's `.data`/`.bss`.
 //!
 //! A distribution implements the two queries on
 //! [`XbinPassBackend`](crate::XbinPassBackend) —
@@ -45,7 +44,7 @@
 /// the mock, or `"cm7"`/`"cm4"` on the STM32H7. The two applications that run
 /// on the endpoints of a dual agree on it even though their local core indexes
 /// may differ, so the driver can match the two sides of a pool across
-/// application manifests (M6.9-T4).
+/// application manifests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PhysicalCore(pub u32);
 
@@ -78,7 +77,7 @@ impl std::fmt::Display for PhysicalCore {
 /// The id names a pool in the distribution's vocabulary (`"sram3"`,
 /// `"axi"`, …). It is the key the driver uses to match the two endpoints'
 /// capability entries: the same `PoolId` with opposite physical cores is one
-/// dual (M6.9-T4).
+/// dual.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PoolId(pub String);
 
@@ -118,7 +117,7 @@ impl std::fmt::Display for PoolId {
 /// Both directions of a dual (`A -> B` and `B -> A`) allocate inside the same
 /// physical block under [`IpcPool::budget`], so the two endpoints must report
 /// the same [`IpcPool::id`] and budget, with the physical cores and
-/// the two base views swapped (M6.9-T4).
+/// the two base views swapped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpcPool {
     /// Symbolic, distro-defined pool id (the dual's matching key).
@@ -140,7 +139,7 @@ mod tests {
     use super::*;
 
     /// The binding types carry the documented fields: the pool names its peer
-    /// and both per-core views of one shared budget (M6.9-T1).
+    /// and both per-core views of one shared budget.
     #[test]
     fn ipc_pool_carries_both_views_and_the_shared_budget() {
         let pool = IpcPool {
@@ -159,7 +158,7 @@ mod tests {
     }
 
     /// A `PoolId` is a value key: equal strings compare equal, so the driver
-    /// can match the two endpoints' entries (M6.9-T4).
+    /// can match the two endpoints' entries.
     #[test]
     fn pool_id_is_a_value_key() {
         assert_eq!(PoolId::from("axi"), PoolId::new("axi"));

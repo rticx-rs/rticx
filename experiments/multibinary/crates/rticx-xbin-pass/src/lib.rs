@@ -4,11 +4,11 @@
 //! The pass has two modes:
 //!
 //! - **metadata mode** (phase 1, `cargo xbin sync`): when
-//!   `RTICX_XBIN_META_OUT` is set in the compiler environment, the pass writes a manifest
-//!   `<target>.xbin.json` describing:   
-//!     - the cross-binary tasks declared by this application, which core spawns them, their input type ..etc
-//!     - IPC pool(s) this application will use, their base address, capacity ..etc
-//!   
+//!   `RTICX_XBIN_META_OUT` is set in the compiler environment, the pass writes
+//!   a `<target>.xbin.json` manifest describing the cross-binary tasks this
+//!   application declares (their spawner core, input type, …) and the IPC
+//!   pool(s) it uses (base address, capacity, …).
+//!
 //!   The driver (`cargo xbin`) sets the variable for the
 //!   `cargo check` invocation it runs per application, so the manifest is
 //!   always written by the application's own macro expansion. The
@@ -28,10 +28,13 @@
 //!   - sender side: a generated sender stub (`pub struct <Task>;`), FIFO views and `Task::cross_spawn` for
 //!     every task whose `spawner_core` belongs to this application.
 //!
-//!   - receiver side: FIFO views, the `SpawnInput: CrossCoreMessage` const assertion against the injected
-//!     marker trait, one generated **line dispatcher** per `(source -> target, priority)` line bound to
-//!     its entry stolen from the front of the shared `dispatchers` list, one **doorbell router** per`(source -> target)` pair routing task ids to the line ready queues,
-//!     and the core `#[task(..)]` shape on the native receiver structs themselves;
+//!   - receiver side: FIFO views, the `SpawnInput: CrossCoreMessage` const
+//!     assertion against the injected marker trait, one generated **line
+//!     dispatcher** per `(source -> target, priority)` line bound to its entry
+//!     stolen from the front of the shared `dispatchers` list, one **doorbell
+//!     router** per `(source -> target)` pair routing task ids to the line
+//!     ready queues, and the core `#[task(..)]` shape on the native receiver
+//!     structs themselves;
 //!
 //!   - IDL types: the driver-generated `target/rticx-xbin/ipc_types.rs` is re-emitted into the `#[app]` module
 //!     as `pub mod ipc_types` together with the `CrossCoreMessage` marker
@@ -73,18 +76,18 @@
 //! Syntax owned by this pass:
 //!
 //! - the **front of `#[app(dispatchers = [..])]`** (always, in both modes): the
-//!   per-core interrupt pool of the generated cross-binary line dispatchers
-//!   (M6.5-T1). The pass steals one entry per cross line from the front of each
-//!   local core's list and rewrites the remainder into the `#[app]` arguments
-//!   for `rticx-sw-pass`/`rticx-async-pass`; the convention is **cross-binary
+//!   per-core interrupt pool of the generated cross-binary line dispatchers.
+//!   The pass steals one entry per cross line from the front of each local
+//!   core's list and rewrites the remainder into the `#[app]` arguments for
+//!   `rticx-sw-pass`/`rticx-async-pass`; the convention is **cross-binary
 //!   lines first, then the local task dispatchers**. `cores`/`core_ids` are
-//!   injected from `rticx.toml` (M7-T2) and left for the core pass, which owns
-//!   them since M5 — see `crate::parse`;
+//!   injected from `rticx.toml` and left for the core pass, which owns them —
+//!   see `crate::parse`;
 //! - native `#[sw_task(..)]` cross-binary receivers (always consumed, in both
 //!   modes), with their input type taken from the matching `impl RticSwTask {
 //!   type SpawnInput = …; }` block. In an application whose topology declares
 //!   external cores, `spawn_by` is resolved in the global namespace (see
-//!   `crate::parse`); there are no sender declarations since M5.5.
+//!   `crate::parse`); there are no sender declarations.
 //!
 //! Detection of the metadata environment happens when the pass is
 //! constructed (`XbinPass::from_env`), i.e. at the macro entry point, so a
@@ -125,12 +128,12 @@ pub use rticx_core::RticPass;
 
 pub use crate::codegen::XbinPassBackend;
 
-/// The distribution capability binding of the code-generation contract
-/// (M6.9-T1): the physical-core and IPC-pool vocabulary a distribution uses to
-/// tell the pass which cores it can reach and through which shared pool.
+/// The distribution capability binding of the code-generation contract:
+/// the physical-core and IPC-pool vocabulary a distribution uses to tell
+/// the pass which cores it can reach and through which shared pool.
 pub use crate::binding::{IpcPool, PhysicalCore, PoolId};
 
-/// Topology resolution from the nearest `rticx.toml` (M7-T2): the
+/// Topology resolution from the nearest `rticx.toml`: the
 /// distribution macros and the pass read the application's core mapping and
 /// visible foreign cores from the project file instead of `#[app]`.
 pub use crate::topology::{AppTopology, ResolvedTopology, resolve_app_topology};
@@ -157,15 +160,14 @@ pub struct XbinPass {
     meta: Option<MetaMode>,
     system: Option<SystemMode>,
     backend: Option<Box<dyn XbinPassBackend>>,
-    /// Where the application's `cores`/`core_ids`/`external_cores` come from
-    /// (M7-T2).
+    /// Where the application's `cores`/`core_ids`/`external_cores` come from.
     topology: TopologySource,
     /// Init-hook wiring stashed by `run_pass` and read back by
     /// `main_injection` (both take `&self`).
     hooks: RefCell<Option<HookPlan>>,
 }
 
-/// Where the pass reads the application's topology from (M7-T2).
+/// Where the pass reads the application's topology from.
 ///
 /// `rticx.toml` is the single user-facing source of project topology; the
 /// pass picks its source at construction so a real distribution resolves the
@@ -250,20 +252,24 @@ impl XbinPass {
     /// generate code; add the distribution backend with
     /// [`XbinPass::with_backend`].
     pub fn from_env() -> Self {
+        let package = non_empty_env("CARGO_PKG_NAME");
+        let target = non_empty_env("CARGO_BIN_NAME");
+        let topology = TopologySource::Project {
+            package: package.clone(),
+            target: target.clone(),
+        };
+
         if let Some(out_dir) = non_empty_env_os(META_OUT_ENV).map(PathBuf::from) {
             return Self {
                 meta: Some(MetaMode {
                     out_dir,
-                    package: non_empty_env("CARGO_PKG_NAME"),
-                    target: non_empty_env("CARGO_BIN_NAME"),
+                    package,
+                    target,
                     halt: true,
                 }),
                 system: None,
                 backend: None,
-                topology: TopologySource::Project {
-                    package: non_empty_env("CARGO_PKG_NAME"),
-                    target: non_empty_env("CARGO_BIN_NAME"),
-                },
+                topology,
                 hooks: RefCell::new(None),
             };
         }
@@ -271,10 +277,7 @@ impl XbinPass {
             meta: None,
             system: system_from_env(),
             backend: None,
-            topology: TopologySource::Project {
-                package: non_empty_env("CARGO_PKG_NAME"),
-                target: non_empty_env("CARGO_BIN_NAME"),
-            },
+            topology,
             hooks: RefCell::new(None),
         }
     }
@@ -350,8 +353,7 @@ impl XbinPass {
         self
     }
 
-    /// Fixes the application's topology, overriding the constructor default
-    /// (M7-T2).
+    /// Fixes the application's topology, overriding the constructor default.
     ///
     /// Used by the pass's own tests to drive a non-identity mapping without
     /// writing a `rticx.toml` into the crate directory. A `#[app(cores)]`
@@ -405,7 +407,7 @@ impl RticPass for XbinPass {
         args: TokenStream,
         mut app_mod: ItemMod,
     ) -> syn::Result<(TokenStream, ItemMod)> {
-        // `rticx.toml` is the single user-facing source of topology (M7-T2):
+        // `rticx.toml` is the single user-facing source of topology:
         // resolve the application's `cores`/`core_ids`/`external_cores` from
         // the nearest project file (a `Fixed` topology overrides it; no
         // project falls back to the identity mapping over `#[app(cores)]`).
@@ -421,12 +423,12 @@ impl RticPass for XbinPass {
             _ => resolved.as_ref().map(|resolved| resolved.topology.clone()),
         };
         // The `include_str!` freshness anchor is only emitted when the
-        // topology came from a project file (M7-T2).
+        // topology came from a project file.
         let project_manifest = resolved
             .as_ref()
             .map(|resolved| resolved.manifest_path.as_path());
         // The project root the topology resolver found; the IDL freshness
-        // check and anchor live next to the `rticx.toml` (M3-T4).
+        // check and anchor live next to the `rticx.toml`.
         let project_root = project_manifest.and_then(Path::parent);
         let package = self.package().unwrap_or_default().to_string();
 
@@ -438,18 +440,13 @@ impl RticPass for XbinPass {
 
         // The fingerprint describes only the cross-binary-sensitive parts of
         // the application (see [`interface_hash`]): the resolved topology, the
-        // stolen cross-binary dispatchers and the receiver declarations. It is
-        // computed only when a meta/system mode will actually use it, so the
-        // syntax-only pass does no hashing at all.
-        let interface_hash = (self.meta.is_some() || self.system.is_some())
-            .then(|| interface_hash(&extensions, &decls));
-
+        // stolen cross-binary dispatchers and the receiver declarations. Each
+        // mode computes it from the parsed data, so the syntax-only pass does
+        // no hashing at all.
         if let Some(meta) = &self.meta {
-            let interface_hash =
-                interface_hash.expect("metadata mode computes the interface fingerprint");
             let manifest = build_manifest(
                 meta,
-                interface_hash,
+                interface_hash(&extensions, &decls),
                 extensions.clone(),
                 decls.clone(),
                 self.backend.as_deref(),
@@ -475,10 +472,9 @@ impl RticPass for XbinPass {
         }
 
         if let Some(system) = &self.system {
-            let interface_hash =
-                interface_hash.expect("codegen mode computes the interface fingerprint");
+            let interface_hash = interface_hash(&extensions, &decls);
             let package = system.package.as_deref().ok_or_else(|| {
-                meta_error(
+                error(
                     "the system view is configured but `CARGO_PKG_NAME` is not defined; \
                      code generation must run through cargo",
                 )
@@ -495,15 +491,14 @@ impl RticPass for XbinPass {
 
             // Every application listed in the view loads it: producer
             // endpoints need their generated stubs and every application
-            // needs its init hooks, even when it declares no cross task
-            // (M5.5).
+            // needs its init hooks, even when it declares no cross task.
             let view = load_system(&system.path)?;
             let application = check_application(&view, package, target, &extensions)?;
 
-            // M6-T1: one priority line per target core belongs to exactly one
-            // origin core. `sync` enforced the rule across producer cores;
-            // this application's own raw sw/async declarations are only
-            // visible here, at build time.
+            // One priority line per target core belongs to exactly one origin
+            // core. `sync` enforced the rule across producer cores; this
+            // application's own raw sw/async declarations are only visible
+            // here, at build time.
             validate_priority_lines(&view, application, &decls)?;
 
             let mut items =
@@ -521,7 +516,7 @@ impl RticPass for XbinPass {
             // mismatch first; both errors point at `cargo xbin sync`.
             check_interface_hash(application, interface_hash)?;
             // An IDL edit after the last `sync` is a hard error on a plain
-            // build too (M3-T4). Reason about the project root the topology
+            // build too. Reason about the project root the topology
             // resolver already found; an absent `ipc-types.toml` compares
             // against the empty IDL, matching the sentinel `system_view`
             // records.
@@ -538,7 +533,7 @@ impl RticPass for XbinPass {
 
             // The IDL types are no longer a crate: re-emit the synced
             // `ipc_types.rs` into the `#[app]` module together with the
-            // `CrossCoreMessage` marker trait its types implement (M1-T7).
+            // `CrossCoreMessage` marker trait its types implement.
             items.extend(generate_ipc_types_items(
                 &app_mod,
                 &system.path,
@@ -582,7 +577,7 @@ fn append_items(app_mod: &mut ItemMod, items: Vec<syn::Item>) {
 }
 
 /// Parses the pass-owned syntax of `(args, app_mod)` with the given
-/// `topology` and steals the cross-binary dispatcher front (M6.5-T1).
+/// `topology` and steals the cross-binary dispatcher front.
 ///
 /// Shared by [`RticPass::run_pass`] and [`app_interface_hash`], so the
 /// interface fingerprint is computed from exactly the data the pass acts on.
@@ -600,7 +595,7 @@ fn parse_interface(
     // followed by the local software/async task dispatchers. The pass steals
     // the front and writes the remainder back into the arguments for
     // `rticx-sw-pass`/`rticx-async-pass`; a short list (or a duplicate inside
-    // the stolen prefix) is a hard error (M6.5-T1).
+    // the stolen prefix) is a hard error.
     steal_dispatchers(&mut extensions, &decls, &mut attr)?;
 
     Ok((extensions, attr, decls))
@@ -612,7 +607,7 @@ fn parse_interface(
 /// `CARGO_MANIFEST_DIR` select codegen mode, whether or not the view exists:
 /// an application listed in the project but without a synced view must fail
 /// with the "run `cargo xbin sync`" error instead of silently generating
-/// nothing (M5.5 removed the cross-declaration gate).
+/// nothing.
 fn system_from_env() -> Option<SystemMode> {
     let package = non_empty_env("CARGO_PKG_NAME");
     let target = non_empty_env("CARGO_BIN_NAME");
@@ -648,7 +643,7 @@ pub(crate) fn project_root_from_env() -> Option<PathBuf> {
 }
 
 /// Reads and parses the driver-generated system view, rejecting a stale
-/// `topology_hash` (M3-T4).
+/// `topology_hash`.
 ///
 /// The pass recomputes the topology hash from the view it just loaded and
 /// compares it with the `topology_hash` field stored in the JSON: a mismatch
@@ -657,19 +652,19 @@ pub(crate) fn project_root_from_env() -> Option<PathBuf> {
 /// build` re-syncs first and therefore never trips this.
 fn load_system(path: &Path) -> syn::Result<SystemView> {
     let source = std::fs::read_to_string(path).map_err(|source| {
-        meta_error(format!(
+        error(format!(
             "failed to read the system view `{}`: {source}; run `cargo xbin sync`",
             path.display()
         ))
     })?;
     let view = SystemView::from_json(&source).map_err(|source| {
-        meta_error(format!(
+        error(format!(
             "failed to parse the system view `{}`: {source}; run `cargo xbin sync`",
             path.display()
         ))
     })?;
     if !view.verify_topology_hash() {
-        return Err(meta_error(format!(
+        return Err(error(format!(
             "the system view `{}` is stale: its `topology_hash` ({}) does not match its contents \
              ({}); run `cargo xbin sync`",
             path.display(),
@@ -680,7 +675,7 @@ fn load_system(path: &Path) -> syn::Result<SystemView> {
     Ok(view)
 }
 
-/// Computes the live layout hash of the project's `ipc-types.toml` (M3-T4).
+/// Computes the live layout hash of the project's `ipc-types.toml`.
 ///
 /// An absent file is laid out as [`IpcTypes::empty`], matching the sentinel
 /// `system_view` records for a project without an IDL; the comparison is then
@@ -688,7 +683,7 @@ fn load_system(path: &Path) -> syn::Result<SystemView> {
 fn live_idl_layout_hash(idl_path: &Path) -> syn::Result<u64> {
     let idl = if idl_path.is_file() {
         parse_idl_file(idl_path).map_err(|source| {
-            meta_error(format!(
+            error(format!(
                 "failed to parse `{}`: {source}; run `cargo xbin sync`",
                 idl_path.display()
             ))
@@ -697,7 +692,7 @@ fn live_idl_layout_hash(idl_path: &Path) -> syn::Result<u64> {
         IpcTypes::empty()
     };
     rticx_xbin_proto::layout_hash(&idl).map_err(|source| {
-        meta_error(format!(
+        error(format!(
             "failed to lay out `{}`: {source}; run `cargo xbin sync`",
             idl_path.display()
         ))
@@ -713,7 +708,7 @@ fn build_manifest(
     backend: Option<&dyn XbinPassBackend>,
 ) -> syn::Result<AppManifest> {
     let package = meta.package.as_deref().ok_or_else(|| {
-        meta_error(
+        error(
             "`RTICX_XBIN_META_OUT` is set but `CARGO_PKG_NAME` is not defined; \
              metadata collection must run through cargo (see `cargo xbin sync`)",
         )
@@ -745,9 +740,9 @@ fn build_manifest(
     })
 }
 
-/// Extracts the distro capability binding into the manifest schema
-/// (M6.9-T2): one [`CoreCapability`] per local core, carrying its physical
-/// core id and the IPC pools that physical core can reach.
+/// Extracts the distro capability binding into the manifest schema: one
+/// [`CoreCapability`] per local core, carrying its physical core id and the
+/// IPC pools that physical core can reach.
 ///
 /// The two binding queries are pure, so they run in metadata mode too. Without
 /// a bound backend there is no distro vocabulary to report and the list stays
@@ -784,9 +779,9 @@ fn capability_binding(
         .collect()
 }
 
-/// Converts one distro pool binding into its manifest representation
-/// (M6.9-T2). The binding types and the JSON schema are kept separate; this is
-/// the single conversion point.
+/// Converts one distro pool binding into its manifest representation.
+/// The binding types and the JSON schema are kept separate; this is the
+/// single conversion point.
 fn pool_decl(pool: IpcPool) -> PoolDecl {
     PoolDecl {
         id: pool.id.0,
@@ -804,14 +799,14 @@ fn write_manifest(meta: &MetaMode, manifest: &AppManifest) -> syn::Result<()> {
         .join(AppManifest::file_name(&manifest.target.name));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| {
-            meta_error(format!(
+            error(format!(
                 "failed to create manifest directory `{}`: {source}",
                 parent.display()
             ))
         })?;
     }
     std::fs::write(&path, manifest.to_json()).map_err(|source| {
-        meta_error(format!(
+        error(format!(
             "failed to write application manifest `{}`: {source}",
             path.display()
         ))
@@ -900,7 +895,7 @@ pub(crate) fn interface_hash(extensions: &AppExtensions, decls: &ModuleDecls) ->
 }
 
 /// Parses `(args, app_mod)` with `topology` and returns the interface
-/// fingerprint [`RticPass::run_pass`] would record for it (M1-T2).
+/// fingerprint [`RticPass::run_pass`] would record for it.
 ///
 /// Public so tests and tooling can build views that match a given source, as
 /// `cargo xbin sync` does. The fingerprint covers only the cross-binary
@@ -952,7 +947,8 @@ fn write_canonical(stream: TokenStream, out: &mut String) {
     }
 }
 
-fn meta_error(message: impl Into<String>) -> syn::Error {
+/// Builds a pass error at the macro call site.
+fn error(message: impl Into<String>) -> syn::Error {
     syn::Error::new(Span::call_site(), message.into())
 }
 
@@ -1021,7 +1017,7 @@ mod tests {
         );
         assert!(
             parsed.get_expr("ipc_dispatchers").is_some(),
-            "`ipc_dispatchers` no longer exists; the key stays for the core pass (M6.5-T1)"
+            "`ipc_dispatchers` no longer exists; the key stays for the core pass"
         );
         assert_eq!(
             parsed

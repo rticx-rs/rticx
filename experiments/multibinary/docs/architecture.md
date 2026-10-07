@@ -121,8 +121,7 @@ the path). The `crates/mock/fixtures/metadata` project covers this end to end.
 `topology_hash`, `layout_hash`, `apps`, `cores` (each with its distro
 `physical_core`), `types`, `tasks` (with a pool-relative `fifo`),
 `pools` (one entry per dual, with both base views, the shared `budget` and the
-bytes `used`), `doorbells` — see
-[plan §7.2](multibinary-multicore-plan.md#72-systemjson-contents).
+bytes `used`), `doorbells`.
 The canonical serde types are `rticx_xbin_proto::system::SystemView` (with
 `canonical_topology_text`, `seal` and `verify_topology_hash`); the
 per-application manifest is `rticx_xbin_proto::manifest::AppManifest`

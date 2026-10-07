@@ -1,7 +1,7 @@
 //! Acceptance tests for the native cross-binary task syntax.
 //!
 //! - the project topology (`cores`/`core_ids`/`external_cores`) comes from
-//!   `rticx.toml` and is injected into the arguments by the pass (M7-T2); the
+//!   `rticx.toml` and is injected into the arguments by the pass; the
 //!   native `#[sw_task(..)]` + `impl RticSwTask { type SpawnInput = …; }`
 //!   receiver syntax parses into declarations with the documented defaults;
 //! - `spawn_by` in an application whose topology declares external cores
@@ -80,13 +80,13 @@ fn mapped_topology() -> AppTopology {
 }
 
 /// The arguments of a two-core application; the core mapping comes from the
-/// project topology (M7-T2).
+/// project topology.
 fn mapped_args() -> TokenStream {
     quote!(device = mypac)
 }
 
 /// Like [`mapped_args`] with the cross lines of the receiver fixtures: local
-/// core 0 carries `(7, 1)`, local core 1 carries `(7, 3)` (M6.5-T1).
+/// core 0 carries `(7, 1)`, local core 1 carries `(7, 3)`.
 fn receiver_args() -> TokenStream {
     quote!(device = mypac, dispatchers = [[IRQ_IN_0], [IRQ_IN_1]])
 }
@@ -600,8 +600,8 @@ fn plain_app() -> syn::ItemMod {
 fn other_distributions_only_warn_about_app_extensions() {
     // A distribution that does not bind the extension pass: `external_cores`
     // survives into the core pass, which must warn (the `#[deprecated]` trick)
-    // instead of erroring. `core_ids` is native to `rticx-core` since M5, so
-    // it is consumed without a warning even without the extension pass.
+    // instead of erroring. `core_ids` is native to `rticx-core`, so it is
+    // consumed without a warning even without the extension pass.
     let builder = RticMacroBuilder::new(MockCoreBackend);
     let code = builder
         .build_rtic_macro2(
@@ -625,7 +625,7 @@ fn other_distributions_only_warn_about_app_extensions() {
     // With the extension pass bound the extension-owned arguments are
     // resolved/consumed, but the removed `ipc_dispatchers` key is not: it stays
     // in the arguments and the core pass warns about it like any other unknown
-    // `#[app]` argument (M6.5-T1).
+    // `#[app]` argument.
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(XbinPass::disabled().with_topology(AppTopology::identity(1)));
     let code = builder

@@ -1,4 +1,4 @@
-//! M6.5-T1 acceptance: the shared `dispatchers` pool.
+//! Acceptance tests for the shared `dispatchers` pool.
 //!
 //! The xbin pass no longer owns a separate `ipc_dispatchers` argument: it
 //! **steals the front** of the software pass's `dispatchers` argument — one
@@ -59,8 +59,7 @@ fn two_line_cross_receiver_app() -> syn::ItemMod {
 }
 
 /// The `#[app]` arguments of a single-core application with
-/// `dispatchers = <dispatchers>` (the core mapping comes from `rticx.toml`,
-/// M7-T2).
+/// `dispatchers = <dispatchers>` (the core mapping comes from `rticx.toml`).
 fn receiver_args(dispatchers: TokenStream) -> TokenStream {
     quote!(
         device = mypac,
