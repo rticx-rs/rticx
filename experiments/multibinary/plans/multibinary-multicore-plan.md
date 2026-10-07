@@ -1,6 +1,7 @@
 # RTICX Multi-Binary / Heterogeneous Multi-Core Extension — Architecture Reference
 
 **Status:** complete and some parts of this plan are being obsoleted/updated/simplified so DO NOT rely on this as a source of truth just a general architectural direction and context.
+**Updated (2026-10-07):** the per-application freshness hash is now an **interface fingerprint** over only the cross-binary interface, and an edited `ipc-types.toml` is rejected on a plain build by an IDL freshness check (see `interface-hash-plan.md`, Phase 4). §5.2, §7.1, §7.3, §14 and §15 below reflect that.
 **Target:** experimental, in-tree development, designed for later extraction into
 its own repository (M7-T3).
 
@@ -184,12 +185,12 @@ the root generation.
 | | `layout.rs` | Canonical little-endian layout (natural alignment capped at 4) |
 | | `codegen.rs` | Generate the `ipc_types` module (types, marker impls, consts, asserts, `LAYOUT_HASH`) with change-detecting writes |
 | | `project.rs` | Parse `rticx.toml` (`[[application]]` with `core_ids` + optional `external_cores`; rejects the removed `[ipc.regions]`) |
-| | `manifest.rs` | `<app>.xbin.json` schema 3 (written by the pass in metadata mode: source hash, receivers, per-local-core distro capability binding; no topology echo) |
+| | `manifest.rs` | `<app>.xbin.json` schema 4 (written by the pass in metadata mode: interface fingerprint, receivers, per-local-core distro capability binding; no topology echo) |
 | | `merge.rs` | Merge manifests, validate topology/priority/type/core-id rules, match the distro pool graph, reject impossible links, allocate FIFOs in the shared pool budgets |
 | | `alloc.rs` | Emit the sealed system view (FIFO offsets, doorbell lines, hashes) |
 | | `system.rs` | `system.json` schema (`seal`, `canonical_topology_text`, `verify_topology_hash`) |
 | | `fifo.rs` | Canonical in-region FIFO image and sizing (shared with the runtime) |
-| | `hash.rs` | Deterministic FNV-1a 64-bit hash (source/layout/topology) |
+| | `hash.rs` | Deterministic FNV-1a 64-bit hash (interface/layout/topology) |
 | `rticx-xbin-pass` | `lib.rs` | `XbinPass`: mode detection (`RTICX_XBIN_META_OUT` / `RTICX_XBIN_SYSTEM`), view load, pass orchestration |
 | | `parse.rs` | `#[app]` args (`device`, optional `cores`, the shared `dispatchers`; rejects the moved `core_ids`/`external_cores` and injects the resolved topology), native `#[sw_task]` receiver extraction + `spawn_by` resolution, receiver injection/strip, and the `dispatchers` steal (cross-line front consumed, remainder re-emitted) |
 | | `topology.rs` | Resolve an application's topology from the nearest `rticx.toml` (`AppTopology`, `resolve_app_topology`); shared with the distribution macros |
@@ -491,10 +492,10 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
    - run `cargo clean -p <package>` (metadata env changes are invisible to cargo
      fingerprints), then `cargo check` with `RTICX_XBIN_META_OUT=<dir>`;
    - the extension helper (detected at the macro level) writes `<app>.xbin.json`:
-     package/target, source hash, cross receivers (native `#[sw_task]` items),
-     their `SpawnInput` type paths, priorities, capacities, and the per-local-core
-     distro capability binding (physical core id + IPC pools; M6.9-T2). The
-     manifest (schema 3) carries no topology echo: the application's
+     package/target, interface fingerprint, cross receivers (native `#[sw_task]`
+     items), their `SpawnInput` type paths, priorities, capacities, and the
+     per-local-core distro capability binding (physical core id + IPC pools;
+     M6.9-T2). The manifest (schema 4) carries no topology echo: the application's
      `core_ids`/`external_cores` are read from `rticx.toml` by the pass. There are
      no sender declarations: the driver infers each task's single producer
      application from the receivers' `spawn_by`;
@@ -569,14 +570,35 @@ also the future input for `cargo xbin visualize`.
 
 ### 7.3 Freshness / staleness
 
-- The pass in phase 2 emits `include_str!` of `system.json` and of the generated
-  `ipc_types.rs`, so rustc records both in dep-info and rebuilds when either
-  changes.
+- The pass in phase 2 emits `include_str!` of `system.json`, of the generated
+  `ipc_types.rs`, of `rticx.toml` and (when present) of `ipc-types.toml`, so rustc
+  records all of them in dep-info and rebuilds when any changes.
 - Generated code embeds a `const TOPOLOGY_HASH: u64 = ...;`; a mismatch between the
   app's own recomputed hash and the JSON hash is a hard compile error instructing the
   user to run `cargo xbin sync`.
+- **Interface fingerprint.** Phase 2 recomputes the application's `interface_hash`
+  and compares it with the value recorded at sync time (`check_interface_hash`). The
+  fingerprint covers only what the driver merges into the project topology — the
+  resolved topology (`cores`, `core_ids`, `external_cores`), the stolen
+  cross-dispatcher front (host-independently rendered paths) and the receiver
+  declarations (`name`, `priority`, `capacity`, `core`, `spawn_by`, `input_type`).
+  Task bodies, doc/`//` comments, local `#[sw_task]`/`#[async_task]` declarations,
+  `shared`, `device`/`pacs` and surplus (local) dispatcher entries do **not** enter
+  the fingerprint, so editing them never red-squiggles a synced application.
+- **Per-field receiver edits.** A change to a receiver's `priority`, `capacity`,
+  `core`, `spawn_by` or `input_type` is normally reported first by the targeted
+  `resolve_receiver` check with a field-specific message ("declares priority …, but
+  the synced system view has …"); adding or removing a receiver, a topology change
+  or a changed cross-dispatcher front is reported by the interface fingerprint. Both
+  errors name `cargo xbin sync`.
+- **IDL freshness.** Phase 2 parses the live `ipc-types.toml`, recomputes its layout
+  hash and compares it with `system.json`'s `layout_hash` (`check_idl_hash`); an
+  absent IDL compares against `IpcTypes::empty()`. An edited IDL after a sync is a
+  hard error naming the file and `cargo xbin sync` (the `include_str!` anchor makes
+  the macro re-run even on a cargo-cached build).
 - `cargo xbin build` always runs `sync` first. Plain `cargo build` is supported only
-  after an explicit `sync`; an app whose source changed will fail until resynced.
+  after an explicit `sync`; an app whose cross-binary interface or IDL changed will
+  fail until resynced.
 
 ---
 
@@ -1065,7 +1087,9 @@ distro may use them internally, but no new framework mechanism).
 | `ipc_types` generation location | `target/rticx-xbin/ipc_types.rs` next to `system.json`; regenerated by `sync`, never checked in |
 | Doorbell/IRQ availability per distro | One doorbell IRQ per producer pair plus one dispatcher IRQ per line, supplied by the cross-line front of the user's `dispatchers` list; the router coalesces all lines of a pair onto that one IRQ |
 | Cacheable-region fallback correctness | v1 requires a Normal, Non-cacheable, Shareable pool; there are no cache hooks and a cacheable mapping is unsupported (the transport body would own any maintenance, D2) |
-| Staleness under plain `cargo build` | Only the changed app detects its own staleness; `cargo xbin build` is the safe path |
+| Staleness under plain `cargo build` | Only the changed app detects its own staleness; `cargo xbin build` is the safe path. The freshness checks are now an **interface fingerprint** (`check_interface_hash`) plus a live-IDL layout check (`check_idl_hash`), so a body/comment/local-task edit does not trip them while any cross-binary or IDL change still does (Phase 4) |
+| The interface fingerprint misses a still-relevant change | The targeted checks remain the safety net (`check_application` for topology, `resolve_receiver` per field, the owned-view-task check, the dispatcher-count check); the fingerprint only adds an early, precise `cargo xbin sync` message |
+| A cargo-cached build does not re-run the macro after a pure IDL edit | The pass emits `include_str!(ipc-types.toml)` when the file exists, so rustc's dep-info re-expands the macro and `check_idl_hash` fires (Phase 3) |
 | Reimplemented internals drift from `rticx-sw-pass` | `TODO(extract)` markers; periodic manual comparison; possible later shared crate |
 | Priority-line exhaustion on a target | No automatic shifting: producer cores must declare disjoint priorities; collisions are hard errors naming both tasks (`sync` for producer-vs-producer, the pass at `build` for collisions with the target app's own sw/async tasks); the limits are documented |
 | Future `Producer`/SRP API | Transport and lock are separated in codegen so migration is localized |
@@ -1160,6 +1184,16 @@ distro may use them internally, but no new framework mechanism).
 - **Topology** — an application's `core_ids`/`external_cores`, read from the
   nearest `rticx.toml`; the pass resolves it (`AppTopology` /
   `resolve_app_topology`) and injects `cores`/`core_ids` into the core pass.
+- **Interface fingerprint** (`interface_hash`) — the per-application freshness
+  value recorded in `<app>.xbin.json`/`system.json` and re-checked at `build`. It
+  covers only the cross-binary interface: the resolved topology, the stolen
+  cross-dispatcher front and the receiver declarations (`name`, `priority`,
+  `capacity`, `core`, `spawn_by`, `input_type`); bodies, comments, local
+  sw/async tasks, `shared`, `device`/`pacs` and surplus dispatcher entries are
+  excluded. Renamed from the former whole-source `source_hash` (schema 4/3).
+- **IDL freshness** — the `build`-time check (`check_idl_hash`) comparing the
+  live `ipc-types.toml` layout hash with `system.json`'s `layout_hash`; a
+  mismatch is a hard error naming the IDL and `cargo xbin sync`.
 - **Renode harness** — the dual-core STM32H7 platform, startup script and
   `run.sh` launcher under `experiments/multibinary/rticx-stm32h7/renode/` used
   as the M7 acceptance target (§11.1).

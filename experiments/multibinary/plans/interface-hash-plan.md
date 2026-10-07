@@ -325,9 +325,18 @@ over a copy of `crates/mock/fixtures/e2e` (reuse the `fixture_copy` helper from
 1. `plain_build_accepts_a_body_only_edit` — sync, edit a receiver task body
    (and add a doc comment), plain `cargo build` **succeeds**. This is the user's
    original complaint; it must pass.
-2. `plain_build_rejects_a_source_interface_edit` — sync, change a receiver
-   `priority` (without re-syncing), plain build **fails** with
-   "interface changed since the last `cargo xbin sync`".
+2. `plain_build_rejects_a_source_interface_edit` — sync, make an interface edit
+   that only the fingerprint can see, without re-syncing; plain build **fails**
+   with "interface changed since the last `cargo xbin sync`".
+   *Resolved deviation (2026-10-07):* the original wording here said "change a
+   receiver `priority`". That cannot emit the fingerprint message, because
+   `generate_receiver_items` / `resolve_receiver` runs first (Phase 2 §2 keeps it
+   as the safety net) and reports the more specific "receiver `…` declares
+   priority 4, but the synced system view has 3; run `cargo xbin sync`". A
+   per-field receiver edit (priority/capacity/core/spawn_by/input_type) is
+   therefore already rejected by the targeted check; the fingerprint's own
+   message is exercised with an unrelated interface edit (receiver removal).
+   Both paths name `cargo xbin sync`, so the user-facing acceptance holds.
 3. Update `crates/rticx-xbin-driver/tests/negative.rs::plain_build_rejects_a_missing_or_stale_sync`:
    its current "source changed" edit injects `const __XBIN_NEGATIVE: u32 = 1;`,
    which is **not** interface-relevant any more. Change the injected edit to a
@@ -403,7 +412,10 @@ check; full workspace + fixtures green.
   IDL check.
 - `docs/user-guide.md` — lines around 509 (`m7.xbin.json` comment), 644–647
   (freshness narrative), 905–911 (error table): document what does and does not
-  trigger a re-sync, and the new IDL error row.
+  trigger a re-sync, and the new IDL error row. Make explicit that a per-field
+  receiver edit (priority/capacity/core/spawn_by/input_type) is reported by the
+  field-level (`resolve_receiver`) check, while other cross-binary edits are
+  caught by the interface fingerprint — both say `cargo xbin sync`.
 - `crates/rticx-xbin-proto/src/hash.rs` and the `manifest.rs`/`system.rs`
   field docs (if not already swept in Phase 1/2).
 
@@ -438,7 +450,10 @@ cd crates/mock/fixtures/e2e
 cargo xbin sync
 # 1. body-only edit: append a line/comment inside a receiver's exec -> plain build must pass
 cargo build --package app-m4 --bin m4
-# 2. interface edit: change a receiver `priority` -> plain build must fail, naming cargo xbin sync
+# 2. interface edit: remove a receiver declaration (or change any cross-binary
+#    field) -> plain build must fail, naming cargo xbin sync. A per-field receiver
+#    edit (e.g. priority) fails earlier with the more specific resolve_receiver
+#    message; both name cargo xbin sync (see Phase 2, resolved deviation).
 # 3. IDL edit: change a field type in ipc-types.toml -> plain build must fail,
 #    naming the IDL and cargo xbin sync
 ```
@@ -453,21 +468,21 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 | # | Phase | Task | Status | Notes / commit |
 |---|---|---|---|---|
-| P0 | — | Verify prerequisites (§3) | [ ] | stop if not landed |
-| P1-T1 | 1 | Failing schema/rename test | [ ] | |
-| P1-T2 | 1 | Rename `source_hash` → `interface_hash`, bump schemas, migrate fixtures | [ ] | |
-| P1-* | 1 | Phase acceptance + commit | [ ] | |
-| P2-T1 | 2 | Failing fingerprint-scope tests | [ ] | bodies/comments/local/shared/device |
-| P2-T2 | 2 | Failing fingerprint-sensitivity tests | [ ] | receiver fields/dispatchers/topology |
-| P2-T3 | 2 | Implement `interface_hash`, delete normalizer, drop `visit-mut` | [ ] | |
-| P2-T4 | 2 | Migrate `with_interface_hashes` + patch call sites | [ ] | |
-| P2-T5 | 2 | Driver `freshness.rs`: body-edit passes, interface-edit fails | [ ] | key acceptance |
-| P2-T6 | 2 | Update `negative.rs` source-changed case | [ ] | |
-| P2-* | 2 | Phase acceptance + commit | [ ] | |
-| P3-T1 | 3 | `check_idl_hash` unit tests + snapshot | [ ] | |
-| P3-T2 | 3 | Implement IDL check + `include_str!` anchor + `IDL_FILE` | [ ] | |
-| P3-T3 | 3 | Driver `plain_build_rejects_an_edited_idl` | [ ] | proves the anchor fires |
-| P3-* | 3 | Phase acceptance + commit | [ ] | |
+| P0 | — | Verify prerequisites (§3) | [x] | landed: MANIFEST_SCHEMA_VERSION=3, SYSTEM_SCHEMA_VERSION=2, `steal_dispatchers`/`AppTopology` present, no `ipc_dispatchers` use, topology `include_str!` anchors emitted |
+| P1-T1 | 1 | Failing schema/rename test | [x] | RED: schema asserts 4/3 |
+| P1-T2 | 1 | Rename `source_hash` → `interface_hash`, bump schemas, migrate fixtures | [x] | helper/test names migrated to `with_interface_hashes`/`interface_hash_*`; `app_source_hash` kept for P2 |
+| P1-* | 1 | Phase acceptance + commit | [x] | commit 9d4fc2b, `cargo test -p proto -p pass -p driver` green |
+| P2-T1 | 2 | Failing fingerprint-scope tests | [x] | bodies/comments/local/shared/device |
+| P2-T2 | 2 | Failing fingerprint-sensitivity tests | [x] | receiver fields/dispatchers/topology |
+| P2-T3 | 2 | Implement `interface_hash`, delete normalizer, drop `visit-mut` | [x] | `app_interface_hash` wrapper + shared `parse_interface` |
+| P2-T4 | 2 | Migrate `with_interface_hashes` + patch call sites | [x] | all `app_source_hash` sites migrated |
+| P2-T5 | 2 | Driver `freshness.rs`: body-edit passes, interface-edit fails | [x] | key acceptance; uses receiver removal, see deviation note |
+| P2-T6 | 2 | Update `negative.rs` source-changed case | [x] | shared `tests/common/mod.rs` factored out |
+| P2-* | 2 | Phase acceptance + commit | [x] | commit 35ab3be, both acceptance commands green |
+| P3-T1 | 3 | `check_idl_hash` unit tests + snapshot | [x] | 4 tests, exact-message assertion |
+| P3-T2 | 3 | Implement IDL check + `include_str!` anchor + `IDL_FILE` | [x] | `IDL_FILE` in proto, `IDL_MANIFEST` re-export, anchor in `generate_freshness_items` |
+| P3-T3 | 3 | Driver `plain_build_rejects_an_edited_idl` | [x] | anchor proven load-bearing (disabled anchor → cached build passes) |
+| P3-* | 3 | Phase acceptance + commit | [x] | commit 25cfe0d, proto/pass/driver green |
 | P4-T1 | 4 | Docs sweep (`plan`/`architecture`/`user-guide`/proto docs) | [ ] | |
 | P4-T2 | 4 | Full verification + manual matrix | [ ] | |
 | P4-* | 4 | Phase acceptance + commit | [ ] | |
@@ -475,6 +490,10 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 ### Session notes
 
 - _(add entries here as phases complete: date, what landed, deviations, deferred items)_
+- 2026-10-07 — **P0** verified landed (schema 3/2, `steal_dispatchers`/`AppTopology`, no `ipc_dispatchers`, topology anchors).
+- 2026-10-07 — **Phase 1** landed (commit `9d4fc2b`). Test helpers were renamed ahead of schedule to `with_interface_hashes` / `interface_hash_*`; `app_source_hash`/`normalize_semicolons` deliberately kept for Phase 2.
+- 2026-10-07 — **Phase 2** landed (commit `35ab3be`). Fingerprint computed from parsed data via shared `parse_interface`; `app_source_hash`, `normalize_semicolons`, `is_block_like` deleted; `visit-mut` syn feature dropped. **Resolved deviation (human-approved):** a per-field receiver edit (priority/etc.) is rejected by `resolve_receiver` before `check_interface_hash`, so driver test #2 uses a receiver-removal edit to exercise the fingerprint message; the plan text and Phase 4 docs were updated to match.
+- 2026-10-07 — **Phase 3** landed (commit `25cfe0d`). `IDL_FILE` single-owned in proto, `IDL_MANIFEST` re-exported by the driver; `check_idl_hash` + `live_idl_layout_hash` in codegen, `__RTICX_XBIN_IDL` `include_str!` anchor. One pre-existing test (`project_topology_anchor_is_embedded`) gained a matching `ipc-types.toml`, intrinsic to the new check.
 
 ---
 

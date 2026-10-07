@@ -7,8 +7,10 @@
 //! A manifest records:
 //!
 //! - package and Cargo target (`<target>.xbin.json` is named after the target);
-//! - the application's `interface_hash`: a [`Hash64`] of the source as the
-//!   pass saw it, used by the phase-2 freshness check;
+//! - the application's `interface_hash`: a [`Hash64`] fingerprint of the
+//!   cross-binary interface as the pass saw it (resolved topology, the stolen
+//!   cross-dispatcher front and the receiver declarations), used by the phase-2
+//!   freshness check;
 //! - the native `#[sw_task]` cross-binary receivers declared by this
 //!   application, including the full `SpawnInput` paths. There are no
 //!   sender declarations: the driver infers each task's single producer
@@ -36,8 +38,10 @@ use crate::project::TargetKind;
 /// `rticx.toml` is the single topology source and the driver reads it directly
 /// (M7-T2). The manifest only reports source-discovered facts.
 ///
-/// Schema 4 renamed the per-application freshness hash to `interface_hash`;
-/// the value is still the whole-source hash in this schema.
+/// Schema 4 renamed the per-application freshness hash to `interface_hash`
+/// and narrowed it from the whole source to a fingerprint of the cross-binary
+/// interface (resolved topology, the stolen cross-dispatcher front and the
+/// receiver declarations).
 pub const MANIFEST_SCHEMA_VERSION: u32 = 4;
 
 /// File-name suffix of an application manifest.
@@ -53,9 +57,12 @@ pub struct AppManifest {
     pub package: String,
     /// Cargo target the `#[app]` module lives in.
     pub target: TargetRef,
-    /// Hash of the application interface as the pass saw it (arguments plus the
-    /// annotated module, *before* pass-owned attributes are stripped). In this
-    /// schema it is still the whole-source hash.
+    /// Fingerprint of the cross-binary interface as the pass saw it: the
+    /// resolved topology (`cores`, `core_ids`, `external_cores`), the stolen
+    /// cross-dispatcher front and the receiver declarations. Task bodies,
+    /// comments, local sw/async tasks, `shared`, `device`/`pacs` and surplus
+    /// dispatcher entries are deliberately excluded, so editing them does not
+    /// make a synced application look stale.
     pub interface_hash: Hash64,
     /// Full paths of every IDL type referenced by the declarations below,
     /// sorted and deduplicated.

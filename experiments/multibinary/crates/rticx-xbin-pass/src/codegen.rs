@@ -1403,7 +1403,7 @@ pub(crate) fn check_interface_hash(
     if application.interface_hash != interface_hash {
         return Err(error(format!(
             "application `{}` interface changed since the last `cargo xbin sync` (the system view \
-             records interface hash {}, the source hashes to {}); run `cargo xbin sync`",
+             records interface hash {}, the source's interface hashes to {}); run `cargo xbin sync`",
             application.package, application.interface_hash, interface_hash
         )));
     }

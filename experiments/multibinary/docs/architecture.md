@@ -47,9 +47,9 @@ core
 
 | Crate | State (through M6-T2) |
 |---|---|
-| `rticx-xbin-proto` | IDL parse/validate, layout engine, `ipc_types.rs` module generator with change-detecting write (`write_if_changed`), `rticx.toml` parse/validate (`[[application]]` `core_ids` + optional `external_cores`; no IPC memory since M6.9-T3), `Hash64`, `system.json` (schema 2) / manifest (schema 3) schemas, merge + validation + FIFO allocation over the distro capability graph (pool matching, shared per-dual budget, M6.9-T4/T5), `system_view` emission and the canonical FIFO image (`fifo`) |
+| `rticx-xbin-proto` | IDL parse/validate, layout engine, `ipc_types.rs` module generator with change-detecting write (`write_if_changed`), `rticx.toml` parse/validate (`[[application]]` `core_ids` + optional `external_cores`; no IPC memory since M6.9-T3), `Hash64`, `system.json` (schema 3) / manifest (schema 4) schemas, merge + validation + FIFO allocation over the distro capability graph (pool matching, shared per-dual budget, M6.9-T4/T5), `system_view` emission and the canonical FIFO image (`fifo`) |
 | `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `target/rticx-xbin/ipc_types.rs` generation with change detection; `build`: `sync`, then `cargo build --package … --bin …` per application with `RTICX_XBIN_SYSTEM` pointing at the just-written view, optionally verifying each linked ELF against the pools (`--verify-elf`, M6.9-T7); `verify`: the same ELF check for a plain `cargo build` output (`--release` for the release profile) |
-| `rticx-xbin-pass` | metadata mode: `#[app]` additions (`device`, optional `cores`, the shared `dispatchers`; `core_ids`/`external_cores` rejected as moved to `rticx.toml`), the application's topology resolved from the nearest `rticx.toml` (`topology.rs`, M7-T2), native `#[sw_task]` cross receivers and the shared `dispatchers` pool parsed, its cross-line front stolen and the remainder re-emitted for the software/async pass (M1-T3, M5.5, M6.5-T1), the per-core distro capability binding (physical core id + reachable pools, M6.9-T2), `<target>.xbin.json` emit (M1-T2), then terminates the compiler so the application is never parsed, analyzed, code-generated or type-checked in phase 1 (a producer may call a phase-2-only sender stub, and RTICX allows task bodies the `#[app]` macro cannot see; M7-T2); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path) for every application listed in it (M5.5 removed the cross-declaration gate), filters it by the application's cores and emits the generated sender stubs (`pub struct <Task>;` + pool-relative FIFO views + `Task::cross_spawn` for every view task it produces, M3-T1/M5.5/M6.9-T6), the per-pair `__rticx_xbin_ring_{s}_{t}` / `__rticx_xbin_read_{s}_{t}` functions from the `XbinPassBackend` templates (M6.5-T2), the receiver FIFO views, the injected `CrossCoreMessage` marker trait plus the `pub mod ipc_types` re-emit of the generated module and the `SpawnInput: CrossCoreMessage` const assertion, one **line dispatcher** per `(source, priority)` line bound to the entry stolen from the front of `dispatchers` and one **doorbell router** per `(source → target)` pair (M6.5-T3/T4), the init hooks (the distribution's `XbinPassBackend::configure_shared_memory` tokens inlined on every core and `__rticx_xbin_init_fifos_core<N>()` per producer core, no per-line arming) wired into the entry functions via `RticPass::main_injection` (M3-T3/M6-T1), the build-phase priority-line validation over the application's raw sw/async declarations plus the view's cross receivers (M6-T1), and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view and of the generated module) plus the stale-view and stale-source hard errors (M3-T4); a discovered `rticx.toml` without a synced view is also a hard error, so plain `cargo build` never silently skips code generation (M4-T3). The pass is bound before `rticx-sw-pass` and requires the distribution's `swtasks` feature: sw-pass generates the `RticSwTask` trait the injected `task_trait = RticSwTask` receivers compile through and the `__rticx_local_irq_pend` the routers call, so without the feature the generated code fails on the unresolved trait (M5.5) |
+| `rticx-xbin-pass` | metadata mode: `#[app]` additions (`device`, optional `cores`, the shared `dispatchers`; `core_ids`/`external_cores` rejected as moved to `rticx.toml`), the application's topology resolved from the nearest `rticx.toml` (`topology.rs`, M7-T2), native `#[sw_task]` cross receivers and the shared `dispatchers` pool parsed, its cross-line front stolen and the remainder re-emitted for the software/async pass (M1-T3, M5.5, M6.5-T1), the per-core distro capability binding (physical core id + reachable pools, M6.9-T2), `<target>.xbin.json` emit (M1-T2), then terminates the compiler so the application is never parsed, analyzed, code-generated or type-checked in phase 1 (a producer may call a phase-2-only sender stub, and RTICX allows task bodies the `#[app]` macro cannot see; M7-T2); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path) for every application listed in it (M5.5 removed the cross-declaration gate), filters it by the application's cores and emits the generated sender stubs (`pub struct <Task>;` + pool-relative FIFO views + `Task::cross_spawn` for every view task it produces, M3-T1/M5.5/M6.9-T6), the per-pair `__rticx_xbin_ring_{s}_{t}` / `__rticx_xbin_read_{s}_{t}` functions from the `XbinPassBackend` templates (M6.5-T2), the receiver FIFO views, the injected `CrossCoreMessage` marker trait plus the `pub mod ipc_types` re-emit of the generated module and the `SpawnInput: CrossCoreMessage` const assertion, one **line dispatcher** per `(source, priority)` line bound to the entry stolen from the front of `dispatchers` and one **doorbell router** per `(source → target)` pair (M6.5-T3/T4), the init hooks (the distribution's `XbinPassBackend::configure_shared_memory` tokens inlined on every core and `__rticx_xbin_init_fifos_core<N>()` per producer core, no per-line arming) wired into the entry functions via `RticPass::main_injection` (M3-T3/M6-T1), the build-phase priority-line validation over the application's raw sw/async declarations plus the view's cross receivers (M6-T1), and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view, of the generated module, of `rticx.toml` and of the IDL) plus the stale-view, stale-interface and stale-IDL hard errors (M3-T4); a discovered `rticx.toml` without a synced view is also a hard error, so plain `cargo build` never silently skips code generation (M4-T3). The pass is bound before `rticx-sw-pass` and requires the distribution's `swtasks` feature: sw-pass generates the `RticSwTask` trait the injected `task_trait = RticSwTask` receivers compile through and the `__rticx_local_irq_pend` the routers call, so without the feature the generated code fails on the unresolved trait (M5.5) |
 | `rticx-xbin-rt` | `Fifo<T, DEPTH>` atomic SPSC ring mirroring the canonical image (Vyukov, `Release`/`Acquire`, cache-line-padded indices, `view_at`/`init`/`split`), with a drift guard against `rticx-xbin-proto` and a threaded hand-off test; the `Queue` re-export backing the generated line ready queues (M6.5-T3). It is a pure shared-memory data-structure runtime: the pool base, the executing core id and the doorbell transport are all resolved at compile time by `XbinPassBackend` and baked into the generated code, so there is no runtime backend trait and no doorbell methods (M6.5-T5) |
 | `rticx-xbin-mock` | `MockSystem`: aligned, zeroed in-process IPC **pools** (`add_pool(core_a, core_b, size)`, unordered duals, both directions resolving to the one backing, M6.9-T6), per-`(source → target)` condvar **pair doorbell message word** carrying the task id to the target's router (`doorbell_send`/`take_message`/`router_wait`, M6.5), per-handle `current_global_core_id`; two-thread spawn→drain over a raw `Fifo` notified through the pair word (M2-T3, M6.5-T5) |
 
@@ -85,11 +85,11 @@ the path). The `crates/mock/fixtures/metadata` project covers this end to end.
 2. Per application: `cargo clean -p <package>` (metadata env vars are
    invisible to Cargo fingerprints), then `cargo check` with
    `RTICX_XBIN_META_OUT=<dir>`; the pass writes `<app>.xbin.json` (package/
-   target, source hash, cross receivers with their `SpawnInput` type paths,
-   priorities, capacities, and the per-local-core distro capability binding:
-   physical core id and reachable pools, M6.9-T2). The manifest (schema 3)
-   carries no topology echo since M7-T2: the application's `core_ids` and
-   `external_cores` are read from `rticx.toml` by the pass. There are no
+   target, interface fingerprint, cross receivers with their `SpawnInput` type
+   paths, priorities, capacities, and the per-local-core distro capability
+   binding: physical core id and reachable pools, M6.9-T2). The manifest
+   (schema 4) carries no topology echo since M7-T2: the application's `core_ids`
+   and `external_cores` are read from `rticx.toml` by the pass. There are no
    sender declarations since M5.5: the driver infers each task's single
    producer application from the receivers' `spawn_by`.
 3. Parse `ipc-types.toml`, compute canonical layout, validate the subset.
@@ -117,7 +117,7 @@ the path). The `crates/mock/fixtures/metadata` project covers this end to end.
    doorbell lines, sets `layout_hash` and seals `topology_hash`).
 7. Generate/update `target/rticx-xbin/ipc_types.rs` and report changes (M1-T7).
 
-`system.json` shape (schema 2): `schema_version`, `rticx_generation`,
+`system.json` shape (schema 3): `schema_version`, `rticx_generation`,
 `topology_hash`, `layout_hash`, `apps`, `cores` (each with its distro
 `physical_core`), `types`, `tasks` (with a pool-relative `fifo`),
 `pools` (one entry per dual, with both base views, the shared `budget` and the
@@ -138,8 +138,8 @@ phase 2 for every application in M4-T1: after
 `sync`, the driver builds each `[[application]]` with
 `cargo build --package <package> --bin <target>` and
 `RTICX_XBIN_SYSTEM=<project root>/target/rticx-xbin/system.json`, so the pass
-runs in codegen mode and the freshness checks reject a stale view or a source
-changed since `sync`. The checked-in `crates/mock/fixtures/e2e` project (its own mock
+runs in codegen mode and the freshness checks reject a stale view, an interface
+changed since `sync`, or a stale IDL. The checked-in `crates/mock/fixtures/e2e` project (its own mock
 distribution over `MockCoreBackend` and `MockBackend`) is the in-tree
 acceptance: both binaries compile and link on the host.*
 
@@ -183,9 +183,13 @@ own cores and emits, per app:
   code names `ipc_types::TypeX` inside `#[app]` without a checked-in crate or a
   runtime dependency. The pass rejects a user `CrossCoreMessage`/`ipc_types`
   item in the app module, and an `include_str!` anchor keeps rustc rebuilding
-  the application when the file changes (M1-T7);
+  the application when the file changes (M1-T7); a second `include_str!` anchor
+  on `ipc-types.toml` makes a pure IDL edit re-run the macro so the stale-IDL
+  check below can fire (Phase 3);
 - assertions: layout consts, `__RTICX_XBIN_TOPOLOGY_HASH`, FIFO bounds and
-  alignment (layout consts in M3-T1, freshness in M3-T4), and the
+  alignment (layout consts in M3-T1, freshness in M3-T4), the application's
+  interface fingerprint against the view and the live IDL layout hash against
+  `layout_hash` (M3-T4/Phase 3), and the
   `SpawnInput: CrossCoreMessage` const assertion per receiver (M5.5).
 
 Every application listed in the view is processed, including ones that declare
@@ -202,17 +206,31 @@ Identical inputs must produce byte-identical `system.json`. FIFO allocation
 is sorted, JSON output is canonical. `topology_hash` covers the merged view;
 each app embeds `const __RTICX_XBIN_TOPOLOGY_HASH: u64` and fails to compile
 on mismatch with a "run `cargo xbin sync`" hint. Phase 2 recomputes the
-topology hash from the loaded view (`load_system`, M3-T4) and recomputes the
-application's `source_hash` against the one recorded at sync time
-(`check_source_hash`, M3-T4); both are hard errors with the documented hint.
-`source_hash` is computed from a canonical, proc-macro-host-independent
-serialization of the application's token tree, not from
-`TokenStream::to_string()`: rustc and rust-analyzer's proc-macro server render
-the same tokens with different punctuation spacing and formatting, so hashing
-the rendering would make a view synced by cargo look stale in the IDE.
+topology hash from the loaded view (`load_system`, M3-T4), recomputes the
+application's `interface_hash` against the one recorded at sync time
+(`check_interface_hash`, M3-T4) and recomputes the IDL's live layout hash
+against the view's `layout_hash` (`check_idl_hash`, Phase 3); each mismatch is
+a hard error naming `cargo xbin sync`.
+
+The interface fingerprint covers only the parts the driver merges into the
+project topology: the resolved topology (`cores`, `core_ids`,
+`external_cores`), the stolen cross-dispatcher front (each interrupt path
+rendered host-independently by `write_canonical`) and the receiver
+declarations (`name`, `priority`, `capacity`, `core`, `spawn_by`,
+`input_type`). Task bodies, doc/`//` comments, local `#[sw_task]`/`#[async_task]`
+declarations, `shared`, `device`/`pacs` and surplus (local) dispatcher entries
+are deliberately excluded, so editing them cannot make a synced application
+look stale under rust-analyzer. A per-field receiver edit
+(priority/capacity/core/spawn_by/input_type) is normally reported by the
+targeted `resolve_receiver` check with a more specific message before the
+fingerprint is compared; both name `cargo xbin sync`.
+
+The IDL check compares the layout hash the project synced with against the
+live `ipc-types.toml` (an absent file compares against `IpcTypes::empty()`).
 Generated `ipc_types` module embeds `LAYOUT_HASH`. The pass emits
-`include_str!("system.json")` so rustc's dep-info rebuilds when the file
-changes.
+`include_str!("system.json")` (and, when present, `include_str!("rticx.toml")`
+and `include_str!("ipc-types.toml")`) so rustc's dep-info rebuilds when any of
+them changes.
 
 ## 6. Memory and layout
 
@@ -417,7 +435,7 @@ verify` independently check the linked images against the pools (M6.9-T7).
 | the FIFOs of a dual do not fit its shared budget | `sync` allocation | `PoolBudgetExceeded` with needed vs. reserved bytes (M6.9-T4) |
 | two pool views overlap on one core | `sync` merge | `PoolViewOverlap` naming both pools and the core (M6.9-T4) |
 | a linked binary places allocated data (or its stack bound) on a pool | `cargo xbin build --verify-elf` / `verify` | `Overlap`/`StackOverlap` naming the application, section/symbol, range and pool; a distro pool bound symbol that disagrees with `system.json` is `PoolBounds` (M6.9-T7) |
-| app source changed since `sync` | recorded `source_hash` / `TOPOLOGY_HASH` / dep-info | compile error: run `cargo xbin sync` |
+| app interface or IDL changed since `sync` | recorded `interface_hash` / `layout_hash` / `TOPOLOGY_HASH` / dep-info | compile error: run `cargo xbin sync` |
 | FIFO full or caller on the wrong core | runtime check in `cross_spawn` | `Err(Some(input))`, input returned |
 | doorbell ring failed | runtime | `Err(None)` (already enqueued) |
 
@@ -441,10 +459,10 @@ generated code end to end: `cross_spawn` on the sender, the per-pair ring
 function, the generated router ISR, the pended line dispatcher, input
 verification and FIFO backpressure (`Err(Some(input))`), including coalesced
 and duplicate notifications (M6.5-T3/T5). M4-T3 adds the negative acceptance
-suite: a plain build without a synced view, a source changed after `sync`, a
+suite: a plain build without a synced view, an interface changed after `sync`, a
 hand-edited `system.json`, a priority line shared by two source cores, an input
-type absent from the IDL and a pool budget too small for its FIFOs, each
-asserted against its documented message.
+type absent from the IDL, an edited IDL after `sync` and a pool budget too
+small for its FIFOs, each asserted against its documented message.
 M6-T1 adds the three-application fixture `crates/mock/fixtures/three-app` (two producers
 onto one receiver, two lines and two per-pair routers) built via `cargo xbin
 build`, the build-phase priority-line validation tests (cross vs. core-local

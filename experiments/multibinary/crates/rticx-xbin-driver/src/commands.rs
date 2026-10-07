@@ -530,7 +530,8 @@ pub struct BuildOutcome {
 /// <target>` (plus `--target <triple>` when declared), with
 /// `RTICX_XBIN_SYSTEM` pointing at the just-written system view. The pass then
 /// runs in codegen mode and the freshness checks (stale `topology_hash`,
-/// source hash) guarantee the build matches the synced view. Without a project
+/// changed interface fingerprint, stale IDL) guarantee the build matches the
+/// synced view. Without a project
 /// manifest there is nothing to build, so `build` only lays out
 /// `target/rticx-xbin/`.
 ///

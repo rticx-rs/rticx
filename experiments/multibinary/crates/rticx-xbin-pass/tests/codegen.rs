@@ -348,7 +348,7 @@ fn write_both_system() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// Writes the fixture view with a fresh `topology_hash` but no re-recorded
-/// source hashes.
+/// interface hashes.
 ///
 /// Used by tests whose error is raised before the freshness checks; the
 /// hard-coded `interface_hash` values of [`SYSTEM_JSON`] then never match, which

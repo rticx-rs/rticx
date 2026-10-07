@@ -4,12 +4,12 @@
 //! Two families of negative cases are covered end to end:
 //!
 //! - **build-phase freshness** over a copy of the checked-in `crates/mock/fixtures/e2e`
-//!   project: a plain `cargo build` without a synced view (missing sync), a
-//!   source changed after `sync` (source hash mismatch), a hand-edited
-//!   `system.json` (topology hash mismatch) and an edited `rticx.toml`
-//!   (resolved topology vs. the synced view). These run the real proc-macro
-//!   path (project discovery and environment-based mode selection), not the
-//!   pass in isolation;
+//!   project: a plain `cargo build` without a synced view (missing sync), an
+//!   interface changed after `sync` (interface fingerprint mismatch), a
+//!   hand-edited `system.json` (topology hash mismatch) and an edited
+//!   `rticx.toml` (resolved topology vs. the synced view). These run the real
+//!   proc-macro path (project discovery and environment-based mode selection),
+//!   not the pass in isolation;
 //! - **merge/validation** through `cargo xbin sync` over generated metadata
 //!   projects: the moved `#[app(core_ids)]`/`#[app(external_cores)]` keys, a
 //!   priority line shared by two source cores, an input type missing from the

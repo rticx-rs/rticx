@@ -517,7 +517,7 @@ visible. The first run also prints one `created`/`updated` line naming
 
 ```text
 target/rticx-xbin/
-├── m7.xbin.json    # producer manifest: package, cores, source hash, no tasks
+├── m7.xbin.json    # producer manifest: package, target, interface fingerprint, no tasks
 ├── m4.xbin.json    # receiver manifest: the EncryptTask declaration
 ├── ipc_types.rs    # the IDL types, re-emitted into each `#[app]` module
 └── system.json     # sealed whole-project view
@@ -649,11 +649,20 @@ After `sync`, `build` compiles every `[[application]]` with
 `cargo build --package <package> --bin <target>` (plus `--target <triple>`
 when the application declares one) and `RTICX_XBIN_SYSTEM` pointing at the
 `system.json` it just wrote, so the pass generates the cross-binary code and
-the freshness checks reject a stale view or a source changed after `sync`
-(M4-T1). `build` always runs `sync` first; a plain `cargo build` after an
-explicit `sync` is supported, but fails with a staleness error (stale
-`system.json` or a source hash mismatch) once sources changed, until the next
-`sync`. Without a synced view (for example after `cargo clean`), every
+the freshness checks reject a stale view, a changed cross-binary interface or a
+stale IDL (M4-T1). `build` always runs `sync` first; a plain `cargo build` after
+an explicit `sync` is supported, but fails with a staleness error (stale
+`system.json`, a changed interface fingerprint, or an edited `ipc-types.toml`)
+once the synced inputs change, until the next `sync`. The fingerprint covers
+only what the driver merges — the resolved topology, the stolen
+cross-dispatcher front and the receiver declarations — so a task body, a doc
+comment, a local `#[sw_task]`/`#[async_task]`, a `shared` list, `device`/`pacs`
+or a surplus local `dispatchers` entry can change freely without a re-sync. A
+per-field receiver edit (priority/capacity/core/spawn_by/input_type) is caught
+by the more specific field-level check; adding or removing a receiver, a
+topology change or a changed cross-dispatcher front is caught by the
+fingerprint. Both errors name `cargo xbin sync`. Without a synced view (for
+example after `cargo clean`), every
 application listed in the view — even one declaring no cross task — fails with
 ``failed to read the system view …; run `cargo xbin sync` `` instead of
 silently generating no code (M5.5 removed the cross-declaration gate).
@@ -928,7 +937,9 @@ build instead of corrupting IPC at runtime.
 |---|---|
 | ``failed to read the system view `…/system.json`: …`` | no view was synced (for example after `cargo clean`); run `cargo xbin sync` (or `cargo xbin build`) |
 | ``the system view `…/system.json` is stale: its `topology_hash` (…) does not match its contents (…)`` | the view was edited without a full sync; run `cargo xbin sync` (or `cargo xbin build`) |
-| ``application `x` changed since the last `cargo xbin sync` (the system view records source hash …, the source hashes to …)`` | the source changed after the last `sync`; run `cargo xbin sync` before a plain `cargo build` |
+| ``application `x` interface changed since the last `cargo xbin sync` (the system view records interface hash …, the source's interface hashes to …)`` | the application's cross-binary interface changed after the last `sync` (a receiver was added/removed, the topology changed, or the stolen cross-dispatcher front changed); run `cargo xbin sync` before a plain `cargo build` |
+| ``receiver `T` declares priority …, but the synced system view has …`` (also `capacity`, `core`, `input type`, `spawn_by`) | a per-field receiver edit is reported by the field-level `resolve_receiver` check before the interface fingerprint; run `cargo xbin sync` |
+| ``the IDL `ipc-types.toml` changed since the last `cargo xbin sync` (the system view records layout hash …, the current IDL hashes to …)`` | `ipc-types.toml` was edited after the last `sync`; run `cargo xbin sync` before a plain `cargo build` |
 
 *Runtime, cache and IRQ symptoms (M6-T3):* these appear only on hardware; the
 host fixtures in section 7.6 cannot reproduce them.
@@ -942,8 +953,9 @@ host fixtures in section 7.6 cannot reproduce them.
 | `Err(None)` repeatedly | the input is enqueued but the doorbell notification fails (IRQ masked, doorbell word not shareable) | fix the pair IRQ/word mapping; the enqueued input is drained by the next successful notification |
 
 Every generated application embeds the `__RTICX_XBIN_TOPOLOGY_HASH` it was
-built from and `include_str!`s the system view, so rustc's dep-info rebuilds
-the application when `target/rticx-xbin/system.json` changes.
+built from and `include_str!`s the system view (plus `rticx.toml` and
+`ipc-types.toml` when present), so rustc's dep-info rebuilds the application
+when `target/rticx-xbin/system.json` or one of those project files changes.
 
 Runtime semantics are covered above: a full FIFO or a caller on the wrong core
 returns `Err(Some(input))` without enqueueing, and a failed doorbell ring
