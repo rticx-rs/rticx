@@ -1,4 +1,4 @@
-//! M6.9-T7 acceptance: ELF verification of the linked fixture binaries.
+//! ELF verification of the linked fixture binaries.
 //!
 //! `crates/mock/fixtures/e2e` is built with `cargo xbin build --verify-elf` (through
 //! [`build_and_verify`]) and, separately, with the plain-`cargo build`

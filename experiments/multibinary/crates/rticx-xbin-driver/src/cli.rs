@@ -35,8 +35,7 @@ pub enum Command {
     /// Run `sync`, then build every application of the project.
     Build(BuildArgs),
     /// Check the already-built applications' linked binaries against the
-    /// synced pools (M6.9-T7): run `cargo xbin sync`, build with plain Cargo,
-    /// then this.
+    /// synced pools: run `cargo xbin sync`, build with plain Cargo, then this.
     Verify(VerifyArgs),
 }
 
@@ -57,8 +56,8 @@ pub struct SyncArgs {
 /// Arguments of `cargo xbin build`.
 #[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// Verify every linked binary against the distro pools after building
-    /// (M6.9-T7). Off by default so the check is opt-in.
+    /// Verify every linked binary against the distro pools after building.
+    /// Off by default so the check is opt-in.
     #[arg(long)]
     pub verify_elf: bool,
 }

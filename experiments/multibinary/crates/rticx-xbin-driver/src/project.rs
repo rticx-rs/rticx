@@ -17,10 +17,10 @@ pub use rticx_xbin_proto::IDL_FILE as IDL_MANIFEST;
 /// `system.json` system view and generated artifacts
 pub const OUTPUT_DIR: &str = "target/rticx-xbin";
 
-/// Driver-generated system view inside [`OUTPUT_DIR`] (M1-T6).
+/// Driver-generated system view inside [`OUTPUT_DIR`].
 pub const SYSTEM_FILE: &str = "system.json";
 
-/// Driver-generated `ipc_types` module inside [`OUTPUT_DIR`] (M1-T7).
+/// Driver-generated `ipc_types` module inside [`OUTPUT_DIR`].
 ///
 /// The cross-binary pass re-emits this file's tokens into each application's
 /// `#[app]` module. The name is owned by `rticx-xbin-proto`, which also emits

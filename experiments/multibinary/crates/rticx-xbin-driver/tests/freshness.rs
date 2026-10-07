@@ -1,6 +1,6 @@
-//! Phase 2 freshness acceptance (M3-T4): the cross-binary interface fingerprint
-//! ignores task bodies and doc comments, but a plain `cargo build` after an
-//! interface edit fails and names `cargo xbin sync`.
+//! Phase 2 freshness: the cross-binary interface fingerprint ignores task
+//! bodies and doc comments, but a plain `cargo build` after an interface edit
+//! fails and names `cargo xbin sync`.
 //!
 //! Both tests run the real proc-macro path over a copy of
 //! `crates/mock/fixtures/e2e`; the shared helpers live in `common`.
@@ -73,7 +73,7 @@ fn plain_build_rejects_a_source_interface_edit() {
 }
 
 /// Editing the IDL after `cargo xbin sync` changes the project layout, which a
-/// plain `cargo build` must reject (M3-T4).
+/// plain `cargo build` must reject.
 ///
 /// The build is warmed before the edit so the second build is served from
 /// rustc's cache: only the `__RTICX_XBIN_IDL` `include_str!` anchor makes the

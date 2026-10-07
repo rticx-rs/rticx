@@ -7,10 +7,10 @@
 //! static HTML document. The inline script lays the page out and draws the
 //! arrows; the driver itself never depends on a browser.
 //!
-//! Pools are rendered one panel per pool (M6.9-T8): both directions of a dual
-//! share a single distro pool, so a panel carries every FIFO of the dual at its
-//! pool-relative offset, colored by its producer core. The bar is scaled to the
-//! occupied extent rather than the whole budget, so the FIFOs stay readable
+//! Pools are rendered one panel per pool: both directions of a dual share a
+//! single distro pool, so a panel carries every FIFO of the dual at its
+//! pool-relative offset, colored by its producer core. The bar is scaled to
+//! the occupied extent rather than the whole budget, so the FIFOs stay readable
 //! instead of collapsing into a sliver. A FIFO that names no pool (a project
 //! whose manifests carry no capability table) falls back to a synthetic
 //! per-direction panel so it stays visible.
@@ -253,8 +253,8 @@ impl ViewModel {
             });
         }
 
-        // One panel per distro pool (M6.9-T8): both directions of a dual share
-        // a single pool, so the panel carries every FIFO of the dual at its
+        // One panel per distro pool: both directions of a dual share a single
+        // pool, so the panel carries every FIFO of the dual at its
         // pool-relative offset. A FIFO naming no (or an unknown) pool falls
         // back to a synthetic per-direction panel so it stays visible.
         let mut pool_index: BTreeMap<&str, usize> = BTreeMap::new();

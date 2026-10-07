@@ -196,8 +196,8 @@ pub enum DriverError {
     #[error(transparent)]
     System(#[from] SystemError),
 
-    /// A linked binary failed ELF verification (M6.9-T7). Boxed because
-    /// [`VerifyError`] carries several owned names and ranges.
+    /// A linked binary failed ELF verification. Boxed because [`VerifyError`]
+    /// carries several owned names and ranges.
     #[error(transparent)]
     Verify(Box<VerifyError>),
 }
@@ -208,7 +208,7 @@ impl From<VerifyError> for DriverError {
     }
 }
 
-/// A linked-image (ELF) verification failure (M6.9-T7).
+/// A linked-image (ELF) verification failure.
 ///
 /// Produced by `cargo xbin build --verify-elf` and `cargo xbin verify`; every
 /// message names the offending binary, the section or symbol and the pool, so

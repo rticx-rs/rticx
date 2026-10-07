@@ -4,15 +4,14 @@
 //! pipeline:
 //!
 //! - `cargo xbin sync`: phase 1 -- collect per-application metadata, merge
-//!   and validate the system view (M1-T5), allocate the per-task FIFO
-//!   addresses and emit `target/rticx-xbin/system.json` (M1-T6), and write
-//!   the generated `target/rticx-xbin/ipc_types.rs` module (M1-T7);
+//!   and validate the system view, allocate the per-task FIFO addresses and
+//!   emit `target/rticx-xbin/system.json`, and write the generated
+//!   `target/rticx-xbin/ipc_types.rs` module;
 //! - `cargo xbin build`: `sync`, then build every application against the
-//!   emitted system view (M4-T1); `--verify-elf` additionally checks every
-//!   linked binary against the distro IPC pools (M6.9-T7);
+//!   emitted system view; `--verify-elf` additionally checks every linked
+//!   binary against the distro IPC pools;
 //! - `cargo xbin verify`: check the already-built applications' linked
-//!   binaries against the synced pools, for the plain-`cargo build` workflow
-//!   (M6.9-T7).
+//!   binaries against the synced pools, for the plain-`cargo build` workflow.
 //!
 //! `cargo xbin sync --html` additionally renders a self-contained HTML
 //! visualization of the system view to `target/rticx-xbin/system.html`
@@ -163,8 +162,8 @@ fn open_in_browser(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Reports generated `ipc_types.rs` changes (M1-T7) on standard error, like
-/// Cargo's own progress output.
+/// Reports generated `ipc_types.rs` changes on standard error, like Cargo's
+/// own progress output.
 ///
 /// Library callers inspect [`SyncOutcome::ipc_types`] instead; this is pure
 /// presentation.
@@ -183,7 +182,7 @@ fn report_ipc_types(outcome: &SyncOutcome) {
     }
 }
 
-/// Reports each successful ELF verification (M6.9-T7) on standard error, like
+/// Reports each successful ELF verification on standard error, like
 /// [`report_ipc_types`].
 ///
 /// Library callers inspect the `verifications` field of the outcome instead;

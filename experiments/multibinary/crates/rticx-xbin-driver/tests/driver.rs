@@ -1,4 +1,4 @@
-//! Behaviour tests for the `cargo-xbin` driver (M0-T6, M1-T4).
+//! Behaviour tests for the `cargo-xbin` driver.
 //!
 //! These exercise the library entry points directly with explicit project
 //! roots. Metadata collection against real packages is covered end to end by
@@ -97,7 +97,7 @@ fn sync_reads_the_project_manifest() {
     assert!(outcome.manifests.is_empty());
     assert!(dir.path().join("target/rticx-xbin").is_dir());
 
-    // Even an empty project gets its sealed system view (M1-T6).
+    // Even an empty project gets its sealed system view.
     let system = outcome.system.as_ref().expect("an empty project emits one");
     let path = outcome.output_dir.join(SYSTEM_FILE);
     let bytes = std::fs::read_to_string(&path).expect("system.json is written");
@@ -162,7 +162,7 @@ fn find_project_root_walks_up_to_the_manifest() {
     assert_eq!(find_project_root(&nested).as_deref(), Some(dir.path()));
 }
 
-// -- M1-T7: `ipc_types` generation, change detection and reporting ---------
+// -- `ipc_types` generation, change detection and reporting ----------------
 
 #[test]
 fn sync_generates_the_ipc_types_module_and_then_no_ops() {
@@ -199,7 +199,7 @@ fn sync_generates_the_ipc_types_module_and_then_no_ops() {
         "the module must not reference the runtime crate:\n{module}"
     );
 
-    // M1-T7 acceptance: an unchanged IDL is a no-op.
+    // An unchanged IDL is a no-op.
     let second = sync(dir.path()).expect("sync succeeds");
     let ipc_types = second
         .ipc_types

@@ -1,10 +1,10 @@
-//! Linked-image (ELF) verification (M6.9-T7).
+//! Linked-image (ELF) verification.
 //!
-//! Since M6.9 the distribution owns the IPC pools: it reserves each dual's
-//! shared block in its linker script and reports the per-core base views and
-//! the shared budget through its capability binding. If a reserved pool
-//! overlaps an allocated section of an application's image — or the stack — the
-//! two cores silently corrupt each other's FIFOs. `cargo xbin build
+//! The distribution owns the IPC pools: it reserves each dual's shared block
+//! in its linker script and reports the per-core base views and the shared
+//! budget through its capability binding. If a reserved pool overlaps an
+//! allocated section of an application's image — or the stack — the two cores
+//! silently corrupt each other's FIFOs. `cargo xbin build
 //! --verify-elf` and `cargo xbin verify` parse the **linked** binary with the
 //! [`object`] crate and turn that silent class into a build error:
 //!

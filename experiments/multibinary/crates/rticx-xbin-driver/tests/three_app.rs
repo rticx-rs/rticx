@@ -1,5 +1,4 @@
-//! M6-T1 acceptance: the three-application fixture builds with
-//! `cargo xbin build`.
+//! The three-application fixture builds with `cargo xbin build`.
 //!
 //! `crates/mock/fixtures/three-app` is a standalone workspace with three binaries in a
 //! fully connected cross-binary topology: `app-m7` owns global core 0,
@@ -87,7 +86,7 @@ fn cargo_xbin_build_builds_the_three_applications() {
     }
 
     // Each receiver binary carries one per-pair router and one line dispatcher
-    // per cross line (M6.5-T3/T4).
+    // per cross line.
     let receiver_symbols: [(&str, &[&str]); 3] = [
         (
             "m4",
@@ -160,8 +159,7 @@ fn cargo_xbin_build_builds_the_three_applications() {
     );
 
     // Every unordered pair is one shared pool from the mock distribution;
-    // both directions of a dual draw on that pool's 4096-byte budget
-    // (M6.9-T4/T5).
+    // both directions of a dual draw on that pool's 4096-byte budget.
     let pools: Vec<(&str, u32, u32)> = system
         .pools
         .iter()
@@ -211,8 +209,7 @@ fn cargo_xbin_build_builds_the_three_applications() {
         ]
     );
 
-    // The generated `ipc_types` module is written into the output directory
-    // (M1-T7).
+    // The generated `ipc_types` module is written into the output directory.
     let ipc_types = outcome
         .sync
         .ipc_types

@@ -30,21 +30,21 @@ pub struct SyncOutcome {
     /// Parsed IDL; empty when the project has no `ipc-types.toml` (and `None`
     /// without a project manifest).
     pub idl: Option<IpcTypes>,
-    /// Merged and validated whole-project view (M1-T5); `None` without a
-    /// project manifest.
+    /// Merged and validated whole-project view; `None` without a project
+    /// manifest.
     pub merged: Option<MergedProject>,
-    /// Emitted `target/rticx-xbin/system.json` view (M1-T6); `None` without a
-    /// project manifest.
+    /// Emitted `target/rticx-xbin/system.json` view; `None` without a project
+    /// manifest.
     pub system: Option<SystemView>,
-    /// Generated `target/rticx-xbin/ipc_types.rs` module state (M1-T7); `None`
-    /// without a project manifest or without an `ipc-types.toml`.
+    /// Generated `target/rticx-xbin/ipc_types.rs` module state; `None` without
+    /// a project manifest or without an `ipc-types.toml`.
     pub ipc_types: Option<IpcTypesOutcome>,
     /// Application manifests collected during this run, in `rticx.toml` order
     /// (empty without a project manifest).
     pub manifests: Vec<AppManifest>,
 }
 
-/// Result of generating the `ipc_types` module during a `sync` run (M1-T7).
+/// Result of generating the `ipc_types` module during a `sync` run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpcTypesOutcome {
     /// Generated module file (`<project root>/target/rticx-xbin/ipc_types.rs`).
@@ -94,11 +94,11 @@ pub(crate) enum CargoOutput {
 /// `RTICX_XBIN_META_OUT` pointing at the output directory. The `#[app]`
 /// macro's cross-binary pass then writes `<target>.xbin.json`, which is read
 /// back into [`SyncOutcome::manifests`]. The manifests are merged and
-/// validated into [`SyncOutcome::merged`] (M1-T5), the per-task FIFO
-/// addresses are allocated and the sealed system view is written to
-/// `target/rticx-xbin/system.json` (M1-T6). Finally, when the project has an
+/// validated into [`SyncOutcome::merged`], the per-task FIFO addresses are
+/// allocated and the sealed system view is written to
+/// `target/rticx-xbin/system.json`. Finally, when the project has an
 /// `ipc-types.toml`, the `target/rticx-xbin/ipc_types.rs` module is generated
-/// and only rewritten when its contents changed (M1-T7).
+/// and only rewritten when its contents changed.
 ///
 /// Cargo output is captured, keeping library callers quiet; the CLI uses
 /// [`sync_with_output`] to stream it.
@@ -524,7 +524,7 @@ pub struct BuildOutcome {
 }
 
 /// Phase 2 entry point: `sync`, then build every application of the project
-/// against the `system.json` it emitted (M4-T1).
+/// against the `system.json` it emitted.
 ///
 /// Each application is built with `cargo build --package <package> --bin
 /// <target>` (plus `--target <triple>` when declared), with
@@ -541,8 +541,8 @@ pub fn build(project_root: &Path) -> Result<BuildOutcome, DriverError> {
     build_with_output(project_root, CargoOutput::default(), false)
 }
 
-/// [`build`] with `--verify-elf` (M6.9-T7): after linking, every application's
-/// binary is parsed as an ELF and checked against the synced pools.
+/// [`build`] with `--verify-elf`: after linking, every application's binary is
+/// parsed as an ELF and checked against the synced pools.
 pub fn build_and_verify(project_root: &Path) -> Result<BuildOutcome, DriverError> {
     build_with_output(project_root, CargoOutput::default(), true)
 }
@@ -606,7 +606,7 @@ pub(crate) fn build_with_output(
     })
 }
 
-/// Result of a `cargo xbin verify` run (M6.9-T7).
+/// Result of a `cargo xbin verify` run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyOutcome {
     /// Resolved project root.
@@ -618,7 +618,7 @@ pub struct VerifyOutcome {
 }
 
 /// Phase 3 entry point: check the already-built applications' linked binaries
-/// against the synced pools (M6.9-T7).
+/// against the synced pools.
 ///
 /// This is the check for the plain-`cargo build` workflow: run `cargo xbin
 /// sync` once, build with plain Cargo, then `cargo xbin verify`. Unlike

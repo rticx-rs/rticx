@@ -1,5 +1,4 @@
-//! End-to-end metadata collection and merge over the checked-in fixture
-//! (M1-T4, M1-T5).
+//! End-to-end metadata collection and merge over the checked-in fixture.
 //!
 //! `sync` must drive `cargo clean -p <package>` followed by
 //! `cargo check -p <package> --bin <target>` with `RTICX_XBIN_META_OUT` over
@@ -51,7 +50,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(producer.package, "app-m7");
     assert!(
         producer.receivers.is_empty(),
-        "the producer declares nothing (M5.5)"
+        "the producer declares nothing"
     );
 
     let receiver = outcome.manifest("m4").expect("m4 manifest");
@@ -79,7 +78,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert!(idl.has_type("EncryptReq"));
     assert_eq!(idl.messages().len(), 1);
 
-    // -- M1-T7: the generated `ipc_types` module lives in the output dir ------
+    // -- the generated `ipc_types` module lives in the output dir ------------
     let ipc_types = outcome
         .ipc_types
         .as_ref()
@@ -140,7 +139,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(
         merged.pools().len(),
         1,
-        "the fixture binds the mock `{{0, 1}}` dual (M6.9-T9)"
+        "the fixture binds the mock `{{0, 1}}` dual"
     );
     let pool = &merged.pools()[0];
     assert_eq!(pool.id, "mock-0-1");
@@ -153,7 +152,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
         "the single `0->1` FIFO uses the shared pool budget"
     );
 
-    // -- M1-T6: the allocated system view is emitted ------------------------
+    // -- the allocated system view is emitted -------------------------------
     let system = outcome.system.as_ref().expect("sync emits the system view");
     let bytes = std::fs::read_to_string(output_dir.join(SYSTEM_FILE))
         .expect("system.json is written to the output directory");
@@ -204,7 +203,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
             budget: 4096,
             used: 44,
         }],
-        "the emitted view carries the matched mock pool (M6.9-T9)"
+        "the emitted view carries the matched mock pool"
     );
     assert_eq!(
         system
@@ -225,7 +224,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
         }]
     );
 
-    // M1-T6 acceptance: a second full sync produces byte-identical output.
+    // A second full sync produces byte-identical output.
     let second = sync(&root).expect("a second sync succeeds");
     assert_eq!(
         std::fs::read_to_string(output_dir.join(SYSTEM_FILE)).expect("system.json"),

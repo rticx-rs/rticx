@@ -241,7 +241,7 @@ fn sync_html_over_the_fixture_renders_pool_panels() {
         .expect("system.html is written");
     assert!(
         html.contains("\"id\":\"mock-0-1\""),
-        "the fixture's distro pool is a panel (M6.9-T8/T9)"
+        "the fixture's distro pool is a panel"
     );
     assert!(
         html.contains("\"budget\":4096"),

@@ -1,5 +1,4 @@
-//! M4-T3 acceptance: the documented negative cases fail with their documented
-//! error messages.
+//! The documented negative cases fail with their documented error messages.
 //!
 //! Two families of negative cases are covered end to end:
 //!
@@ -13,7 +12,7 @@
 //! - **merge/validation** through `cargo xbin sync` over generated metadata
 //!   projects: the moved `#[app(core_ids)]`/`#[app(external_cores)]` keys, a
 //!   priority line shared by two source cores, an input type missing from the
-//!   IDL and a leftover `[ipc.regions]` table (removed in M6.9-T3).
+//!   IDL and a leftover `[ipc.regions]` table (removed).
 //!
 //! Every assertion checks the exact documented message, so a wording change
 //! in the user guide or the error enum fails here.
@@ -269,8 +268,8 @@ const SINGLE_APP: &str = "schema = 1\n\n\
 
 #[test]
 fn sync_rejects_the_moved_topology_arguments() {
-    // Since M7-T2 the topology lives in `rticx.toml`; the old `#[app]` keys
-    // are hard errors that name the migration.
+    // The topology lives in `rticx.toml`; the old `#[app]` keys are hard
+    // errors that name the migration.
     for (arg, expected) in [
         ("core_ids = [0]", "`core_ids` moved to `rticx.toml`"),
         (
@@ -377,6 +376,6 @@ fn sync_rejects_the_removed_ipc_regions_table() {
     assert_eq!(
         error,
         "`[ipc.regions]` was removed: IPC memory is owned by the distribution's capability \
-         binding (M6.9), not declared in rticx.toml. Remove the `[ipc.regions]` table"
+         binding, not declared in rticx.toml. Remove the `[ipc.regions]` table"
     );
 }

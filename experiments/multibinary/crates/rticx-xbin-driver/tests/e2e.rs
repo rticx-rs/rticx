@@ -1,5 +1,4 @@
-//! M4-T1 acceptance: the two-application end-to-end fixture builds with
-//! `cargo xbin build`.
+//! The two-application end-to-end fixture builds with `cargo xbin build`.
 //!
 //! `crates/mock/fixtures/e2e` is a standalone workspace whose `#[app]` macro is provided
 //! by its own mock distribution: the full core pass runs on `MockCoreBackend`
@@ -116,8 +115,7 @@ fn cargo_xbin_build_builds_the_fixture_applications() {
         (0, 1, 4096)
     );
 
-    // The generated `ipc_types` module is written into the output directory
-    // (M1-T7).
+    // The generated `ipc_types` module is written into the output directory.
     let ipc_types = outcome
         .sync
         .ipc_types

@@ -13,7 +13,12 @@ started in `crates/rticx-xbin-pass`:
    docs `docs/architecture.md` and `docs/user-guide.md` (Phase 3);
 4. unify the duplicated hex parsers in `rticx-xbin-proto` (Phase 4);
 5. return an iterator from `FieldType::named_types` (Phase 5);
-6. simplify the cycle check in `IpcTypes::visit` (Phase 6).
+6. simplify the cycle check in `IpcTypes::visit` (Phase 6);
+7. sweep the remaining milestone references from the rest of the workspace
+   (`rticx-xbin-rt`, `crates/mock/*`, the fixture apps, `rticx-stm32h7/*` and
+   the root `Cargo.toml`) (Phase 7);
+8. unify the driver's `run_cargo`/`run_cargo_json` cargo runners (Phase 8);
+9. share the driver integration-test helpers (Phase 9).
 
 ## Context
 
@@ -48,6 +53,20 @@ uncommitted):
 - verified green: `cargo fmt -p rticx-xbin-proto -- --check`,
   `cargo clippy -p rticx-xbin-proto --all-targets`,
   `cargo test -p rticx-xbin-proto`.
+
+`crates/rticx-xbin-driver` was cleaned in the same spirit (this session,
+partly committed):
+
+- all milestone references were removed from its `src/` and `tests/`, with the
+  prose reworded where the tag was load-bearing;
+- a stale assertion was fixed: the proto cleanup had reworded the
+  `[ipc.regions]` error (dropping `(M6.9)`), but
+  `tests/negative.rs::sync_rejects_the_removed_ipc_regions_table` still expected
+  the old text, so `cargo test -p rticx-xbin-driver` was red before this
+  session;
+- verified green: `cargo fmt -p rticx-xbin-driver -- --check`,
+  `cargo clippy -p rticx-xbin-driver --all-targets`,
+  `cargo test -p rticx-xbin-driver`.
 
 The remaining milestone references live in:
 
@@ -101,6 +120,12 @@ projects, so the first `cargo test -p rticx-xbin-pass` after a change is slow
 - [ ] The `rticx-xbin-proto` hex parsing is shared, `FieldType::named_types`
       returns an iterator, and `IpcTypes::visit` computes the cycle start once;
       `cargo test -p rticx-xbin-proto` passes with clippy/fmt clean.
+- [ ] No `M#`/`D#`/`§` reference remains outside `plans/` (allowing the
+      `M4`/`M7` Cortex core-name false positives) (Phase 7).
+- [ ] The driver's cargo subprocess plumbing has a single implementation and
+      `cargo test -p rticx-xbin-driver` passes (Phase 8).
+- [ ] The driver integration tests share `fixture_root`/`target_dir`/
+      `binary_contains` from `tests/common/mod.rs` (Phase 9).
 
 ---
 
@@ -352,13 +377,154 @@ is on the stack, so the pre-scan and defensive fallback are redundant.
 
 ---
 
+## Phase 7 — Sweep the remaining milestone/plan references
+
+**Objective:** finish the workspace-wide cleanup started in
+`rticx-xbin-pass`/`rticx-xbin-proto`/`rticx-xbin-driver`: no `M#`/`D#`/`§`
+reference survives anywhere except the historical plan document itself.
+
+**Background:** the earlier passes only cleaned three crates. A grep still
+finds milestone/decision tags in:
+
+- `crates/rticx-xbin-rt/src/lib.rs` and `crates/rticx-xbin-rt/Cargo.toml`
+  (`M6.5-T3`, `M6.5`, `M0`);
+- `crates/mock/rticx-xbin-mock/src/lib.rs` and `tests/backend.rs`
+  (`M6.9-T6`, `M6.5`, `M6.5-T2/T3`, `M2-T3`, `D3`);
+- `crates/mock/xbin-mock-capability/src/lib.rs` (`M6.9-T1/T6/T9`);
+- `crates/mock/xbin-mock-distro/src/lib.rs` (`M6.5-T3/T5`, `M6.9-T1`, `M7-T2`,
+  `D3`, `D5`);
+- `crates/mock/xbin-mock-runtime/src/lib.rs` (`M6.5-T5`, `M6.9-T6`, `D3`);
+- the fixture apps and their manifests under
+  `crates/mock/fixtures/{e2e,metadata,three-app}/` (`M1-T4/T5`, `M4-T1/T2`,
+  `M5.5`, `M6-T1`, `M6.5-T5`, `M7`, `M6.9*`);
+- `rticx-stm32h7/**` (library, macro, bindings, `examples-apps`, `build.rs`,
+  the READMEs and the crate manifests);
+- the root `Cargo.toml` comments (`M4`, `M7-T1`, `M6.9-T7`).
+
+`docs/architecture.md` and `docs/user-guide.md` are deliberately **out of
+scope** — Phase 3 owns them.
+
+**Files:** every file above.
+
+**Do not touch:** `crates/rticx-xbin-pass/src/codegen.rs:74` (`the H7 release
+of the M4 core` refers to the Cortex-M4 *core*, not a milestone) and any
+metric/identifier that merely looks like a tag (e.g. `M4`/`M7` core names).
+Re-run the grep and judge each hit.
+
+**Steps:**
+1. Baseline grep and record the per-file counts.
+2. Reword each hit, keeping the prose readable where the tag was load-bearing
+   (do not just delete the parenthetical when the sentence depends on it);
+   drop truly dangling `D#`/`§` tags.
+3. Re-run the grep; expect only the historical plan document (and genuine
+   `M4`/`M7` core-name hits).
+4. Regression guard (the fixture/README edits can affect builds):
+   `cargo check --workspace --exclude rticx-stm32h7` and
+   `cargo test -p rticx-xbin-driver -p rticx-xbin-pass`; for the STM32H7
+   target, build the out-of-tree-style examples with exactly one of
+   `cm7`/`cm4` if a target is available.
+
+**Exit criteria / verification:**
+- [ ] `grep -rnoE '\bM[0-9]+(\.[0-9]+)?(-T[0-9]+)?\b|\bD[0-9]\b|§[0-9.]+' .`
+      (excluding `target/` and `plans/`) returns only the known false
+      positives (`M4`/`M7` core names).
+- [ ] `cargo check --workspace --exclude rticx-stm32h7` passes.
+- [ ] `cargo test -p rticx-xbin-driver -p rticx-xbin-pass` passes.
+
+---
+
+## Phase 8 — Unify the driver's cargo runners
+
+**Objective:** one implementation of the `cargo` subprocess plumbing in
+`crates/rticx-xbin-driver/src/commands.rs`; `run_cargo` and `run_cargo_json`
+currently duplicate ~80 lines each.
+
+**Background:** both functions build the command the same way
+(`Command::new(cargo_binary())`, `.args(…).current_dir(…)`, the
+env set/unset loops), and both have the same `CargoOutput::Captured` and
+`CargoOutput::Streamed` branches: the color decision, the `[cargo-xbin]
+running …` banner, piped stdout/stderr, the two drain threads, the `wait`, and
+the `CargoFailed` construction. The only differences are:
+
+- `run_cargo_json` appends `--message-format json-render-diagnostics` and
+  returns the captured stdout; `run_cargo` discards stdout.
+- in `Streamed` mode `run_cargo` forwards stdout to `io::stdout()` while
+  `run_cargo_json` forwards it to `io::sink()` (stdout must stay parseable).
+
+**Files:**
+- `crates/rticx-xbin-driver/src/commands.rs`.
+
+**Steps (refactor; the existing suites are the regression guard):**
+1. Baseline: `cargo test -p rticx-xbin-driver`; expect GREEN.
+2. Introduce one internal runner (e.g.
+   `run_cargo_impl(project_root, args, envs, unset, output, json: bool) -> Result<String, DriverError>`)
+   that owns the command setup and both output branches, and returns the
+   captured stdout (`run_cargo` ignores it; `run_cargo_json` returns it).
+   Keep the JSON's stdout-to-`io::sink()` behavior and the non-JSON
+   stdout forwarding.
+3. Make `run_cargo` and `run_cargo_json` thin wrappers.
+4. `cargo test -p rticx-xbin-driver`; expect GREEN with the same pass count,
+   plus `cargo clippy -p rticx-xbin-driver --all-targets` and
+   `cargo fmt -p rticx-xbin-driver -- --check`.
+
+**Exit criteria / verification:**
+- [ ] `run_cargo`/`run_cargo_json` contain no duplicated command/stream
+      plumbing; the command setup and both `CargoOutput` branches live in one
+      place.
+- [ ] `cargo test -p rticx-xbin-driver` passes (the CLI, freshness, negative
+      and e2e tests exercise both modes).
+- [ ] clippy/fmt clean.
+
+---
+
+## Phase 9 — Share the driver integration-test helpers
+
+**Objective:** remove the copy-pasted test scaffolding in
+`crates/rticx-xbin-driver/tests/` by moving it into `tests/common/mod.rs`.
+
+**Background:** `tests/common/mod.rs` already exists (used by `freshness.rs`
+and `negative.rs`). The other integration tests duplicate:
+
+- `fixture_root()` (canonicalized `../mock/fixtures/e2e`) in `e2e.rs`,
+  `verify.rs` and `cli.rs` (`e2e_fixture_root`);
+- `fixture_root()` for the metadata fixture in `fixture.rs` and for the
+  three-app fixture in `three_app.rs`;
+- `target_dir()` and `binary_contains()` verbatim in both `e2e.rs` and
+  `three_app.rs`.
+
+**Files:**
+- `crates/rticx-xbin-driver/tests/common/mod.rs` — add a parameterized
+  fixture-root helper (e.g. `fixture_root(name: &str) -> PathBuf`), plus
+  `target_dir` and `binary_contains`.
+- `crates/rticx-xbin-driver/tests/{e2e,three_app,verify,fixture,cli}.rs` —
+  `mod common;` + imports, delete the local copies.
+
+**Steps (refactor; the existing suites are the regression guard):**
+1. Baseline: `cargo test -p rticx-xbin-driver`; expect GREEN.
+2. Move the helpers (keep `#![allow(dead_code)]`, since each test crate uses a
+   subset).
+3. `cargo test -p rticx-xbin-driver`; expect GREEN with the same pass count,
+   plus clippy/fmt clean.
+
+**Exit criteria / verification:**
+- [ ] `grep -rn "fn fixture_root\|fn target_dir\|fn binary_contains" crates/rticx-xbin-driver/tests`
+      matches only `common/mod.rs`.
+- [ ] `cargo test -p rticx-xbin-driver` passes.
+- [ ] clippy/fmt clean.
+
+---
+
 ## Progress log
 
 | Phase | Status | Notes |
 | ----- | ------ | ----- |
+| — Driver milestone refs + stale test | DONE | `crates/rticx-xbin-driver` src/tests cleaned; `[ipc.regions]` assertion fixed; suite green |
 | 1 — Shared test-support module | TODO | |
 | 2 — Hoist `tempfile` | TODO | |
 | 3 — Docs/plan cleanup | TODO | Blocked on the plan-document decision |
 | 4 — Unify the hex parsers | TODO | `crates/rticx-xbin-proto` |
 | 5 — `named_types` iterator | TODO | `crates/rticx-xbin-proto` |
 | 6 — Simplify `IpcTypes::visit` cycle check | TODO | `crates/rticx-xbin-proto` |
+| 7 — Workspace-wide milestone sweep | TODO | rt + mock + fixtures + stm32h7 + root `Cargo.toml` |
+| 8 — Unify driver cargo runners | TODO | `crates/rticx-xbin-driver/src/commands.rs` |
+| 9 — Share driver test helpers | TODO | `crates/rticx-xbin-driver/tests/` |
