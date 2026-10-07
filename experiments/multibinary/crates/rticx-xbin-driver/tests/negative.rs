@@ -18,135 +18,24 @@
 //! Every assertion checks the exact documented message, so a wording change
 //! in the user guide or the error enum fails here.
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+mod common;
+
+use std::path::Path;
 
 use rticx_xbin_driver::{SYSTEM_FILE, sync};
 use tempfile::tempdir;
-
-fn cargo() -> PathBuf {
-    std::env::var_os("CARGO")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("cargo"))
-}
 
 // ---------------------------------------------------------------------------
 // Build-phase freshness over a copy of `crates/mock/fixtures/e2e`
 // ---------------------------------------------------------------------------
 
-/// Copies the checked-in end-to-end fixture into a fresh temporary directory.
-///
-/// `target/` is skipped, and dependency paths that leave the fixture root (the
-/// in-tree workspace crates) are rewritten to absolute paths so the copy is a
-/// self-contained project. Paths inside the fixture stay relative, so the copy
-/// uses its own application sources.
-fn fixture_copy() -> tempfile::TempDir {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/fixtures/e2e")
-        .canonicalize()
-        .expect("the end-to-end fixture ships with the driver crate");
-    let dir = tempdir().expect("tempdir");
-    let root = dir.path().join("e2e");
-    copy_tree(&source, &root);
-    for manifest in manifests(&root) {
-        let relative = manifest
-            .strip_prefix(&root)
-            .expect("manifest below the copy");
-        rewrite_dependency_paths(&manifest, &source.join(relative));
-    }
-    dir
-}
-
-/// Recursively copies `from` to `to`, skipping Cargo's `target/` directory.
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).expect("create directory");
-    for entry in std::fs::read_dir(from).expect("read directory") {
-        let entry = entry.expect("directory entry");
-        if entry.file_name() == "target" {
-            continue;
-        }
-        let destination = to.join(entry.file_name());
-        if entry.file_type().expect("file type").is_dir() {
-            copy_tree(&entry.path(), &destination);
-        } else {
-            std::fs::copy(entry.path(), &destination).expect("copy file");
-        }
-    }
-}
-
-/// Returns every `Cargo.toml` below `root`.
-fn manifests(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).expect("read directory") {
-            let entry = entry.expect("directory entry");
-            let path = entry.path();
-            if entry.file_type().expect("file type").is_dir() {
-                stack.push(path);
-            } else if path.file_name().is_some_and(|name| name == "Cargo.toml") {
-                found.push(path);
-            }
-        }
-    }
-    found
-}
-
-/// Rewrites the `path = "…"` values of the copied manifest at `copy_file`:
-/// paths that resolve inside the copy stay relative, paths that do not (the
-/// in-tree workspace crates) become the absolute path they point at in the
-/// original fixture.
-fn rewrite_dependency_paths(copy_file: &Path, source_file: &Path) {
-    let text = std::fs::read_to_string(copy_file).expect("copied Cargo.toml");
-    let copy_dir = copy_file.parent().expect("manifest directory");
-    let source_dir = source_file.parent().expect("source manifest directory");
-
-    let mut rewritten = String::with_capacity(text.len());
-    let mut rest = text.as_str();
-    let marker = "path = \"";
-    while let Some(index) = rest.find(marker) {
-        let (before, after) = rest.split_at(index + marker.len());
-        rewritten.push_str(before);
-        let Some(end) = after.find('"') else {
-            rewritten.push_str(after);
-            rest = "";
-            break;
-        };
-        let (value, tail) = after.split_at(end);
-        if copy_dir.join(value).exists() {
-            rewritten.push_str(value);
-        } else {
-            let original = source_dir
-                .join(value)
-                .canonicalize()
-                .unwrap_or_else(|_| panic!("the fixture dependency `{value}` exists"));
-            rewritten.push_str(&original.to_string_lossy().replace('\\', "/"));
-        }
-        rest = tail;
-    }
-    rewritten.push_str(rest);
-    std::fs::write(copy_file, rewritten).expect("rewrite Cargo.toml");
-}
-
-/// Runs a plain `cargo build` for one application, with the driver's mode
-/// variables removed (they must not leak in from the test environment).
-fn cargo_build(root: &Path, package: &str, bin: &str) -> Output {
-    Command::new(cargo())
-        .args(["build", "--package", package, "--bin", bin])
-        .current_dir(root)
-        .env_remove("RTICX_XBIN_META_OUT")
-        .env_remove("RTICX_XBIN_SYSTEM")
-        .output()
-        .expect("failed to run cargo build")
-}
-
 #[test]
 fn plain_build_rejects_a_missing_or_stale_sync() {
-    let dir = fixture_copy();
+    let dir = common::fixture_copy();
     let root = dir.path().join("e2e");
 
     // -- missing sync: a cross-binary application with no synced view --------
-    let output = cargo_build(&root, "app-m7", "m7");
+    let output = common::cargo_build(&root, "app-m7", "m7");
     assert!(
         !output.status.success(),
         "a plain build without `cargo xbin sync` must fail"
@@ -158,38 +47,45 @@ fn plain_build_rejects_a_missing_or_stale_sync() {
     );
     assert!(stderr.contains("run `cargo xbin sync`"), "{stderr}");
 
-    // -- source changed after sync ------------------------------------------
+    // -- interface changed after sync ---------------------------------------
+    // The cross-binary fingerprint covers the receiver set: dropping the
+    // receiver declaration is an interface change the per-field
+    // `resolve_receiver` checks cannot report (the source declares no receiver
+    // at all), so the fingerprint is the guard that fires.
     sync(&root).expect("the copied fixture syncs");
-    let source_path = root.join("app-m7/src/main.rs");
-    let source = std::fs::read_to_string(&source_path).expect("app-m7 source");
+    let source_path = root.join("app-m4/src/main.rs");
+    let source = std::fs::read_to_string(&source_path).expect("app-m4 source");
     let edited = source.replace(
-        "mod app {",
-        "mod app {\n    const __XBIN_NEGATIVE: u32 = 1;\n",
+        "    #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]\n",
+        "",
     );
     assert_ne!(edited, source, "the fixture source shape changed");
-    std::fs::write(&source_path, edited).expect("edit app-m7 source");
+    std::fs::write(&source_path, &edited).expect("edit app-m4 source");
 
-    let output = cargo_build(&root, "app-m7", "m7");
+    let output = common::cargo_build(&root, "app-m4", "m4");
     assert!(
         !output.status.success(),
-        "a source changed after sync must fail a plain build"
+        "an interface changed after sync must fail a plain build"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("changed since the last `cargo xbin sync`"),
+        stderr.contains("interface changed since the last `cargo xbin sync`"),
         "{stderr}"
     );
     assert!(stderr.contains("run `cargo xbin sync`"), "{stderr}");
 
+    // Restore the synced source for the view-edited case below.
+    std::fs::write(&source_path, &source).expect("restore app-m4 source");
+
     // -- view edited after sync ---------------------------------------------
-    // `app-m4`'s own source is still the synced one; only the view is stale.
+    // `app-m4`'s own source is back to the synced one; only the view is stale.
     let system_path = root.join("target/rticx-xbin").join(SYSTEM_FILE);
     let view = std::fs::read_to_string(&system_path).expect("system.json");
     let tampered = view.replacen("\"priority\": 3", "\"priority\": 4", 1);
     assert_ne!(tampered, view, "the fixture view has a task priority");
     std::fs::write(&system_path, tampered).expect("tamper with the view");
 
-    let output = cargo_build(&root, "app-m4", "m4");
+    let output = common::cargo_build(&root, "app-m4", "m4");
     assert!(
         !output.status.success(),
         "an edited system view must fail a plain build"
@@ -202,7 +98,7 @@ fn plain_build_rejects_a_missing_or_stale_sync() {
 
 #[test]
 fn plain_build_rejects_a_topology_edited_after_sync() {
-    let dir = fixture_copy();
+    let dir = common::fixture_copy();
     let root = dir.path().join("e2e");
     sync(&root).expect("the copied fixture syncs");
 
@@ -214,7 +110,7 @@ fn plain_build_rejects_a_topology_edited_after_sync() {
     assert_ne!(edited, config, "the fixture maps app-m7 to global core 0");
     std::fs::write(&config_path, edited).expect("edit rticx.toml");
 
-    let output = cargo_build(&root, "app-m7", "m7");
+    let output = common::cargo_build(&root, "app-m7", "m7");
     assert!(
         !output.status.success(),
         "an edited rticx.toml must fail a plain build"

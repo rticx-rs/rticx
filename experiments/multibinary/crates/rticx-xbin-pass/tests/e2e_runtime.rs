@@ -685,16 +685,22 @@ fn three_app_receiver_topology() -> AppTopology {
     AppTopology::new(vec![1], vec![0, 2])
 }
 
-/// The fixture view with both applications' source hashes recorded, as
-/// `cargo xbin sync` would (M3-T4).
+/// The fixture view with both applications' interface fingerprints recorded,
+/// as `cargo xbin sync` would (M3-T4).
 fn two_app_system() -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
-    for (package, args, app_mod) in [
-        ("app-m7", &producer_args(), &producer_module(0)),
+    for (package, args, app_mod, topology) in [
+        (
+            "app-m7",
+            &producer_args(),
+            &producer_module(0),
+            producer_topology(0, 1),
+        ),
         (
             "app-m4",
             &two_app_receiver_args(),
             &two_app_receiver_module(),
+            two_app_receiver_topology(),
         ),
     ] {
         let application = view
@@ -702,7 +708,9 @@ fn two_app_system() -> String {
             .iter_mut()
             .find(|application| application.package == package)
             .expect("fixture application");
-        application.interface_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
+        application.interface_hash =
+            rticx_xbin_pass::app_interface_hash(args, app_mod, Some(&topology))
+                .expect("the fixture fingerprint parses");
     }
     view.seal();
     view.to_json()
@@ -851,13 +859,24 @@ fn three_app_system() -> String {
         },
     ];
 
-    for (package, args, app_mod) in [
-        ("app-m7", producer_args(), producer_module(0)),
-        ("app-m5", producer_args(), producer_module(2)),
+    for (package, args, app_mod, topology) in [
+        (
+            "app-m7",
+            producer_args(),
+            producer_module(0),
+            producer_topology(0, 1),
+        ),
+        (
+            "app-m5",
+            producer_args(),
+            producer_module(2),
+            producer_topology(2, 1),
+        ),
         (
             "app-m4",
             three_app_receiver_args(),
             three_app_receiver_module(),
+            three_app_receiver_topology(),
         ),
     ] {
         let application = view
@@ -865,7 +884,9 @@ fn three_app_system() -> String {
             .iter_mut()
             .find(|application| application.package == package)
             .expect("fixture application");
-        application.interface_hash = rticx_xbin_pass::app_source_hash(&args, &app_mod);
+        application.interface_hash =
+            rticx_xbin_pass::app_interface_hash(&args, &app_mod, Some(&topology))
+                .expect("the fixture fingerprint parses");
     }
     view.seal();
     view.to_json()

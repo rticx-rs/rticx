@@ -310,21 +310,17 @@ fn manifests_are_deterministic() {
 }
 
 #[test]
-fn interface_hash_covers_the_source_before_stripping() {
+fn interface_hash_matches_the_computed_fingerprint() {
     let app_mod = receiver_app();
     let args = quote!(device = mypac, dispatchers = [IRQ0]);
+    let topology = AppTopology::new(vec![1], vec![0]);
 
-    // The hash covers the arguments and module exactly as the user wrote
-    // them, before any pass-owned attribute is stripped.
-    let expected = rticx_xbin_pass::app_source_hash(&args, &app_mod);
+    // The manifest records the fingerprint `cargo xbin sync` computes from the
+    // current source and the resolved topology.
+    let expected = rticx_xbin_pass::app_interface_hash(&args, &app_mod, Some(&topology))
+        .expect("the fixture fingerprint parses");
 
-    let (dir, manifest) = run_manifest(
-        app_mod,
-        AppTopology::new(vec![1], vec![0]),
-        args,
-        "app-m4",
-        "m4",
-    );
+    let (dir, manifest) = run_manifest(app_mod, topology, args, "app-m4", "m4");
     assert_eq!(manifest.interface_hash, expected);
 
     // Reading the manifest back from disk yields the same hash.

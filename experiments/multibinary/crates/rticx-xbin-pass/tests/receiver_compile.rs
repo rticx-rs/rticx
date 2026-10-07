@@ -331,8 +331,8 @@ fn receiver_topology() -> AppTopology {
     AppTopology::new(vec![1], vec![0])
 }
 
-/// The fixture view with the receiver application's source hash recorded, as
-/// `cargo xbin sync` would (M3-T4).
+/// The fixture view with the receiver application's interface fingerprint
+/// recorded, as `cargo xbin sync` would (M3-T4).
 fn receiver_system() -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     let application = view
@@ -340,8 +340,12 @@ fn receiver_system() -> String {
         .iter_mut()
         .find(|application| application.package == "app-m4")
         .expect("fixture app-m4");
-    application.interface_hash =
-        rticx_xbin_pass::app_source_hash(&receiver_args(), &receiver_app());
+    application.interface_hash = rticx_xbin_pass::app_interface_hash(
+        &receiver_args(),
+        &receiver_app(),
+        Some(&receiver_topology()),
+    )
+    .expect("the receiver fingerprint parses");
     view.seal();
     view.to_json()
 }

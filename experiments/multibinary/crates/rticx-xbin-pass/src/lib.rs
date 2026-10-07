@@ -49,7 +49,8 @@
 //!     rustc records it in dep-info and rebuilds the application when it
 //!     changes. The pass hard-errors on a `topology_hash` that does not match
 //!     the view's contents (it was edited after `cargo xbin sync`) and on an
-//!     application whose source changed since the last `sync` (see
+//!     application whose cross-binary interface changed since the last `sync`
+//!     (see
 //!     `crate::codegen::check_interface_hash`);
 //!
 //!   - priority lines: the pass analyzes the application's raw
@@ -100,6 +101,7 @@ use std::path::{Path, PathBuf};
 
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::ToTokens;
+use rticx_core::parse_utils::RticAttr;
 use rticx_core::{InfoBus, MainInjectionPoint};
 use rticx_xbin_proto::{
     AppManifest, CoreCapability, Hash64, MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl,
@@ -403,12 +405,6 @@ impl RticPass for XbinPass {
         args: TokenStream,
         mut app_mod: ItemMod,
     ) -> syn::Result<(TokenStream, ItemMod)> {
-        // The interface hash must describe the application exactly as the user
-        // wrote it, before this pass strips its own syntax, so that phase 2
-        // can recompute it from the same source. In this schema it still covers
-        // the whole source.
-        let interface_hash = app_source_hash(&args, &app_mod);
-
         // `rticx.toml` is the single user-facing source of topology (M7-T2):
         // resolve the application's `cores`/`core_ids`/`external_cores` from
         // the nearest project file (a `Fixed` topology overrides it; no
@@ -431,19 +427,23 @@ impl RticPass for XbinPass {
             .map(|resolved| resolved.manifest_path.as_path());
         let package = self.package().unwrap_or_default().to_string();
 
-        let (mut extensions, mut attr) = parse_app_args(args, &package, topology.as_ref())?;
-        let decls = parse_module(&mut app_mod, &extensions)?;
+        // Parse the pass-owned syntax (the `#[app]` extensions, the
+        // cross-binary declarations and the stolen dispatcher front) once; the
+        // interface fingerprint is built from the same parsed data.
+        let (extensions, attr, decls) =
+            parse_interface(args, &mut app_mod, &package, topology.as_ref())?;
 
-        // The shared `dispatchers` list carries the cross-binary line
-        // interrupts at its front (one per cross line, ascending
-        // `(source, priority)`) followed by the local software/async task
-        // dispatchers. The pass steals the front and writes the remainder back
-        // into the arguments for `rticx-sw-pass`/`rticx-async-pass`; a short
-        // list (or a duplicate inside the stolen prefix) is a hard error
-        // (M6.5-T1).
-        steal_dispatchers(&mut extensions, &decls, &mut attr)?;
+        // The fingerprint describes only the cross-binary-sensitive parts of
+        // the application (see [`interface_hash`]): the resolved topology, the
+        // stolen cross-binary dispatchers and the receiver declarations. It is
+        // computed only when a meta/system mode will actually use it, so the
+        // syntax-only pass does no hashing at all.
+        let interface_hash = (self.meta.is_some() || self.system.is_some())
+            .then(|| interface_hash(&extensions, &decls));
 
         if let Some(meta) = &self.meta {
+            let interface_hash =
+                interface_hash.expect("metadata mode computes the interface fingerprint");
             let manifest = build_manifest(
                 meta,
                 interface_hash,
@@ -472,6 +472,8 @@ impl RticPass for XbinPass {
         }
 
         if let Some(system) = &self.system {
+            let interface_hash =
+                interface_hash.expect("codegen mode computes the interface fingerprint");
             let package = system.package.as_deref().ok_or_else(|| {
                 meta_error(
                     "the system view is configured but `CARGO_PKG_NAME` is not defined; \
@@ -564,6 +566,31 @@ fn append_items(app_mod: &mut ItemMod, items: Vec<syn::Item>) {
     if let Some((_, module_items)) = app_mod.content.as_mut() {
         module_items.extend(items);
     }
+}
+
+/// Parses the pass-owned syntax of `(args, app_mod)` with the given
+/// `topology` and steals the cross-binary dispatcher front (M6.5-T1).
+///
+/// Shared by [`RticPass::run_pass`] and [`app_interface_hash`], so the
+/// interface fingerprint is computed from exactly the data the pass acts on.
+fn parse_interface(
+    args: TokenStream,
+    app_mod: &mut ItemMod,
+    package: &str,
+    topology: Option<&AppTopology>,
+) -> syn::Result<(AppExtensions, RticAttr, ModuleDecls)> {
+    let (mut extensions, mut attr) = parse_app_args(args, package, topology)?;
+    let decls = parse_module(app_mod, &extensions)?;
+
+    // The shared `dispatchers` list carries the cross-binary line interrupts
+    // at its front (one per cross line, ascending `(source, priority)`)
+    // followed by the local software/async task dispatchers. The pass steals
+    // the front and writes the remainder back into the arguments for
+    // `rticx-sw-pass`/`rticx-async-pass`; a short list (or a duplicate inside
+    // the stolen prefix) is a hard error (M6.5-T1).
+    steal_dispatchers(&mut extensions, &decls, &mut attr)?;
+
+    Ok((extensions, attr, decls))
 }
 
 /// Resolves the codegen-mode configuration from the environment.
@@ -775,81 +802,87 @@ fn halt_compilation() -> ! {
     std::process::exit(0);
 }
 
-/// Deterministic, proc-macro-host-independent hash of the macro arguments and
-/// the annotated module.
+/// Deterministic fingerprint of an application's cross-binary interface.
 ///
-/// This is the `interface_hash` recorded in the application manifest and in
-/// `system.json` (M1-T2). Phase 2 recomputes it with the same function and
-/// rejects an application that changed after the last `cargo xbin sync`
-/// (M3-T4). It is public so tests and tooling can build views that match a
-/// given source.
+/// Only the parts of an application the driver merges into the project
+/// topology are covered:
 ///
-/// The hash must not depend on *which* compiler expands the macro. `rustc`
-/// and rust-analyzer's proc-macro server represent the same token tree with
-/// different punctuation `Spacing` and render it very differently through
-/// `TokenStream`'s `Display`, so hashing `to_string()` would make a view
-/// synced by cargo look stale to the IDE (and vice versa). [`write_canonical`]
-/// instead serializes the token tree structurally, ignoring spacing and
-/// formatting; [`normalize_semicolons`] additionally erases the synthetic
-/// semicolons rust-analyzer appends to expression statements (see below).
-pub fn app_source_hash(args: &TokenStream, app_mod: &ItemMod) -> Hash64 {
-    let mut canonical_mod = app_mod.clone();
-    normalize_semicolons(&mut canonical_mod);
+/// - the resolved topology (`cores`, `core_ids`, `external_cores`);
+/// - the **stolen** cross-binary dispatcher front, in the order the pass bound
+///   it (ascending `(source, priority)` per local core, cores in order), with
+///   each interrupt [`Path`](syn::Path) rendered by [`write_canonical`] so
+///   punctuation `Spacing` cannot change the hash;
+/// - the cross-binary receiver declarations (`name`, `priority`, `capacity`,
+///   `core`, `spawn_by`, `input_type`), already sorted by name.
+///
+/// Task bodies, doc/`//` comments, local `#[sw_task]`/`#[async_task]`
+/// declarations, `shared`, `device`/`pacs` and surplus (local) dispatcher
+/// entries are deliberately excluded, so editing them cannot make a synced
+/// application look stale. The leading `v1` tag lets a future format change be
+/// detected explicitly.
+pub(crate) fn interface_hash(extensions: &AppExtensions, decls: &ModuleDecls) -> Hash64 {
+    use std::fmt::Write as _;
 
-    let mut source = String::new();
-    write_canonical(args.clone(), &mut source);
-    source.push('\n');
-    write_canonical(canonical_mod.to_token_stream(), &mut source);
-    Hash64::of(source.as_bytes())
-}
+    let mut text = String::from("xbin-interface v1\n");
+    let _ = writeln!(text, "cores={}", extensions.cores);
 
-/// Drops the trailing semicolon of every block-like expression statement.
-///
-/// rust-analyzer's proc-macro server does not pass the annotated module
-/// verbatim: `hir-expand`'s `fixup_syntax` appends a synthetic `;` to every
-/// expression statement that has none and whose expression is *not* a bare
-/// block (an `if`/`while`/`loop`/`for`/`match` statement, for instance).
-/// `rustc`, by contrast, hands the macro the source tokens unchanged, so the
-/// exact same file hashes differently under the IDE and under cargo and the
-/// IDE reports the application as changed after a `cargo xbin sync`.
-///
-/// The appended semicolon is redundant: removing it from a block-like
-/// expression statement does not change the program's meaning, and neither
-/// does keeping it. Normalizing both hosts to the semicolon-less form
-/// therefore makes the hash compiler-independent while still changing
-/// whenever the user edits the source.
-fn normalize_semicolons(app_mod: &mut ItemMod) {
-    use syn::visit_mut::{self, VisitMut};
+    let _ = write!(text, "core_ids=[");
+    for (index, id) in extensions.core_ids.iter().enumerate() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        let _ = write!(text, "{id}");
+    }
+    text.push_str("]\n");
 
-    struct Normalize;
-    impl VisitMut for Normalize {
-        fn visit_stmt_mut(&mut self, stmt: &mut syn::Stmt) {
-            if let syn::Stmt::Expr(expr, semi) = stmt
-                && is_block_like(expr)
-            {
-                *semi = None;
-            }
-            visit_mut::visit_stmt_mut(self, stmt);
+    let _ = write!(text, "external_cores=[");
+    for (index, id) in extensions.external_cores.iter().enumerate() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        let _ = write!(text, "{id}");
+    }
+    text.push_str("]\n");
+
+    for (core, entries) in extensions.cross_dispatchers.iter().enumerate() {
+        for entry in entries {
+            let mut rendered = String::new();
+            write_canonical(entry.to_token_stream(), &mut rendered);
+            let _ = writeln!(text, "dispatcher core={core} entry={rendered}");
         }
     }
 
-    Normalize.visit_item_mod_mut(app_mod);
+    for receiver in &decls.receivers {
+        let _ = writeln!(
+            text,
+            "receiver name={} priority={} capacity={} core={} spawn_by={} input={}",
+            receiver.name,
+            receiver.priority,
+            receiver.capacity,
+            receiver.core,
+            receiver.spawn_by,
+            receiver.input_type,
+        );
+    }
+
+    Hash64::of(text.as_bytes())
 }
 
-/// Whether `expr` may be used as a statement without a trailing semicolon.
-fn is_block_like(expr: &syn::Expr) -> bool {
-    matches!(
-        expr,
-        syn::Expr::If(_)
-            | syn::Expr::While(_)
-            | syn::Expr::Loop(_)
-            | syn::Expr::ForLoop(_)
-            | syn::Expr::Match(_)
-            | syn::Expr::Unsafe(_)
-            | syn::Expr::Async(_)
-            | syn::Expr::Const(_)
-            | syn::Expr::TryBlock(_)
-    )
+/// Parses `(args, app_mod)` with `topology` and returns the interface
+/// fingerprint [`RticPass::run_pass`] would record for it (M1-T2).
+///
+/// Public so tests and tooling can build views that match a given source, as
+/// `cargo xbin sync` does. The fingerprint covers only the cross-binary
+/// interface (see [`interface_hash`]); a body-only or doc-comment edit leaves
+/// it unchanged.
+pub fn app_interface_hash(
+    args: &TokenStream,
+    app_mod: &ItemMod,
+    topology: Option<&AppTopology>,
+) -> syn::Result<Hash64> {
+    let mut app_mod = app_mod.clone();
+    let (extensions, _attr, decls) = parse_interface(args.clone(), &mut app_mod, "", topology)?;
+    Ok(interface_hash(&extensions, &decls))
 }
 
 /// Appends a canonical serialization of `stream` to `out`.

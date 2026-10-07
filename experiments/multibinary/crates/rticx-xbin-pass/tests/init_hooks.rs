@@ -199,8 +199,8 @@ fn owner_topology() -> AppTopology {
     AppTopology::new(vec![0], vec![1])
 }
 
-/// The fixture view with the owner application's source hash recorded, as
-/// `cargo xbin sync` would (M3-T4).
+/// The fixture view with the owner application's interface fingerprint
+/// recorded, as `cargo xbin sync` would (M3-T4).
 fn owner_system() -> String {
     let mut view = SystemView::from_json(SYSTEM_JSON).expect("fixture system view");
     let application = view
@@ -208,7 +208,9 @@ fn owner_system() -> String {
         .iter_mut()
         .find(|application| application.package == "app-m7")
         .expect("fixture app-m7");
-    application.interface_hash = rticx_xbin_pass::app_source_hash(&owner_args(), &owner_app());
+    application.interface_hash =
+        rticx_xbin_pass::app_interface_hash(&owner_args(), &owner_app(), Some(&owner_topology()))
+            .expect("the owner fingerprint parses");
     view.seal();
     view.to_json()
 }

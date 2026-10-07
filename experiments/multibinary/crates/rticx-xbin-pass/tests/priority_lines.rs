@@ -247,8 +247,8 @@ fn receiver_topology(core_ids: &[u32]) -> AppTopology {
     AppTopology::new(core_ids.to_vec(), vec![0, 2])
 }
 
-/// Writes the fixture view with `app-m4`'s source hash recorded, as `cargo
-/// xbin sync` would (M3-T4).
+/// Writes the fixture view with `app-m4`'s interface fingerprint recorded, as
+/// `cargo xbin sync` would (M3-T4).
 fn write_system(
     core_ids: &[u32],
     tasks: &[TaskSpec],
@@ -262,7 +262,10 @@ fn write_system(
         .iter_mut()
         .find(|application| application.package == "app-m4")
         .expect("fixture app-m4");
-    application.interface_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
+    let topology = AppTopology::new(core_ids.to_vec(), external_cores.to_vec());
+    application.interface_hash =
+        rticx_xbin_pass::app_interface_hash(args, app_mod, Some(&topology))
+            .expect("the receiver fingerprint parses");
     view.seal();
 
     let dir = tempfile::tempdir().expect("tempdir");

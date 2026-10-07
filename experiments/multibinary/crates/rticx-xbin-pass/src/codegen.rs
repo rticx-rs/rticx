@@ -1383,14 +1383,15 @@ pub(crate) fn check_application<'a>(
     Ok(application)
 }
 
-/// Rejects an application whose source changed after the last
+/// Rejects an application whose cross-binary interface changed after the last
 /// `cargo xbin sync` (M3-T4).
 ///
-/// `system.json` records the [`app_source_hash`](crate::app_source_hash) of
-/// every application at sync time. Phase 2 recomputes the hash of the source
-/// being compiled and compares it with the recorded one, so a plain `cargo
-/// build` after an edit fails with the documented `cargo xbin sync` hint
-/// instead of generating code from a stale view.
+/// `system.json` records the [`app_interface_hash`](crate::app_interface_hash)
+/// of every application at sync time. Phase 2 recomputes the fingerprint of
+/// the source being compiled and compares it with the recorded one, so a plain
+/// `cargo build` after an interface edit fails with the documented
+/// `cargo xbin sync` hint instead of generating code from a stale view. A
+/// body-only or doc-comment edit leaves the fingerprint unchanged and builds.
 ///
 /// The pass runs this check after the declaration checks: a source change that
 /// also breaks a task declaration is reported by the more specific mismatch
@@ -1401,8 +1402,8 @@ pub(crate) fn check_interface_hash(
 ) -> syn::Result<()> {
     if application.interface_hash != interface_hash {
         return Err(error(format!(
-            "application `{}` changed since the last `cargo xbin sync` (the system view records \
-             source hash {}, the source hashes to {}); run `cargo xbin sync`",
+            "application `{}` interface changed since the last `cargo xbin sync` (the system view \
+             records interface hash {}, the source hashes to {}); run `cargo xbin sync`",
             application.package, application.interface_hash, interface_hash
         )));
     }
@@ -1421,7 +1422,8 @@ pub(crate) fn check_interface_hash(
 ///   tracks topology edits through dep-info (M7-T2).
 ///
 /// The anchors complement the hard errors of [`crate::load_system`] (stale
-/// `topology_hash`) and [`check_interface_hash`] (source changed after `sync`).
+/// `topology_hash`) and [`check_interface_hash`] (interface changed after
+/// `sync`).
 pub(crate) fn generate_freshness_items(
     view: &SystemView,
     path: &Path,

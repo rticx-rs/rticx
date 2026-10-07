@@ -21,7 +21,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use rticx_core::{MainInjectionPoint, RticPass};
 use rticx_xbin_pass::{AppTopology, SYSTEM_ENV, XbinPass, XbinPassBackend};
-use rticx_xbin_proto::{IPC_TYPES_FILE, SystemView};
+use rticx_xbin_proto::{Hash64, IPC_TYPES_FILE, SystemView};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -277,31 +277,33 @@ fn write_system_without_ipc_types(contents: &str) -> (tempfile::TempDir, PathBuf
     (dir, path)
 }
 
-/// Records the source hash of every `(package, args, module)` patch in the
-/// fixture view and returns the resealed JSON.
+/// Records the interface fingerprint of every `(package, args, module,
+/// topology)` patch in the fixture view and returns the resealed JSON.
 fn with_interface_hashes(
     contents: &str,
-    patches: &[(&str, &TokenStream, &syn::ItemMod)],
+    patches: &[(&str, &TokenStream, &syn::ItemMod, AppTopology)],
 ) -> String {
     let mut view = SystemView::from_json(contents).expect("fixture JSON");
-    for (package, args, app_mod) in patches {
+    for (package, args, app_mod, topology) in patches {
         let application = view
             .apps
             .iter_mut()
             .find(|application| application.package == *package)
             .unwrap_or_else(|| panic!("fixture has no application `{package}`"));
-        application.interface_hash = rticx_xbin_pass::app_source_hash(args, app_mod);
+        application.interface_hash =
+            rticx_xbin_pass::app_interface_hash(args, app_mod, Some(topology))
+                .expect("the fixture patch parses");
     }
     view.seal();
     view.to_json()
 }
 
-/// Writes a fixture view whose producer application records the hash of
+/// Writes a fixture view whose producer application records the fingerprint of
 /// `(sender_args, sender_app)`, as `cargo xbin sync` would (M3-T4).
 fn write_sender_system() -> (tempfile::TempDir, PathBuf) {
     write_system(&with_interface_hashes(
         SYSTEM_JSON,
-        &[("app-m7", &sender_args(), &sender_app())],
+        &[("app-m7", &sender_args(), &sender_app(), sender_topology())],
     ))
 }
 
@@ -309,7 +311,12 @@ fn write_sender_system() -> (tempfile::TempDir, PathBuf) {
 fn write_receiver_system() -> (tempfile::TempDir, PathBuf) {
     write_system(&with_interface_hashes(
         SYSTEM_JSON,
-        &[("app-m4", &receiver_args(), &receiver_app())],
+        &[(
+            "app-m4",
+            &receiver_args(),
+            &receiver_app(),
+            receiver_topology(),
+        )],
     ))
 }
 
@@ -318,8 +325,13 @@ fn write_both_system() -> (tempfile::TempDir, PathBuf) {
     write_system(&with_interface_hashes(
         SYSTEM_JSON,
         &[
-            ("app-m7", &sender_args(), &sender_app()),
-            ("app-m4", &receiver_args(), &receiver_app()),
+            ("app-m7", &sender_args(), &sender_app(), sender_topology()),
+            (
+                "app-m4",
+                &receiver_args(),
+                &receiver_app(),
+                receiver_topology(),
+            ),
         ],
     ))
 }
@@ -340,11 +352,11 @@ fn system_with(mutate: impl FnOnce(&mut serde_json::Value)) -> String {
     system_with_patches(mutate, &[])
 }
 
-/// Like [`system_with`], additionally recording the source hashes of
+/// Like [`system_with`], additionally recording the interface fingerprints of
 /// `patches` (in the same view) before sealing.
 fn system_with_patches(
     mutate: impl FnOnce(&mut serde_json::Value),
-    patches: &[(&str, &TokenStream, &syn::ItemMod)],
+    patches: &[(&str, &TokenStream, &syn::ItemMod, AppTopology)],
 ) -> String {
     let mut value: serde_json::Value = serde_json::from_str(SYSTEM_JSON).expect("fixture JSON");
     mutate(&mut value);
@@ -669,7 +681,7 @@ fn missing_ipc_types_file_is_reported() {
     // module (M1-T7).
     let (_dir, path) = write_system_without_ipc_types(&with_interface_hashes(
         SYSTEM_JSON,
-        &[("app-m7", &sender_args(), &sender_app())],
+        &[("app-m7", &sender_args(), &sender_app(), sender_topology())],
     ));
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
@@ -693,7 +705,7 @@ fn user_defined_ipc_types_module_is_rejected() {
     };
     let (_dir, path) = write_system(&with_interface_hashes(
         SYSTEM_JSON,
-        &[("app-m7", &sender_args(), &app_mod)],
+        &[("app-m7", &sender_args(), &app_mod, sender_topology())],
     ));
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
@@ -715,7 +727,7 @@ fn user_defined_cross_core_message_is_rejected() {
     };
     let (_dir, path) = write_system(&with_interface_hashes(
         SYSTEM_JSON,
-        &[("app-m7", &sender_args(), &app_mod)],
+        &[("app-m7", &sender_args(), &app_mod, sender_topology())],
     ));
 
     let error = XbinPass::with_system(&path, "app-m7", "m7")
@@ -752,24 +764,36 @@ fn stale_topology_hash_is_rejected() {
 }
 
 #[test]
-fn stale_application_source_is_rejected() {
-    // Same arguments, different tokens: a source edit between `sync` and a
-    // plain `cargo build` must be caught by the recorded source hash (M3-T4).
-    let (_dir, path) = write_sender_system();
+fn stale_application_interface_is_rejected() {
+    // The recorded fingerprint pins the cross-binary interface: dropping the
+    // receiver declaration between `sync` and a plain `cargo build` must be
+    // caught by the `interface changed` error (M3-T4). Per-field edits are
+    // reported by `resolve_receiver`'s more specific messages first.
+    let (_dir, path) = write_receiver_system();
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            const EXTRA: u32 = 1;
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            struct EncryptTask;
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
         }
     };
 
-    let error = XbinPass::with_system(&path, "app-m7", "m7")
-        .with_topology(sender_topology())
+    let error = XbinPass::with_system(&path, "app-m4", "m4")
+        .with_topology(receiver_topology())
         .with_backend(TestBackend)
-        .run_pass(sender_args(), app_mod)
-        .expect_err("a source changed after sync must be rejected")
+        .run_pass(receiver_args(), app_mod)
+        .expect_err("an interface changed after sync must be rejected")
         .to_string();
     assert!(
-        error.contains("changed since the last `cargo xbin sync`"),
+        error.contains("interface changed since the last `cargo xbin sync`"),
         "{error}"
     );
     assert!(error.contains("run `cargo xbin sync`"), "{error}");
@@ -1025,7 +1049,7 @@ fn router_has_one_match_arm_per_view_task() {
                     "line": 1
                 }));
         },
-        &[("app-m4", &args, &app_mod)],
+        &[("app-m4", &args, &app_mod, receiver_topology())],
     );
     let (_dir, path) = write_system(&view);
     let pass = XbinPass::with_system(&path, "app-m4", "m4")
@@ -1323,8 +1347,13 @@ fn fifo_init_follows_the_producing_core() {
             view["doorbells"][0]["target"] = serde_json::json!(2);
         },
         &[
-            ("app-m4", &receiver_args, &receiver_mod),
-            ("app-m7", &sender_args, &sender_mod),
+            (
+                "app-m4",
+                &receiver_args,
+                &receiver_mod,
+                receiver_topology.clone(),
+            ),
+            ("app-m7", &sender_args, &sender_mod, sender_topology.clone()),
         ],
     );
     let (_dir, path) = write_system(&view);
@@ -1724,6 +1753,7 @@ fn applications_without_cross_declarations_still_load_the_view() {
             "app-m4",
             &receiver_args_without_cross_declarations(),
             &app_mod,
+            receiver_topology(),
         )],
     ));
     let pass = XbinPass::with_system(&path, "app-m4", "m4")
@@ -1749,9 +1779,19 @@ fn codegen_mode_is_detected_from_the_environment() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
     let system = dir.path().join("system.json");
+    // No `rticx.toml` above the crate: the pass falls back to the identity
+    // topology over `#[app(cores)]` (one local core, no external cores).
     std::fs::write(
         &system,
-        with_interface_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+        with_interface_hashes(
+            SYSTEM_JSON,
+            &[(
+                "app-m7",
+                &sender_args(),
+                &sender_app(),
+                AppTopology::identity(1),
+            )],
+        ),
     )
     .expect("system.json");
     std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
@@ -1785,9 +1825,18 @@ fn codegen_mode_resolves_the_application_without_cargo_bin_name() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
     let system = dir.path().join("system.json");
+    // No `rticx.toml`: the resolved topology is the identity over one core.
     std::fs::write(
         &system,
-        with_interface_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+        with_interface_hashes(
+            SYSTEM_JSON,
+            &[(
+                "app-m7",
+                &sender_args(),
+                &sender_app(),
+                AppTopology::identity(1),
+            )],
+        ),
     )
     .expect("system.json");
     std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
@@ -1824,7 +1873,10 @@ fn project_topology_anchor_is_embedded() {
     let system = dir.path().join("system.json");
     std::fs::write(
         &system,
-        with_interface_hashes(SYSTEM_JSON, &[("app-m7", &sender_args(), &sender_app())]),
+        with_interface_hashes(
+            SYSTEM_JSON,
+            &[("app-m7", &sender_args(), &sender_app(), sender_topology())],
+        ),
     )
     .expect("system.json");
     std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
@@ -1849,60 +1901,381 @@ fn project_topology_anchor_is_embedded() {
     );
 }
 
-#[test]
-fn interface_hash_ignores_token_spacing() {
-    // rustc and rust-analyzer's proc-macro server represent the same token
-    // tree with different punctuation `Spacing` and render it very
-    // differently; the freshness hash must not depend on either.
-    use proc_macro2::{Punct, Spacing, TokenStream, TokenTree};
+/// Builds a one-receiver `#[app]` module: a `#[sw_task(<attr>)]` struct named
+/// `name` whose `impl RticSwTask` declares `input_type` as its `SpawnInput`.
+///
+/// The fingerprint tests below vary one declaration at a time through this
+/// helper.
+fn receiver_module(name: &str, attr: &str, input_type: &str) -> syn::ItemMod {
+    let source = format!(
+        "\
+mod app {{
+    trait RticSwTask {{
+        type SpawnInput;
+        fn exec(&mut self, input: Self::SpawnInput);
+    }}
 
-    let module: syn::ItemMod = syn::parse_quote!(
-        mod app {}
+    #[sw_task({attr})]
+    struct {name};
+
+    impl RticSwTask for {name} {{
+        type SpawnInput = {input_type};
+        fn exec(&mut self, _input: Self::SpawnInput) {{}}
+    }}
+}}"
     );
-    let stream = |spacing| {
-        TokenStream::from_iter([
-            TokenTree::Ident(format_ident!("a")),
-            TokenTree::Punct(Punct::new(',', spacing)),
-            TokenTree::Ident(format_ident!("b")),
-        ])
+    syn::parse_str(&source).expect("the generated receiver module parses")
+}
+
+/// Parses `(args, app_mod)` with `topology` and returns the interface
+/// fingerprint the pass would record, as `cargo xbin sync` does.
+fn interface_hash_of(args: &TokenStream, app_mod: &syn::ItemMod, topology: &AppTopology) -> Hash64 {
+    rticx_xbin_pass::app_interface_hash(args, app_mod, Some(topology))
+        .expect("the fixture interface parses")
+}
+
+#[test]
+fn interface_hash_ignores_task_bodies_and_doc_comments() {
+    // The user's original complaint: an edit inside a task body (or a doc
+    // comment) must not make a synced application look stale.
+    let topology = receiver_topology();
+    let args = receiver_args();
+
+    let original: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            /// The receiver's original documentation.
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            struct EncryptTask;
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {
+                    // original body
+                }
+            }
+        }
+    };
+    let edited: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            /// A completely different doc comment.
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            struct EncryptTask;
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {
+                    let _different = 1 + 1;
+                }
+            }
+        }
     };
 
     assert_eq!(
-        rticx_xbin_pass::app_source_hash(&stream(Spacing::Alone), &module),
-        rticx_xbin_pass::app_source_hash(&stream(Spacing::Joint), &module),
+        interface_hash_of(&args, &original, &topology),
+        interface_hash_of(&args, &edited, &topology),
     );
 }
 
 #[test]
-fn interface_hash_ignores_ra_synthetic_statement_semicolons() {
-    // rust-analyzer's proc-macro server (`hir-expand`'s `fixup_syntax`)
-    // appends a semicolon to an expression statement that lacks one whose
-    // expression is not a bare block, so `if c { .. }` reaches the macro as
-    // `if c { .. };` under the IDE but verbatim under rustc. The freshness
-    // hash must be blind to that synthetic token (regression: the IDE reported
-    // every synced application as changed).
-    //
-    // Parsed from strings so rustfmt does not rewrite the redundant
-    // semicolons the test is about.
-    let args = TokenStream::new();
-    let module = |body: &str| {
-        syn::parse_str::<syn::ItemMod>(&format!("mod app {{ fn f() {{ {body} }} }}"))
-            .expect("the test modules parse")
+fn interface_hash_ignores_local_task_declarations() {
+    // Local `#[sw_task]` declarations (and their priorities) are not part of
+    // the cross-binary interface: phase 2 re-validates them from the current
+    // source.
+    let topology = receiver_topology();
+    let args = receiver_args();
+
+    let without: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            struct EncryptTask;
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
+        }
+    };
+    let added: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            struct EncryptTask;
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
+
+            #[sw_task(priority = 5)]
+            struct LocalTask;
+        }
+    };
+    let changed: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            struct EncryptTask;
+
+            impl RticSwTask for EncryptTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
+
+            #[sw_task(priority = 7)]
+            struct LocalTask;
+        }
     };
 
-    let without_semi = module("if a { b(); } while c { d(); } let _ = e;");
-    let with_semi = module("if a { b(); }; while c { d(); }; let _ = e;");
-
+    let base = interface_hash_of(&args, &without, &topology);
     assert_eq!(
-        rticx_xbin_pass::app_source_hash(&args, &without_semi),
-        rticx_xbin_pass::app_source_hash(&args, &with_semi),
+        base,
+        interface_hash_of(&args, &added, &topology),
+        "adding a local task must not change the interface fingerprint"
+    );
+    assert_eq!(
+        base,
+        interface_hash_of(&args, &changed, &topology),
+        "changing a local task priority must not change the interface fingerprint"
+    );
+}
+
+#[test]
+fn interface_hash_ignores_shared_and_device() {
+    // `shared` and `device`/`pacs` are re-derived in phase 2 from the current
+    // source and have no cross-binary layout effect.
+    let topology = receiver_topology();
+    let args_a = quote!(device = pac_a, dispatchers = [IRQ0]);
+    let args_b = quote!(device = pac_b, dispatchers = [IRQ0]);
+
+    let base = receiver_module(
+        "EncryptTask",
+        "priority = 3, capacity = 2, spawn_by = 0",
+        "ipc_types::EncryptReq",
+    );
+    let shared = receiver_module(
+        "EncryptTask",
+        "priority = 3, capacity = 2, spawn_by = 0, shared = [counter]",
+        "ipc_types::EncryptReq",
     );
 
-    // A genuine edit must still change the hash.
-    let changed = module("if a { b(); } while c { d(); } let _ = e + 1;");
+    assert_eq!(
+        interface_hash_of(&args_a, &base, &topology),
+        interface_hash_of(&args_a, &shared, &topology),
+        "a receiver's `shared` list must not change the interface fingerprint"
+    );
+    assert_eq!(
+        interface_hash_of(&args_a, &base, &topology),
+        interface_hash_of(&args_b, &base, &topology),
+        "the `device` PAC must not change the interface fingerprint"
+    );
+}
+
+#[test]
+fn interface_hash_changes_on_receiver_field() {
+    // Every cross-binary-sensitive receiver field must move the fingerprint.
+    let topology = AppTopology::new(vec![1, 2], vec![0, 3]);
+    let args = quote!(device = mypac, dispatchers = [[IRQ0], [IRQ1]]);
+    let base = receiver_module(
+        "EncryptTask",
+        "priority = 3, capacity = 2, spawn_by = 0",
+        "ipc_types::EncryptReq",
+    );
+    let base_hash = interface_hash_of(&args, &base, &topology);
+
+    let variants = [
+        (
+            "name",
+            receiver_module(
+                "OtherTask",
+                "priority = 3, capacity = 2, spawn_by = 0",
+                "ipc_types::EncryptReq",
+            ),
+        ),
+        (
+            "priority",
+            receiver_module(
+                "EncryptTask",
+                "priority = 4, capacity = 2, spawn_by = 0",
+                "ipc_types::EncryptReq",
+            ),
+        ),
+        (
+            "capacity",
+            receiver_module(
+                "EncryptTask",
+                "priority = 3, capacity = 5, spawn_by = 0",
+                "ipc_types::EncryptReq",
+            ),
+        ),
+        (
+            "core",
+            receiver_module(
+                "EncryptTask",
+                "priority = 3, capacity = 2, spawn_by = 0, core = 1",
+                "ipc_types::EncryptReq",
+            ),
+        ),
+        (
+            "spawn_by",
+            receiver_module(
+                "EncryptTask",
+                "priority = 3, capacity = 2, spawn_by = 3",
+                "ipc_types::EncryptReq",
+            ),
+        ),
+        (
+            "input_type",
+            receiver_module(
+                "EncryptTask",
+                "priority = 3, capacity = 2, spawn_by = 0",
+                "ipc_types::OtherReq",
+            ),
+        ),
+    ];
+
+    for (field, variant) in variants {
+        assert_ne!(
+            base_hash,
+            interface_hash_of(&args, &variant, &topology),
+            "changing the receiver `{field}` must change the interface fingerprint",
+        );
+    }
+}
+
+#[test]
+fn interface_hash_changes_on_stolen_dispatcher_and_ignores_surplus() {
+    // Only the entries the pass steals for the cross-binary lines matter; the
+    // surplus entries are local software-task dispatchers.
+    let topology = receiver_topology();
+    let module = receiver_module(
+        "EncryptTask",
+        "priority = 3, capacity = 2, spawn_by = 0",
+        "ipc_types::EncryptReq",
+    );
+
+    let stolen = quote!(device = mypac, dispatchers = [IRQ_CROSS]);
+    let stolen_changed = quote!(device = mypac, dispatchers = [IRQ_OTHER]);
+    let surplus_changed = quote!(device = mypac, dispatchers = [IRQ_CROSS, IRQ_LOCAL]);
+    let surplus_added = quote!(
+        device = mypac,
+        dispatchers = [IRQ_CROSS, IRQ_LOCAL, IRQ_MORE]
+    );
+
+    let base = interface_hash_of(&stolen, &module, &topology);
     assert_ne!(
-        rticx_xbin_pass::app_source_hash(&args, &without_semi),
-        rticx_xbin_pass::app_source_hash(&args, &changed),
+        base,
+        interface_hash_of(&stolen_changed, &module, &topology),
+        "the stolen cross dispatcher identity must change the interface fingerprint"
+    );
+    assert_eq!(
+        base,
+        interface_hash_of(&surplus_changed, &module, &topology),
+        "a surplus local dispatcher must not change the interface fingerprint"
+    );
+    assert_eq!(
+        base,
+        interface_hash_of(&surplus_added, &module, &topology),
+        "adding a local dispatcher must not change the interface fingerprint"
+    );
+}
+
+#[test]
+fn interface_hash_changes_on_topology() {
+    // The resolved topology is part of the interface the driver merges.
+    let args = quote!(device = mypac, dispatchers = []);
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {}
+    };
+
+    let base = interface_hash_of(&args, &module, &AppTopology::new(vec![0], vec![1]));
+    assert_ne!(
+        base,
+        interface_hash_of(&args, &module, &AppTopology::new(vec![5], vec![1])),
+        "a different `core_ids` mapping must change the interface fingerprint"
+    );
+    assert_ne!(
+        base,
+        interface_hash_of(&args, &module, &AppTopology::new(vec![0], vec![1, 2])),
+        "a different `external_cores` list must change the interface fingerprint"
+    );
+}
+
+#[test]
+fn interface_hash_ignores_token_spacing() {
+    // rustc and rust-analyzer's proc-macro server represent the same token
+    // tree with different punctuation `Spacing`; the fingerprint renders the
+    // stolen dispatcher paths structurally and must not depend on it.
+    use proc_macro2::{Delimiter, Group, Punct, Spacing, TokenStream, TokenTree};
+
+    let topology = receiver_topology();
+    let module: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            trait RticSwTask {
+                type SpawnInput;
+                fn exec(&mut self, input: Self::SpawnInput);
+            }
+
+            #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
+            struct AlphaTask;
+
+            impl RticSwTask for AlphaTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
+
+            #[sw_task(priority = 4, capacity = 2, spawn_by = 0)]
+            struct BetaTask;
+
+            impl RticSwTask for BetaTask {
+                type SpawnInput = ipc_types::EncryptReq;
+                fn exec(&mut self, _input: Self::SpawnInput) {}
+            }
+        }
+    };
+
+    let args = |spacing| {
+        let dispatchers = TokenStream::from_iter([
+            TokenTree::Ident(format_ident!("IRQ0")),
+            TokenTree::Punct(Punct::new(',', spacing)),
+            TokenTree::Ident(format_ident!("IRQ1")),
+        ]);
+        TokenStream::from_iter([
+            TokenTree::Ident(format_ident!("device")),
+            TokenTree::Punct(Punct::new('=', Spacing::Alone)),
+            TokenTree::Ident(format_ident!("mypac")),
+            TokenTree::Punct(Punct::new(',', Spacing::Alone)),
+            TokenTree::Ident(format_ident!("dispatchers")),
+            TokenTree::Punct(Punct::new('=', Spacing::Alone)),
+            TokenTree::Group(Group::new(Delimiter::Bracket, dispatchers)),
+        ])
+    };
+
+    assert_eq!(
+        interface_hash_of(&args(Spacing::Joint), &module, &topology),
+        interface_hash_of(&args(Spacing::Alone), &module, &topology),
     );
 }
 

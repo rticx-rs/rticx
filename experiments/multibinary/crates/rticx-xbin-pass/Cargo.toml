@@ -16,9 +16,10 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 rticx-core = { workspace = true }
 rticx-xbin-proto = { workspace = true }
-# `visit-mut` canonicalizes the annotated module before hashing it; see
-# `app_source_hash`.
-syn = { workspace = true, features = ["visit-mut"] }
+# `write_canonical` renders dispatcher `Path`s host-independently; the
+# interface fingerprint is built from parsed data, so no `visit-mut` visitor
+# is needed.
+syn = { workspace = true }
 
 [dev-dependencies]
 rticx-sw-pass = { workspace = true }
