@@ -39,6 +39,13 @@ pub mod merge;
 pub mod project;
 pub mod system;
 
+/// Name of the type-only IDL file at the project root.
+///
+/// The single owner of the name: the driver's `project` module re-exports it
+/// (as it does [`IPC_TYPES_FILE`]), so the driver and the compilation pass can
+/// never disagree on which file holds the project IDL.
+pub const IDL_FILE: &str = "ipc-types.toml";
+
 pub use alloc::system_view;
 pub use codegen::{
     FileChange, IPC_TYPES_FILE, canonical_layout_text, generate_module, layout_hash,

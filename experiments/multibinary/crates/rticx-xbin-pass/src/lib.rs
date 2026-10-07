@@ -104,13 +104,13 @@ use quote::ToTokens;
 use rticx_core::parse_utils::RticAttr;
 use rticx_core::{InfoBus, MainInjectionPoint};
 use rticx_xbin_proto::{
-    AppManifest, CoreCapability, Hash64, MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl,
-    SystemView, TargetRef,
+    AppManifest, CoreCapability, Hash64, IpcTypes, MANIFEST_SCHEMA_VERSION, PoolCachePolicy,
+    PoolDecl, SystemView, TargetRef, parse_idl_file,
 };
 use syn::ItemMod;
 
 use crate::codegen::{
-    HookPlan, check_application, check_interface_hash, generate_freshness_items,
+    HookPlan, check_application, check_idl_hash, check_interface_hash, generate_freshness_items,
     generate_init_hooks, generate_ipc_types_items, generate_receiver_items, generate_sender_items,
 };
 use crate::parse::{
@@ -425,6 +425,9 @@ impl RticPass for XbinPass {
         let project_manifest = resolved
             .as_ref()
             .map(|resolved| resolved.manifest_path.as_path());
+        // The project root the topology resolver found; the IDL freshness
+        // check and anchor live next to the `rticx.toml` (M3-T4).
+        let project_root = project_manifest.and_then(Path::parent);
         let package = self.package().unwrap_or_default().to_string();
 
         // Parse the pass-owned syntax (the `#[app]` extensions, the
@@ -517,10 +520,20 @@ impl RticPass for XbinPass {
             // that also breaks a task declaration reports the specific
             // mismatch first; both errors point at `cargo xbin sync`.
             check_interface_hash(application, interface_hash)?;
+            // An IDL edit after the last `sync` is a hard error on a plain
+            // build too (M3-T4). Reason about the project root the topology
+            // resolver already found; an absent `ipc-types.toml` compares
+            // against the empty IDL, matching the sentinel `system_view`
+            // records.
+            let idl_path = project_root.map(|root| root.join(rticx_xbin_proto::IDL_FILE));
+            if let Some(idl_path) = idl_path.as_deref() {
+                check_idl_hash(&view, live_idl_layout_hash(idl_path)?)?;
+            }
             items.extend(generate_freshness_items(
                 &view,
                 &system.path,
                 project_manifest,
+                idl_path.as_deref(),
             )?);
 
             // The IDL types are no longer a crate: re-emit the synced
@@ -665,6 +678,30 @@ fn load_system(path: &Path) -> syn::Result<SystemView> {
         )));
     }
     Ok(view)
+}
+
+/// Computes the live layout hash of the project's `ipc-types.toml` (M3-T4).
+///
+/// An absent file is laid out as [`IpcTypes::empty`], matching the sentinel
+/// `system_view` records for a project without an IDL; the comparison is then
+/// against that empty layout, never `Hash64::ZERO`.
+fn live_idl_layout_hash(idl_path: &Path) -> syn::Result<u64> {
+    let idl = if idl_path.is_file() {
+        parse_idl_file(idl_path).map_err(|source| {
+            meta_error(format!(
+                "failed to parse `{}`: {source}; run `cargo xbin sync`",
+                idl_path.display()
+            ))
+        })?
+    } else {
+        IpcTypes::empty()
+    };
+    rticx_xbin_proto::layout_hash(&idl).map_err(|source| {
+        meta_error(format!(
+            "failed to lay out `{}`: {source}; run `cargo xbin sync`",
+            idl_path.display()
+        ))
+    })
 }
 
 /// Builds the application manifest from the parsed syntax.

@@ -71,3 +71,45 @@ fn plain_build_rejects_a_source_interface_edit() {
     );
     assert!(stderr.contains("run `cargo xbin sync`"), "{stderr}");
 }
+
+/// Editing the IDL after `cargo xbin sync` changes the project layout, which a
+/// plain `cargo build` must reject (M3-T4).
+///
+/// The build is warmed before the edit so the second build is served from
+/// rustc's cache: only the `__RTICX_XBIN_IDL` `include_str!` anchor makes the
+/// macro re-run (and the check fire) after the edit.
+#[test]
+fn plain_build_rejects_an_edited_idl() {
+    let dir = common::fixture_copy();
+    let root = dir.path().join("e2e");
+    sync(&root).expect("the copied fixture syncs");
+
+    // Warm the cache: this build must succeed, so a later cached build that
+    // does *not* re-expand the macro would silently accept the edited IDL.
+    let warm = common::cargo_build(&root, "app-m4", "m4");
+    assert!(
+        warm.status.success(),
+        "the fixture must build before the IDL edit:\n{}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    let idl_path = root.join("ipc-types.toml");
+    let idl = std::fs::read_to_string(&idl_path).expect("ipc-types.toml");
+    // Change the message layout without re-syncing: the generated
+    // `ipc_types.rs` still has the old `u32` field.
+    let edited = idl.replace("addr = \"u32\"", "addr = \"u16\"");
+    assert_ne!(edited, idl, "the fixture IDL must be edited");
+    std::fs::write(&idl_path, edited).expect("edit ipc-types.toml");
+
+    let output = common::cargo_build(&root, "app-m4", "m4");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "an IDL edit must fail a plain build:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("the IDL `ipc-types.toml` changed since the last `cargo xbin sync`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("run `cargo xbin sync`"), "{stderr}");
+}

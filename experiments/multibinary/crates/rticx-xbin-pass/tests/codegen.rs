@@ -21,7 +21,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use rticx_core::{MainInjectionPoint, RticPass};
 use rticx_xbin_pass::{AppTopology, SYSTEM_ENV, XbinPass, XbinPassBackend};
-use rticx_xbin_proto::{Hash64, IPC_TYPES_FILE, SystemView};
+use rticx_xbin_proto::{Hash64, IPC_TYPES_FILE, IpcTypes, SystemView, layout_hash, parse_idl_str};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -259,6 +259,17 @@ pub const SIZE_ENCRYPT_REQ: usize = 12;\n\
 pub const ALIGN_ENCRYPT_REQ: usize = 4;\n\
 pub const LAYOUT_HASH: u64 = 0x59021e1c399c4ddb;\n\
 unsafe impl CrossCoreMessage for EncryptReq {}\n";
+
+/// A `rticx.toml` listing the sender fixture application, so `from_env`
+/// discovers a project root (and therefore an `ipc-types.toml` location).
+const PROJECT_TOML: &str = "schema = 1\n\n\
+     [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
+     core_ids = [0]\nexternal_cores = [1]\n";
+
+/// The end-to-end fixture IDL: one `EncryptReq { addr: u32, len: u32, key: u32 }`
+/// message, as `crates/mock/fixtures/e2e/ipc-types.toml` declares it.
+const IDL_TOML: &str = "schema = 1\n\n\
+     [message.EncryptReq]\nfields = { addr = \"u32\", len = \"u32\", key = \"u32\" }\n";
 
 /// Writes a `system.json` and the generated `ipc_types.rs` next to it into a
 /// fresh directory, as `cargo xbin sync` does, and returns them.
@@ -1863,23 +1874,21 @@ fn project_topology_anchor_is_embedded() {
     // rustc's dep-info (M7-T2).
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        dir.path().join("rticx.toml"),
-        "schema = 1\n\n\
-         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\nexternal_cores = [1]\n",
-    )
-    .expect("rticx.toml");
+    std::fs::write(dir.path().join("rticx.toml"), PROJECT_TOML).expect("rticx.toml");
     let system = dir.path().join("system.json");
     std::fs::write(
         &system,
-        with_interface_hashes(
-            SYSTEM_JSON,
-            &[("app-m7", &sender_args(), &sender_app(), sender_topology())],
+        with_layout_hash(
+            &with_interface_hashes(
+                SYSTEM_JSON,
+                &[("app-m7", &sender_args(), &sender_app(), sender_topology())],
+            ),
+            idl_hash(IDL_TOML),
         ),
     )
     .expect("system.json");
     std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
+    std::fs::write(dir.path().join("ipc-types.toml"), IDL_TOML).expect("ipc-types.toml");
 
     let _env = EnvGuard::set_all(&[
         (SYSTEM_ENV, system.as_os_str()),
@@ -1898,6 +1907,171 @@ fn project_topology_anchor_is_embedded() {
     assert!(
         generated.contains("__RTICX_XBIN_PROJECT_TOML"),
         "the `rticx.toml` freshness anchor is missing: {generated}"
+    );
+}
+
+/// The layout hash of an IDL source, as `cargo xbin sync` records it.
+fn idl_hash(source: &str) -> Hash64 {
+    Hash64::new(
+        layout_hash(&parse_idl_str(source).expect("the fixture IDL parses"))
+            .expect("the fixture IDL lays out"),
+    )
+}
+
+/// The layout hash of a project without an `ipc-types.toml`, as `system_view`
+/// records it (it lays out [`IpcTypes::empty`], not `Hash64::ZERO`).
+fn empty_idl_hash() -> Hash64 {
+    Hash64::new(layout_hash(&IpcTypes::empty()).expect("the empty IDL lays out"))
+}
+
+/// Records `layout_hash` in an already-patched fixture view and reseals it, so
+/// the recorded layout matches the current IDL the test writes.
+fn with_layout_hash(contents: &str, layout_hash: Hash64) -> String {
+    let mut view = SystemView::from_json(contents).expect("fixture JSON");
+    view.layout_hash = layout_hash;
+    view.seal();
+    view.to_json()
+}
+
+/// Writes a project `from_env` can resolve (`rticx.toml`), the given
+/// `system.json` and the generated `ipc_types.rs` into a fresh directory.
+///
+/// The caller adds `ipc-types.toml` when the test needs one.
+fn write_project_dir(system: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("rticx.toml"), PROJECT_TOML).expect("rticx.toml");
+    let path = dir.path().join("system.json");
+    std::fs::write(&path, system).expect("system.json");
+    std::fs::write(dir.path().join(IPC_TYPES_FILE), IPC_TYPES_RS).expect("ipc_types.rs");
+    (dir, path)
+}
+
+/// Runs the sender fixture through `from_env` over `dir`/`system` and returns
+/// the generated module token string. The caller holds [`ENV_LOCK`].
+fn generate_from_project(dir: &Path, system: &Path) -> syn::Result<String> {
+    let _env = EnvGuard::set_all(&[
+        (SYSTEM_ENV, system.as_os_str()),
+        ("CARGO_MANIFEST_DIR", dir.as_os_str()),
+        ("CARGO_PKG_NAME", std::ffi::OsStr::new("app-m7")),
+        ("CARGO_BIN_NAME", std::ffi::OsStr::new("m7")),
+    ]);
+    let pass = XbinPass::from_env();
+    let (_, module) = pass
+        .with_backend(TestBackend)
+        .run_pass(sender_args(), sender_app())?;
+    Ok(module.to_token_stream().to_string())
+}
+
+/// A view whose recorded `layout_hash` matches the project's current IDL
+/// builds (M3-T4).
+#[test]
+fn idl_hash_matching_the_synced_view_passes() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let system = with_layout_hash(
+        &with_interface_hashes(
+            SYSTEM_JSON,
+            &[("app-m7", &sender_args(), &sender_app(), sender_topology())],
+        ),
+        idl_hash(IDL_TOML),
+    );
+    let (dir, path) = write_project_dir(&system);
+    std::fs::write(dir.path().join("ipc-types.toml"), IDL_TOML).expect("ipc-types.toml");
+
+    generate_from_project(dir.path(), &path).expect("a matching IDL must pass");
+}
+
+/// Editing the IDL after `cargo xbin sync` is a hard error naming the IDL and
+/// `cargo xbin sync` (M3-T4).
+#[test]
+fn idl_hash_mismatch_is_reported() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    // The view recorded the empty IDL's layout; the project now has EncryptReq.
+    let synced = empty_idl_hash();
+    let system = with_layout_hash(
+        &with_interface_hashes(
+            SYSTEM_JSON,
+            &[("app-m7", &sender_args(), &sender_app(), sender_topology())],
+        ),
+        synced,
+    );
+    let (dir, path) = write_project_dir(&system);
+    std::fs::write(dir.path().join("ipc-types.toml"), IDL_TOML).expect("ipc-types.toml");
+
+    let error = generate_from_project(dir.path(), &path)
+        .expect_err("a changed IDL must fail")
+        .to_string();
+    let live = idl_hash(IDL_TOML);
+    assert_eq!(
+        error,
+        format!(
+            "the IDL `ipc-types.toml` changed since the last `cargo xbin sync` (the system view \
+             records layout hash {synced}, the current IDL hashes to {live}); run `cargo xbin sync`"
+        )
+    );
+}
+
+/// A project without an `ipc-types.toml` compares against [`IpcTypes::empty`],
+/// matching the sentinel `system_view` records; a view that recorded a real
+/// layout while the file is gone is stale (M3-T4).
+#[test]
+fn missing_idl_compares_against_the_empty_idl() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let patches = [("app-m7", &sender_args(), &sender_app(), sender_topology())];
+
+    // No `ipc-types.toml`, and the view recorded the empty IDL's layout.
+    let system = with_layout_hash(
+        &with_interface_hashes(SYSTEM_JSON, &patches),
+        empty_idl_hash(),
+    );
+    let (dir, path) = write_project_dir(&system);
+    generate_from_project(dir.path(), &path).expect("the empty IDL is the no-file sentinel");
+
+    // No `ipc-types.toml`, but the view recorded EncryptReq's layout.
+    let synced = idl_hash(IDL_TOML);
+    let system = with_layout_hash(&with_interface_hashes(SYSTEM_JSON, &patches), synced);
+    let (dir, path) = write_project_dir(&system);
+    let error = generate_from_project(dir.path(), &path)
+        .expect_err("a deleted IDL must fail")
+        .to_string();
+    assert_eq!(
+        error,
+        format!(
+            "the IDL `ipc-types.toml` changed since the last `cargo xbin sync` (the system view \
+             records layout hash {synced}, the current IDL hashes to {}); run `cargo xbin sync`",
+            empty_idl_hash()
+        )
+    );
+}
+
+/// Codegen embeds `ipc-types.toml` with `include_str!` when it exists, so a
+/// cargo-cached build re-runs the macro (and the freshness check fires) after
+/// an IDL edit; a project without the file emits nothing (M3-T4).
+#[test]
+fn idl_freshness_anchor_is_emitted_when_the_idl_exists() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let patches = [("app-m7", &sender_args(), &sender_app(), sender_topology())];
+
+    let system = with_layout_hash(
+        &with_interface_hashes(SYSTEM_JSON, &patches),
+        idl_hash(IDL_TOML),
+    );
+    let (dir, path) = write_project_dir(&system);
+    std::fs::write(dir.path().join("ipc-types.toml"), IDL_TOML).expect("ipc-types.toml");
+    let generated = generate_from_project(dir.path(), &path).expect("codegen succeeds");
+    assert!(
+        generated.contains("const __RTICX_XBIN_IDL : & str = include_str !"),
+        "the `ipc-types.toml` dep-info anchor is missing: {generated}"
+    );
+
+    let system = with_layout_hash(
+        &with_interface_hashes(SYSTEM_JSON, &patches),
+        empty_idl_hash(),
+    );
+    let (dir, path) = write_project_dir(&system);
+    let generated = generate_from_project(dir.path(), &path).expect("codegen succeeds");
+    assert!(
+        !generated.contains("__RTICX_XBIN_IDL"),
+        "a project without an IDL must not emit the anchor: {generated}"
     );
 }
 

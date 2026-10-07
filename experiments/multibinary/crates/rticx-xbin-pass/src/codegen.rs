@@ -1410,6 +1410,34 @@ pub(crate) fn check_interface_hash(
     Ok(())
 }
 
+/// Rejects a project whose IDL changed after the last `cargo xbin sync`
+/// (M3-T4).
+///
+/// `system.json` records the layout hash of `ipc-types.toml` at sync time (the
+/// same value `ipc_types::LAYOUT_HASH` carries). Phase 2 recomputes the live
+/// layout and compares it with the recorded one, so editing the IDL without
+/// re-syncing fails a plain `cargo build` with the documented `cargo xbin
+/// sync` hint instead of generating code whose types no longer match the
+/// synced layout.
+///
+/// A project without `ipc-types.toml` compares against [`IpcTypes::empty`],
+/// matching the sentinel `system_view` records, not `Hash64::ZERO`.
+///
+/// [`IpcTypes::empty`]: rticx_xbin_proto::IpcTypes::empty
+pub(crate) fn check_idl_hash(view: &SystemView, layout_hash: u64) -> syn::Result<()> {
+    let current = Hash64::new(layout_hash);
+    if view.layout_hash != current {
+        return Err(error(format!(
+            "the IDL `{}` changed since the last `cargo xbin sync` (the system view records layout \
+             hash {}, the current IDL hashes to {}); run `cargo xbin sync`",
+            rticx_xbin_proto::IDL_FILE,
+            view.layout_hash,
+            current
+        )));
+    }
+    Ok(())
+}
+
 /// Generates the freshness anchors of one application (M3-T4, M7-T2).
 ///
 /// - `__RTICX_XBIN_TOPOLOGY_HASH` is the `TOPOLOGY_HASH` anchor of plan §7.3:
@@ -1419,15 +1447,19 @@ pub(crate) fn check_interface_hash(
 ///   the application whenever the file changes;
 /// - `__RTICX_XBIN_PROJECT_TOML` embeds the `rticx.toml` the topology was
 ///   resolved from, when it came from a project file, so a plain `cargo build`
-///   tracks topology edits through dep-info (M7-T2).
+///   tracks topology edits through dep-info (M7-T2);
+/// - `__RTICX_XBIN_IDL` embeds `ipc-types.toml`, when the project has one, so
+///   a cargo-cached build re-runs the macro (and [`check_idl_hash`] fires)
+///   after a pure IDL edit (M3-T4).
 ///
 /// The anchors complement the hard errors of [`crate::load_system`] (stale
-/// `topology_hash`) and [`check_interface_hash`] (interface changed after
-/// `sync`).
+/// `topology_hash`), [`check_idl_hash`] (IDL changed after `sync`) and
+/// [`check_interface_hash`] (interface changed after `sync`).
 pub(crate) fn generate_freshness_items(
     view: &SystemView,
     path: &Path,
     project_manifest: Option<&Path>,
+    idl: Option<&Path>,
 ) -> syn::Result<Vec<Item>> {
     // `include_str!` resolves a relative path against the file containing the
     // macro invocation, not the compilation working directory, so the path
@@ -1469,6 +1501,22 @@ pub(crate) fn generate_freshness_items(
             #[doc(hidden)]
             #[allow(dead_code)]
             const __RTICX_XBIN_PROJECT_TOML: &str = include_str!(#project_lit);
+        });
+    }
+
+    // The IDL is only tracked when the project has one. The anchor is what
+    // makes a cargo-cached build re-run the macro (and therefore
+    // `check_idl_hash`) after a pure `ipc-types.toml` edit (M3-T4).
+    if let Some(idl) = idl.filter(|idl| idl.is_file()) {
+        let idl_lit = include_str_path_lit(idl)?;
+        let idl_doc = "The project IDL `ipc-types.toml`, embedded so rustc records it in dep-info \
+             and rebuilds this application when it changes; without it a cached build would not \
+             re-run the macro and a stale IDL could slip through (M3-T4).";
+        items.push(syn::parse_quote! {
+            #[doc = #idl_doc]
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            const __RTICX_XBIN_IDL: &str = include_str!(#idl_lit);
         });
     }
 

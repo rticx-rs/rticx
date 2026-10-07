@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 pub const PROJECT_MANIFEST: &str = "rticx.toml";
 
 /// Type-only IDL file at the project root
-pub const IDL_MANIFEST: &str = "ipc-types.toml";
+///
+/// The name is owned by `rticx-xbin-proto` (like [`rticx_xbin_proto::IPC_TYPES_FILE`]),
+/// so the driver and the compilation pass can never disagree.
+pub use rticx_xbin_proto::IDL_FILE as IDL_MANIFEST;
 
 /// Driver-owned output directory, relative to the project root.
 ///
