@@ -35,8 +35,8 @@ use crate::project::TargetKind;
 /// Schema version of `<target>.xbin.json` understood by this crate.
 ///
 /// Schema 3 removed the topology echo (`cores`, `core_ids`, `external_cores`):
-/// `rticx.toml` is the single topology source and the driver reads it directly
-/// (M7-T2). The manifest only reports source-discovered facts.
+/// `rticx.toml` is the single topology source and the driver reads it directly.
+/// The manifest only reports source-discovered facts.
 ///
 /// Schema 4 renamed the per-application freshness hash to `interface_hash`
 /// and narrowed it from the whole source to a fingerprint of the cross-binary
@@ -74,7 +74,7 @@ pub struct AppManifest {
     /// Native `#[sw_task]` receivers (this application executes them).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub receivers: Vec<ReceiverDecl>,
-    /// Distro capability binding, one entry per local core (M6.9-T2): the
+    /// Distro capability binding, one entry per local core: the
     /// physical core it runs on and the IPC pools that physical core can
     /// reach. Recorded only when the distribution bound a code-generation
     /// backend; without one the field is absent, because no distro vocabulary
@@ -134,7 +134,7 @@ impl TargetRef {
 }
 
 /// A native `#[sw_task]` cross-binary receiver: a task executed by this
-/// application on behalf of a single remote producer core (M5.5).
+/// application on behalf of a single remote producer core.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReceiverDecl {
     /// Task name (the declared struct identifier).
@@ -160,11 +160,11 @@ impl ReceiverDecl {
     }
 }
 
-/// The distro capability binding of one local core (M6.9-T2).
+/// The distro capability binding of one local core.
 ///
 /// The distribution reports the physical core a local core runs on and the
 /// IPC pools that physical core can reach. The driver matches the two
-/// endpoints of a dual through the physical ids and the pool ids (M6.9-T4).
+/// endpoints of a dual through the physical ids and the pool ids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreCapability {
     /// Local core index (`0..cores`).
@@ -176,12 +176,12 @@ pub struct CoreCapability {
     pub pools: Vec<PoolDecl>,
 }
 
-/// One distro IPC pool as seen from one endpoint of a dual (M6.9-T2).
+/// One distro IPC pool as seen from one endpoint of a dual.
 ///
 /// The two endpoints of a dual (`A <-> B`) report the same [`PoolDecl::id`]
 /// with opposite physical cores, each reporting its own view as
 /// [`PoolDecl::base_local`] and the peer's as [`PoolDecl::base_peer`]; both
-/// directions allocate inside the shared [`PoolDecl::budget`] (M6.9-T4).
+/// directions allocate inside the shared [`PoolDecl::budget`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PoolDecl {
     /// Symbolic, distro-defined pool id (the dual's matching key).

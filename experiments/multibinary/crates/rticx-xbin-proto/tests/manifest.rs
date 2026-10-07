@@ -1,4 +1,4 @@
-//! `<target>.xbin.json` schema tests (M6.9-T2).
+//! `<target>.xbin.json` schema tests.
 //!
 //! Schema 3 dropped the topology echo (`cores`/`core_ids`/`external_cores`):
 //! `rticx.toml` is the single topology source. Schema 4 renamed the freshness

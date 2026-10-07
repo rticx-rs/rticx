@@ -1,4 +1,4 @@
-//! Whole-project system view emission (M1-T6).
+//! Whole-project system view emission.
 //!
 //! [`system_view`] converts the merged and allocated [`MergedProject`] into
 //! the driver's `target/rticx-xbin/system.json` view: it copies the
@@ -55,8 +55,8 @@ pub fn system_view(
             fifo: task.fifo(),
         })
         .collect();
-    // M6.9-T5: `system.json` schema 2 carries the distro pools directly; each
-    // task FIFO records the pool id it was allocated in.
+    // `system.json` carries the distro pools directly; each task FIFO records
+    // the pool id it was allocated in.
     view.pools = project.pools().to_vec();
     view.doorbells = doorbells(project);
     view.seal();

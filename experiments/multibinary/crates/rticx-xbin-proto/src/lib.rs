@@ -12,8 +12,8 @@
 //!   (receiver topology, priority disjointness, type existence, pool fit,
 //!   core-id consistency);
 //! - [`system`]: the driver-generated `system.json` system view;
-//! - [`alloc`]: the M1-T6 emission of that view (FIFOs, doorbell lines,
-//!   layout hash, sealed topology hash);
+//! - [`alloc`]: the emission of that view (FIFOs, doorbell lines, layout hash,
+//!   sealed topology hash);
 //! - [`fifo`]: the canonical in-region FIFO image and sizing;
 //! - [`hash`]: the deterministic FNV-1a 64-bit hash used for source, layout
 //!   and topology hashes;

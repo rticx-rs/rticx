@@ -26,7 +26,7 @@ fields = { id = "u16" }
 variants = ["Idle", "Busy"]
 "#;
 
-/// The two-application fixture of the plan (§6.1/§7.2): m7 sends, m4 receives.
+/// The two-application fixture: m7 sends, m4 receives.
 const TWO_APPS: &str = r#"
 schema = 1
 

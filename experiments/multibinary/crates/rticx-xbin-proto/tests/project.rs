@@ -2,7 +2,7 @@
 //!
 //! Accepted manifests are asserted structurally and round-tripped through the
 //! canonical rendering; rejected manifests assert the exact, deterministic
-//! error message. Since M6.9 the manifest declares no IPC memory: the
+//! error message. The manifest declares no IPC memory: the
 //! `[ipc.regions]` table is rejected with an error naming the removal.
 
 use std::io::Write;
@@ -276,14 +276,14 @@ fn rejects_malformed_toml() {
 }
 
 // ---------------------------------------------------------------------------
-// Rejected manifests: the removed `[ipc.regions]` table (M6.9-T3)
+// Rejected manifests: the removed `[ipc.regions]` table
 // ---------------------------------------------------------------------------
 
 #[test]
 fn rejects_the_removed_ipc_regions_table() {
     // Both the fully explicit and the shorthand forms name the removal.
     let expected = "`[ipc.regions]` was removed: IPC memory is owned by the distribution's \
-                    capability binding (M6.9), not declared in rticx.toml. \
+                    capability binding, not declared in rticx.toml. \
                     Remove the `[ipc.regions]` table";
     assert_eq!(
         err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0x30040000, size = 4096 }\n"),

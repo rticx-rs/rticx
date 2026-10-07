@@ -1,5 +1,5 @@
 //! Golden, round-trip, determinism and hashing tests for the `system.json`
-//! schema (M1-T1).
+//! schema.
 
 use rticx_xbin_proto::{
     AppEntry, CoreEntry, DoorbellEntry, FieldEntry, FifoEntry, Hash64, PoolEntry,

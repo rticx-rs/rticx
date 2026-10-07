@@ -26,7 +26,8 @@ use std::path::Path;
 use heck::ToShoutySnakeCase;
 
 use crate::error::CodegenError;
-use crate::idl::{FieldType, IpcTypes};
+use crate::hash::Hash64;
+use crate::idl::IpcTypes;
 use crate::layout::{Layouts, MAX_ALIGN};
 
 /// File name of the generated `ipc_types` module, next to `system.json` under
@@ -118,18 +119,7 @@ pub fn canonical_layout_text(idl: &IpcTypes) -> Result<String, CodegenError> {
 
 /// Computes the FNV-1a 64-bit hash of [`canonical_layout_text`].
 pub fn layout_hash(idl: &IpcTypes) -> Result<u64, CodegenError> {
-    Ok(fnv1a64(canonical_layout_text(idl)?.as_bytes()))
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET_BASIS;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    Ok(Hash64::of(canonical_layout_text(idl)?.as_bytes()).get())
 }
 
 fn generate_module_body(idl: &IpcTypes, layouts: &Layouts) -> Result<String, CodegenError> {
@@ -145,12 +135,7 @@ fn generate_module_body(idl: &IpcTypes, layouts: &Layouts) -> Result<String, Cod
             let _ = writeln!(out, "#[derive(Clone, Copy)]");
             let _ = writeln!(out, "pub struct {} {{", message.name());
             for field in message.fields() {
-                let _ = writeln!(
-                    out,
-                    "    pub {}: {},",
-                    field.name(),
-                    render_field_type(field.ty())
-                );
+                let _ = writeln!(out, "    pub {}: {},", field.name(), field.ty());
             }
             let _ = writeln!(out, "}}\n");
         } else if let Some(enumeration) = idl.get_enum(name) {
@@ -201,7 +186,7 @@ fn generate_module_body(idl: &IpcTypes, layouts: &Layouts) -> Result<String, Cod
         }
     }
 
-    let hash = fnv1a64(canonical_layout_text(idl)?.as_bytes());
+    let hash = Hash64::of(canonical_layout_text(idl)?.as_bytes()).get();
     let _ = writeln!(out, "pub const LAYOUT_HASH: u64 = 0x{hash:016x};\n");
 
     for name in &names {
@@ -287,16 +272,6 @@ fn interleaved_names(idl: &IpcTypes) -> Vec<String> {
         .collect();
     names.sort();
     names
-}
-
-fn render_field_type(ty: &FieldType) -> String {
-    match ty {
-        FieldType::Prim(prim) => prim.name().to_string(),
-        FieldType::Named(name) => name.clone(),
-        FieldType::Array(element, length) => {
-            format!("[{}; {length}]", render_field_type(element))
-        }
-    }
 }
 
 /// Tracks generated constant names so collisions (for example `FooBar` and

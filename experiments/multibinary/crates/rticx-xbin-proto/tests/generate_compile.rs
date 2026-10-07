@@ -1,4 +1,4 @@
-//! M0-T4 acceptance test: the generated `ipc_types` module must compile on
+//! The generated `ipc_types` module must compile on
 //! the host and on at least two embedded targets, which also evaluates every
 //! layout assertion at compile time.
 //!
@@ -129,7 +129,7 @@ fn generated_module_compiles_on_host_and_embedded_targets() {
 
     assert!(
         embedded >= 2,
-        "M0-T4 requires the generated module to compile on at least two embedded targets, \
+        "the generated module must compile on at least two embedded targets, \
          found {embedded}; install them with `rustup target add thumbv7em-none-eabihf \
          thumbv6m-none-eabi`"
     );

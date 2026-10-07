@@ -10,7 +10,10 @@ started in `crates/rticx-xbin-pass`:
 2. hoist the triplicated `tempfile` dev-dependency into
    `[workspace.dependencies]`;
 3. remove the remaining planning/milestone references from the **user-facing**
-   docs `docs/architecture.md` and `docs/user-guide.md`.
+   docs `docs/architecture.md` and `docs/user-guide.md` (Phase 3);
+4. unify the duplicated hex parsers in `rticx-xbin-proto` (Phase 4);
+5. return an iterator from `FieldType::named_types` (Phase 5);
+6. simplify the cycle check in `IpcTypes::visit` (Phase 6).
 
 ## Context
 
@@ -33,6 +36,19 @@ What is already done (previous session, uncommitted at the time of writing):
   `cargo test -p rticx-xbin-pass`,
   `cargo check --workspace --exclude rticx-stm32h7`.
 
+`crates/rticx-xbin-proto` was cleaned in the same spirit (this session,
+uncommitted):
+
+- all milestone/plan references were removed from its `src/` and `tests/`
+  (`M1-T1`, `M5.5`, `M6.9-T2/T4/T5`, `M7-T2`, `M0-T2/T3/T4`, `§6.1/§7.2`, …),
+  with the prose reworded where the tag was load-bearing;
+- `codegen.rs` now uses the shared `Hash64` and the `FieldType` `Display` impl
+  instead of local `fnv1a64`/`render_field_type` copies, and `layout.rs` cycle
+  detection dropped the parallel `visiting` set;
+- verified green: `cargo fmt -p rticx-xbin-proto -- --check`,
+  `cargo clippy -p rticx-xbin-proto --all-targets`,
+  `cargo test -p rticx-xbin-proto`.
+
 The remaining milestone references live in:
 
 | File | `M#` | `D#` | `§` | Treatment |
@@ -46,9 +62,8 @@ tree** — the document that introduced them is not present in git history eithe
 (searched `plans/` and history). Treat them as dangling and drop them from the
 user-facing docs; see Phase 3.
 
-Other workspace crates (`crates/rticx-xbin-proto`, `crates/rticx-xbin-driver`,
-`crates/mock/*`, `rticx-stm32h7/*`, fixture apps) still carry milestone
-references too — see "Out of scope".
+Other workspace crates (`crates/rticx-xbin-driver`, `crates/mock/*`,
+`rticx-stm32h7/*`, fixture apps) still carry milestone references too.
 
 ### Commands used in this workspace
 
@@ -83,13 +98,9 @@ projects, so the first `cargo test -p rticx-xbin-pass` after a change is slow
 - [ ] No `M#`/`D#`/plan-section reference remains in
       `docs/architecture.md` and `docs/user-guide.md`; intra-doc section links
       still resolve.
-
-## Out of scope
-
-- Removing milestone references from the other workspace crates
-  (`crates/rticx-xbin-proto`, `crates/rticx-xbin-driver`, `crates/mock/*`,
-  `rticx-stm32h7/*`) and the fixture applications. Same mechanical work, but a
-  separate, larger diff; do it as its own follow-up.
+- [ ] The `rticx-xbin-proto` hex parsing is shared, `FieldType::named_types`
+      returns an iterator, and `IpcTypes::visit` computes the cycle start once;
+      `cargo test -p rticx-xbin-proto` passes with clippy/fmt clean.
 
 ---
 
@@ -244,6 +255,103 @@ distribution/backend contract](…)`).
       `cargo test -p rticx-xbin-pass` only if Phase 1/2 changes are in the same
       tree.
 
+## Phase 4 — Unify the hex parsers in `rticx-xbin-proto`
+
+**Objective:** one implementation of the optional `0x`/`0X` prefix strip and
+hex-digit validation, shared by `Hash64::from_hex` and the `system.json`
+`hex_u32` serde helper, so the two cannot drift.
+
+**Background:** `hash.rs::Hash64::from_hex` parses a `u64` (1..=16 digits) with
+`HashParseError`; `system.rs::hex_u32::parse` parses a `u32` (1..=8 digits) with
+a plain `String` error for serde. Both now duplicate the same
+prefix-strip + digit-count + `is_ascii_hexdigit` logic with separately worded
+messages. Milestone references are already removed from this crate, and
+`codegen.rs`/`layout.rs` duplications were collapsed in the same pass.
+
+**Files:**
+- `crates/rticx-xbin-proto/src/hash.rs` — add the shared helper; use it from
+  `from_hex`.
+- `crates/rticx-xbin-proto/src/system.rs` — use it from `hex_u32::parse`.
+
+**Steps (refactor; the existing suites are the regression guard):**
+1. Baseline: `cargo test -p rticx-xbin-proto`; expect GREEN.
+2. Add a crate-private helper (for example
+   `hash::strip_hex_digits(text: &str, max_digits: usize) -> Option<&str>`)
+   that strips the optional prefix and returns `None` unless the remainder is
+   non-empty, no longer than `max_digits` and all ASCII hex digits.
+3. Rewrite `Hash64::from_hex` and `hex_u32::parse` to call it, keeping each
+   caller's own error type and exact message wording.
+4. `cargo test -p rticx-xbin-proto`; expect GREEN with the same pass count.
+
+**Exit criteria / verification:**
+- [ ] `hash.rs` and `system.rs` both call the shared helper; no duplicated
+      prefix/digit logic remains.
+- [ ] `tests/hash.rs` and `tests/system.rs` pass **unchanged** (the exact error
+      strings are preserved).
+- [ ] `cargo clippy -p rticx-xbin-proto --all-targets` and
+      `cargo fmt -p rticx-xbin-proto -- --check` are clean.
+
+---
+
+## Phase 5 — `FieldType::named_types` returns an iterator
+
+**Objective:** stop building a `Vec<&str>` on every call; return a lazy iterator
+that recurses through arrays.
+
+**Background:** `idl.rs::FieldType::named_types` currently allocates a fresh
+`Vec` per call, and `IpcTypes::validate` calls it in two loops (the existence
+check and the cycle DFS). The collection is only ever iterated.
+
+**Files:**
+- `crates/rticx-xbin-proto/src/idl.rs` — change the signature and body; update
+  the two call sites in `validate`/`visit`.
+
+**Steps (refactor; the existing suites are the regression guard):**
+1. Baseline: `cargo test -p rticx-xbin-proto`; expect GREEN.
+2. Change `named_types` to return `impl Iterator<Item = &str> + '_` (or a small
+   `enum`-based iterator if the recursive array arm forces boxing). The array
+   arm should `flat_map` back into `named_types`; the primitive arm must yield
+   nothing.
+3. Update the two call sites to iterate the returned iterator directly.
+4. `cargo test -p rticx-xbin-proto`; expect GREEN. Confirm the cyclic-IDL and
+   unknown-reference rejection tests still pass.
+
+**Exit criteria / verification:**
+- [ ] `FieldType::named_types` no longer returns a `Vec`.
+- [ ] `cargo clippy -p rticx-xbin-proto --all-targets` and
+      `cargo fmt -p rticx-xbin-proto -- --check` are clean.
+
+---
+
+## Phase 6 — Simplify the cycle check in `IpcTypes::visit`
+
+**Objective:** align `idl.rs` cycle detection with the already-simplified
+`layout.rs::Computer::named_layout`.
+
+**Background:** `layout.rs` now finds the cycle start with a single
+`stack.iter().position(...)`; `idl.rs::visit` still pre-scans with a separate
+`position(...).unwrap_or(0)`. A `Visit::Active` state already implies the name
+is on the stack, so the pre-scan and defensive fallback are redundant.
+
+**Files:**
+- `crates/rticx-xbin-proto/src/idl.rs` — the `Some(Visit::Active)` arm.
+
+**Steps (refactor; the existing suites are the regression guard):**
+1. Baseline: `cargo test -p rticx-xbin-proto`; expect GREEN.
+2. Replace the pre-scan plus `unwrap_or(0)` with the `layout.rs` shape: a
+   direct `find`/`position` on the stack to get the cycle start, then build the
+   chain from there.
+3. `cargo test -p rticx-xbin-proto`; expect GREEN.
+
+**Exit criteria / verification:**
+- [ ] `IpcTypes::visit` no longer computes the cycle start twice and has no
+      `unwrap_or(0)`.
+- [ ] The cyclic-message-reference test still passes.
+- [ ] `cargo clippy -p rticx-xbin-proto --all-targets` and
+      `cargo fmt -p rticx-xbin-proto -- --check` are clean.
+
+---
+
 ## Progress log
 
 | Phase | Status | Notes |
@@ -251,3 +359,6 @@ distribution/backend contract](…)`).
 | 1 — Shared test-support module | TODO | |
 | 2 — Hoist `tempfile` | TODO | |
 | 3 — Docs/plan cleanup | TODO | Blocked on the plan-document decision |
+| 4 — Unify the hex parsers | TODO | `crates/rticx-xbin-proto` |
+| 5 — `named_types` iterator | TODO | `crates/rticx-xbin-proto` |
+| 6 — Simplify `IpcTypes::visit` cycle check | TODO | `crates/rticx-xbin-proto` |

@@ -26,9 +26,9 @@ use crate::manifest::TargetRef;
 
 /// Schema version of `system.json` understood by this crate.
 ///
-/// Schema 2 (M6.9-T5) gives every core its `physical_core`, replaces the
-/// per-direction `regions[]` with the distro `pools[]` and adds the pool id to
-/// every task FIFO. Schema 3 renames the per-application freshness hash to
+/// Schema 2 gives every core its `physical_core`, replaces the per-direction
+/// `regions[]` with the distro `pools[]` and adds the pool id to every task
+/// FIFO. Schema 3 renames the per-application freshness hash to
 /// `interface_hash` and narrows it from the whole source to a fingerprint of
 /// the cross-binary interface (resolved topology, the stolen cross-dispatcher
 /// front and the receiver declarations).
@@ -254,7 +254,7 @@ pub struct AppEntry {
 pub struct CoreEntry {
     /// Globally unique core id.
     pub global_id: u32,
-    /// Distro-defined physical core id this global core runs on (M6.9-T5).
+    /// Distro-defined physical core id this global core runs on.
     ///
     /// Reported by the application's capability binding; the identity
     /// `global_id` when the application bound no distribution backend.
@@ -343,14 +343,13 @@ pub struct FifoEntry {
     pub source: u32,
     /// Consumer (receiver) global core id.
     pub target: u32,
-    /// Id of the `pools[]` entry this FIFO lives in (M6.9-T5).
+    /// Id of the `pools[]` entry this FIFO lives in.
     ///
-    /// `None` for a project whose manifests carry no capability table at all
-    /// (the minimal `metadata-macro` fixture until M6.9-T9); the offset is
-    /// then relative to the raw `(source -> target)` memory.
+    /// `None` for a project whose manifests carry no capability table at all;
+    /// the offset is then relative to the raw `(source -> target)` memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
-    /// Byte offset inside the pool; pool-relative since M6.9-T5.
+    /// Byte offset inside the pool.
     pub offset: u32,
     /// Size of one element in bytes (canonical input-type size).
     pub elem_size: u32,
@@ -358,7 +357,7 @@ pub struct FifoEntry {
     pub depth: u32,
 }
 
-/// A distro IPC pool shared by the two directions of a dual (M6.9-T4/T5).
+/// A distro IPC pool shared by the two directions of a dual.
 ///
 /// The two directions `A -> B` and `B -> A` allocate their FIFOs inside the
 /// same physical block, so the pool carries one `budget` shared by both and

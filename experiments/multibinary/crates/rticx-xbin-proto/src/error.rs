@@ -141,7 +141,7 @@ pub enum LayoutError {
     },
 }
 
-/// Failure while merging and validating the application manifests (M1-T5).
+/// Failure while merging and validating the application manifests.
 ///
 /// Every variant is a hard, deterministic error: the message names the
 /// offending package, task, core id or pool, so it can be shown to the user
@@ -327,7 +327,7 @@ pub enum MergeError {
         second_source: u32,
     },
 
-    /// The two endpoints of a dual do not report the same pool (M6.9-T4).
+    /// The two endpoints of a dual do not report the same pool.
     #[error(
         "IPC pool `{id}` between cores {core_a} and {core_b} is not reported consistently by \
          both endpoints; each must report the same pool id with the opposite physical core, \
@@ -374,7 +374,7 @@ pub enum MergeError {
         budget: u32,
     },
 
-    /// Two pool views overlap in one core's address space (M6.9-T4).
+    /// Two pool views overlap in one core's address space.
     #[error(
         "the `{first}` and `{second}` pool views overlap on core {core}: \
          0x{first_base:08x}..0x{first_end:08x} and 0x{second_base:08x}..0x{second_end:08x}; \

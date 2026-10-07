@@ -1,4 +1,4 @@
-//! Canonical layout engine tests (M0-T3).
+//! Canonical layout engine tests.
 //!
 //! The engine's output is compared against hand-written `#[repr(C)]` mirrors
 //! compiled for the host: for the supported subset the canonical layout must

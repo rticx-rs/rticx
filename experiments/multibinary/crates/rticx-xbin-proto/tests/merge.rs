@@ -5,10 +5,10 @@
 //! pool fit. Negative cases assert the exact error variant (and, for the
 //! central rules, the deterministic message).
 //!
-//! Since M5.5 the task topology comes exclusively from the receivers'
-//! singular `spawn_by`: there are no sender manifests to match. Since M6.9-T3
-//! the per-direction pool views come from the distro capability binding each
-//! manifest records, not from `rticx.toml`.
+//! The task topology comes exclusively from the receivers' singular
+//! `spawn_by`: there are no sender manifests to match. The per-direction pool
+//! views come from the distro capability binding each manifest records, not
+//! from `rticx.toml`.
 
 use rticx_xbin_proto::{
     AppManifest, CoreCapability, FIFO_HEADER, Hash64, IpcTypes, MANIFEST_SCHEMA_VERSION,
@@ -29,7 +29,7 @@ fields = { id = "u16" }
 variants = ["Idle", "Busy"]
 "#;
 
-/// The two-application fixture of the plan (§6.1/§7.2): m7 sends, m4 receives.
+/// The two-application fixture: m7 sends, m4 receives.
 const TWO_APPS: &str = r#"
 schema = 1
 
@@ -359,10 +359,9 @@ fn empty_project_merges_to_an_empty_view() {
 
 #[test]
 fn a_project_without_a_capability_binding_allocates_unbounded() {
-    // The minimal `metadata-macro` fixture binds no distribution backend, so
-    // its manifests carry no capability table: the merge still allocates the
-    // FIFOs deterministically and emits no pool (M6.9-T4; T9 supplies the mock
-    // capability table to the fixtures).
+    // A fixture that binds no distribution backend carries no capability
+    // table: the merge still allocates the FIFOs deterministically and emits
+    // no pool.
     let mut m7 = manifest("app-m7", "m7");
     m7.capabilities = Vec::new();
     let mut m4 = m4_manifest();

@@ -11,7 +11,7 @@
 //! Because the supported subset contains no pointers, the canonical sizes and
 //! offsets are identical on 32-bit and 64-bit targets.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::error::LayoutError;
 use crate::idl::{FieldType, IpcTypes, Message};
@@ -89,7 +89,6 @@ impl Layouts {
         let mut computer = Computer {
             idl,
             cache: BTreeMap::new(),
-            visiting: BTreeSet::new(),
             stack: Vec::new(),
         };
 
@@ -150,7 +149,6 @@ const fn enum_layout() -> Layout {
 struct Computer<'a> {
     idl: &'a IpcTypes,
     cache: BTreeMap<String, Layout>,
-    visiting: BTreeSet<String>,
     stack: Vec<String>,
 }
 
@@ -233,12 +231,7 @@ impl Computer<'_> {
                 name: name.to_string(),
             });
         };
-        if self.visiting.contains(name) {
-            let start = self
-                .stack
-                .iter()
-                .position(|entry| entry == name)
-                .unwrap_or(0);
+        if let Some(start) = self.stack.iter().position(|entry| entry == name) {
             let mut cycle = self.stack[start..].to_vec();
             cycle.push(name.to_string());
             return Err(LayoutError::Cycle {
@@ -246,11 +239,9 @@ impl Computer<'_> {
             });
         }
 
-        self.visiting.insert(name.to_string());
         self.stack.push(name.to_string());
         let layout = self.message_layout(name, message)?.layout;
         self.stack.pop();
-        self.visiting.remove(name);
         self.cache.insert(name.to_string(), layout);
         Ok(layout)
     }

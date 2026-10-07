@@ -20,7 +20,7 @@
 //! - **priority disjointness**: on one target core, tasks from different
 //!   source cores never share a priority line (local tasks are checked by the
 //!   core pass in phase 2);
-//! - **pool graph and adjacency** (M6.9-T4): the distribution's capability
+//! - **pool graph and adjacency**: the distribution's capability
 //!   binding reports, per physical core, which IPC pools it can reach. The
 //!   driver matches the two endpoints of every dual (same pool id, opposite
 //!   physical cores, same budget, swapped base views); a one-sided
@@ -42,14 +42,13 @@
 //! offsets. The `system.json` emit ([`crate::system_view`]) then copies the
 //! pools and the per-task pool ids.
 //!
-//! A project whose manifests carry no capability table at all (the minimal
-//! `metadata-macro` fixture, until M6.9-T9 supplies the mock table) has no pool
-//! graph: its FIFOs are allocated sequentially per direction and no pool is
-//! emitted. Real projects always bind a distribution, so this path only
-//! affects that stand-in.
+//! A project whose manifests carry no capability table at all (a fixture
+//! without a bound distribution backend) has no pool graph: its FIFOs are
+//! allocated sequentially per direction and no pool is emitted. Real projects
+//! always bind a distribution, so this path only affects such a stand-in.
 //!
 //! v1 supports exactly one producer core per task, so the producer of every
-//! task is its receiver's singular `spawn_by` (M5.5); multi-producer tasks
+//! task is its receiver's singular `spawn_by`; multi-producer tasks
 //! are rejected by the pass that parses the task attribute.
 //!
 //! [`merge_project`] is a pure function of its inputs and emits tasks sorted
@@ -127,7 +126,7 @@ pub struct MergedTask {
     elem_align: u32,
     offset: u32,
     /// Id of the pool the FIFO was allocated in, if the project bound a
-    /// capability table (M6.9-T5).
+    /// capability table.
     pool: Option<String>,
 }
 
@@ -257,11 +256,11 @@ pub fn merge_project(
     }
 
     // -- distro pool graph ---------------------------------------------------
-    // Since M6.9 the distribution owns IPC memory: each application manifest
-    // reports, per local core, its physical core and the pools that physical
-    // core can reach. Matching the two endpoints of a dual yields one shared
-    // pool per core pair (M6.9-T4). The graph also carries each global core's
-    // physical id, which the global core table below records (M6.9-T5).
+    // The distribution owns IPC memory: each application manifest reports, per
+    // local core, its physical core and the pools that physical core can reach.
+    // Matching the two endpoints of a dual yields one shared pool per core
+    // pair. The graph also carries each global core's physical id, which the
+    // global core table below records.
     let mut graph = match_pools(applications, &manifest_of)?;
 
     // -- global core table ---------------------------------------------------
@@ -488,9 +487,8 @@ pub fn merge_project(
                 target: receiver,
             });
         } else {
-            // Transitional no-capability path (M6.9-T9 supplies the mock
-            // capability table to the fixtures): allocate sequentially per
-            // direction, without a budget.
+            // No-capability path: allocate sequentially per direction, without
+            // a budget.
             let cursor = unbounded.entry(pair).or_insert(0);
             let start = align_up(*cursor).ok_or_else(|| MergeError::TaskTooLarge {
                 task: name.clone(),
@@ -546,7 +544,7 @@ struct MatchedPool {
     budget: u32,
 }
 
-/// The matched distro pool graph of a project (M6.9-T4).
+/// The matched distro pool graph of a project.
 struct PoolGraph {
     /// One entry per matched dual, ordered by `(core_a, core_b)`; `used` is
     /// filled in by FIFO allocation.
@@ -554,7 +552,7 @@ struct PoolGraph {
     /// `(core_a, core_b)` -> index into `pools`.
     by_pair: BTreeMap<(u32, u32), usize>,
     /// Global core id -> distro physical core id, for every core that bound a
-    /// capability entry (M6.9-T5).
+    /// capability entry.
     physical_of: BTreeMap<u32, u32>,
     /// Whether any application bound a distribution capability table.
     present: bool,
@@ -569,8 +567,7 @@ fn ordered_core_pair(left: u32, right: u32) -> (u32, u32) {
     }
 }
 
-/// Builds the project's pool graph from the manifests' capability bindings
-/// (M6.9-T4).
+/// Builds the project's pool graph from the manifests' capability bindings.
 ///
 /// The distribution reports, per physical core, the IPC pools it can reach.
 /// Two cores `A` and `B` form a dual exactly when `A` reports a pool whose
@@ -585,9 +582,9 @@ fn ordered_core_pair(left: u32, right: u32) -> (u32, u32) {
 /// Pools whose peer is not a core of the project are ignored.
 ///
 /// The [`PoolGraph::present`] flag reports whether any application bound a
-/// distribution capability table at all. Without one (the minimal
-/// `metadata-macro` fixture, until M6.9-T9 supplies the mock capability table)
-/// the graph is empty and the caller allocates without a budget.
+/// distribution capability table at all. Without one (a fixture without a
+/// bound distribution backend) the graph is empty and the caller allocates
+/// without a budget.
 fn match_pools(
     applications: &[Application],
     manifest_of: &BTreeMap<&str, &AppManifest>,

@@ -1,5 +1,4 @@
-//! Golden and determinism tests for the `ipc_types` module generator
-//! (M0-T4).
+//! Golden and determinism tests for the `ipc_types` module generator.
 //!
 //! The golden fixture under `tests/fixtures/` is byte-for-byte compared with
 //! the generator output; it documents exactly what `cargo xbin sync` writes

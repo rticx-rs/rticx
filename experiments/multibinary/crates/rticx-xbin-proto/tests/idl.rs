@@ -1,5 +1,5 @@
 //! Golden tests for `ipc-types.toml` parsing and 32-bit-safe subset
-//! validation (M0-T2).
+//! validation.
 //!
 //! Accepted schemas are asserted structurally; rejected schemas assert the
 //! exact, deterministic error message.

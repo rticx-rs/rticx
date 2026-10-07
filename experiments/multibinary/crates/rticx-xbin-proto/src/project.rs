@@ -27,10 +27,10 @@
 //! `external_cores` must be disjoint from its own `core_ids`; whether they are
 //! declared by another application is checked by the merge step.
 //!
-//! Since M6.9 the manifest carries **no** IPC memory: the distribution owns
-//! the IPC pools and reports them through its capability binding (recorded per
-//! application in the metadata manifest). A leftover `[ipc.regions]` table is
-//! rejected with an error naming the removal.
+//! The manifest carries **no** IPC memory: the distribution owns the IPC pools
+//! and reports them through its capability binding (recorded per application in
+//! the metadata manifest). A leftover `[ipc.regions]` table is rejected with an
+//! error naming the removal.
 //!
 //! Values can only be produced by [`parse_project_str`] /
 //! [`parse_project_file`], so the invariants checked while parsing (unique
@@ -273,7 +273,7 @@ pub fn parse_project_str(source: &str) -> Result<ProjectConfig, ProjectError> {
             "ipc" => {
                 return Err(ProjectError::invalid(
                     "`[ipc.regions]` was removed: IPC memory is owned by the distribution's \
-                     capability binding (M6.9), not declared in rticx.toml. \
+                     capability binding, not declared in rticx.toml. \
                      Remove the `[ipc.regions]` table",
                 ));
             }
