@@ -12,8 +12,7 @@ two 32-byte padded slots (64 bytes) to two `AtomicU32` indices (8 bytes).
 
 Workspace: `experiments/multibinary` (standalone Cargo workspace, its own
 `Cargo.toml`). Docs: `docs/architecture.md`, `docs/user-guide.md`. Historical
-design: `plans/multibinary-multicore-plan.md`. Analysis behind the header
-change: `plans/fifo-header-compaction.md`.
+design: `plans/multibinary-multicore-plan.md`.
 
 Current state that the change reacts to:
 
@@ -244,7 +243,9 @@ bases; the manifest schema is bumped.
 - [ ] `cargo test -p rticx-xbin-proto -p rticx-xbin-pass -p xbin-mock-capability -p xbin-mock-distro` passes.
 - [ ] `cd rticx-stm32h7 && make clippy && make build` passes for `cm7` and `cm4`.
 - [ ] `grep -rn "CachePolicy\|PoolCachePolicy\|NormalCacheableShareable\|is_cacheable" crates rticx-stm32h7` returns no matches.
-- [ ] `grep -rn "same budget and policy\|budget and policy" crates docs` returns no matches.
+- [ ] `grep -rn "same budget and policy\|budget and policy" crates` returns no
+      matches. (The two `docs` hits — `architecture.md`, `user-guide.md` — are
+      Phase 3's responsibility; the `docs` half of this grep is verified there.)
 
 ---
 
@@ -258,10 +259,14 @@ header.
 **Files:**
 - `docs/architecture.md`
 - `docs/user-guide.md`
+- `crates/rticx-xbin-rt/src/fifo.rs` (module-doc platform/cache wording only;
+  the layout edits landed in Phase 1)
 - `plans/multibinary-multicore-plan.md` (only statements of current design; the
   rest is historical)
-- `plans/fifo-header-compaction.md` (mark the change as landed once Phase 1 is
-  done)
+- `crates/rticx-xbin-pass/src/codegen.rs` (rustdoc: platform/cache wording only)
+- `rticx-stm32h7/src/xbin.rs` (rustdoc: platform/cache wording only)
+- `rticx-stm32h7/README.md`, `rticx-stm32h7/renode/README.md`,
+  `rticx-stm32h7/examples-apps/app-cm7/src/main.rs` (platform/cache wording only)
 
 **Steps:**
 
@@ -303,8 +308,15 @@ header.
    alignment, and the cache-policy mentions; add a one-line "(historical; see
    `docs/architecture.md` for the current contract)" note where it still
    describes the removed policy.
-5. **`plans/fifo-header-compaction.md`:** add a one-line status note that
-   Phase 1 implemented it (`FIFO_HEADER = 8`), so the two documents agree.
+5. **Source rustdocs/READMEs** (`crates/rticx-xbin-pass/src/codegen.rs`,
+   `rticx-stm32h7/src/xbin.rs`, `rticx-stm32h7/README.md`,
+   `rticx-stm32h7/renode/README.md`,
+   `rticx-stm32h7/examples-apps/app-cm7/src/main.rs`): reword the ARMv7-M
+   recipe ("Normal, Non-cacheable, Shareable", the Device/Strongly-ordered
+   prohibition) to the portable "effectively non-cacheable and shared" rule.
+   Keep the "a cacheable mapping is unsupported in v1" statement, and apply the
+   same rewrite to the `crates/rticx-xbin-rt/src/fifo.rs` module doc. No
+   code/behavior change.
 
 **Canonical rule text to reuse verbatim:**
 
@@ -323,7 +335,7 @@ header.
 
 **Exit criteria / verification:**
 - [ ] `grep -rn "cache-line-padded\|32-byte cache-line\|two 32-byte\|FIFO_HEADER\` (64)\|AtomicUsize" docs plans` returns no matches in the current-design text.
-- [ ] `grep -rn "CachePolicy\|PoolCachePolicy\|budget and policy\|Normal, Non-cacheable, Shareable" docs` returns no matches (the historical plan may keep a clearly-labelled note).
+- [ ] `grep -rn "CachePolicy\|PoolCachePolicy\|budget and policy\|Normal, Non-cacheable, Shareable" docs crates/rticx-xbin-pass/src/codegen.rs crates/rticx-xbin-rt/src/fifo.rs rticx-stm32h7` returns no matches (the historical plan may keep a clearly-labelled note).
 - [ ] `grep -n "overwhelming majority of multicore embedded" docs/architecture.md` matches.
 - [ ] `cargo test` still passes (docs-only phase, but keep the tree green).
 
@@ -333,6 +345,6 @@ header.
 
 | Phase | Status | Notes |
 | ----- | ------ | ----- |
-| 1     | TODO   | FIFO header → two `AtomicU32` (8 bytes) + re-baseline host sizes |
-| 2     | TODO   | Remove `CachePolicy`/`PoolCachePolicy`; manifest schema 4 → 5 |
-| 3     | TODO   | Docs: platform policy statement + remove stale header/policy wording |
+| 1     | DONE   | FIFO header → two `AtomicU32` (8 bytes), `FIFO_HEADER=8`; re-baselined host sizes. Note: real `OtherReq` fifo is 12 (size 2) not the plan's 16; offsets/`used==60` unchanged. Extra stale-`used` fixtures re-baselined in driver `visualize.rs`, proto `system.rs`, pass `receiver_compile.rs`, `codegen.rs`. |
+| 2     | DONE   | `CachePolicy`/`PoolCachePolicy` and `policy` fields removed; manifest schema 4 → 5; `pool_decl` simplified; mocks + H7 macro updated. H7 `make clippy && make build` green (cm7/cm4). Note: `axi` cacheable fixture removed → the multi-pool "sorted by peer" ordering check lost coverage (production sort unchanged). |
+| 3     | DONE   | Portable non-cacheable-or-configurable policy stated (canonical rule verbatim in `docs/architecture.md` "Cache policy and supported platforms" §6/§8/§9, `docs/user-guide.md` §7.4); 64-byte header/`AtomicUsize` wording removed; worked example uses `0/4/8/44`; source rustdocs/READMEs (codegen.rs, xbin.rs, H7 READMEs, app-cm7) reworded; `multibinary-multicore-plan.md` current-design statements updated with a labelled historical M6.9 note. Definition of Done greps all clean; `cargo fmt`/`clippy`/`cargo test`/H7 `make clippy && make build` green. |

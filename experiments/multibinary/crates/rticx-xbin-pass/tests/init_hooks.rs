@@ -86,7 +86,7 @@ const SYSTEM_JSON: &str = r#"{
       "priority": 3,
       "capacity": 2,
       "input_type": "EncryptReq",
-      "fifo": { "source": 0, "target": 1, "pool": "p01", "offset": 88, "elem_size": 12, "depth": 3 }
+      "fifo": { "source": 0, "target": 1, "pool": "p01", "offset": 32, "elem_size": 12, "depth": 3 }
     }
   ],
   "pools": [
@@ -97,7 +97,7 @@ const SYSTEM_JSON: &str = r#"{
       "base_from_a": "0x30040000",
       "base_from_b": "0x30040000",
       "budget": 4096,
-      "used": 188
+      "used": 76
     }
   ],
   "doorbells": [
@@ -279,7 +279,7 @@ fn write_project(root: &Path, expanded: &str) {
              let out_base = system.pool_base(0, 1).expect(\"pool {0, 1}\");\n\
              // `EncryptTask` is the second task of the shared `p01` pool.\n\
              let out_fifo = unsafe {\n\
-                 Fifo::<app::ipc_types::EncryptReq, 3usize>::view_at(out_base + 88)\n\
+                 Fifo::<app::ipc_types::EncryptReq, 3usize>::view_at(out_base + 32)\n\
              };\n\
              let in_base = system.pool_base(1, 0).expect(\"pool {1, 0}\");\n\
              // `DecryptTask` is the first task of the shared `p01` pool.\n\

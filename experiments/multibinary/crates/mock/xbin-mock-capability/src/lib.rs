@@ -11,7 +11,7 @@
 //! space, so both endpoints of a dual see its base at the same address; the
 //! budget matches the runtime's 4096-byte pools.
 
-use rticx_xbin_pass::{CachePolicy, IpcPool, PhysicalCore, PoolId};
+use rticx_xbin_pass::{IpcPool, PhysicalCore, PoolId};
 
 /// Bytes reserved for both directions of one dual.
 pub const BUDGET: u32 = 4096;
@@ -27,7 +27,6 @@ pub fn fixture_pools(local: PhysicalCore) -> Vec<IpcPool> {
         base_local: base,
         base_peer: base,
         budget: BUDGET,
-        policy: CachePolicy::NormalNonCacheableShareable,
     };
 
     match local.0 {

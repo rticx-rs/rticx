@@ -343,8 +343,7 @@ mod tests {
 
     /// The two endpoints of a dual report the same pool from their own side:
     /// the same id, opposite physical cores, each side's local view equal to
-    /// the other's peer view, and the same shared budget and policy
-    /// (M6.9-T1).
+    /// the other's peer view, and the same shared budget (M6.9-T1).
     #[test]
     fn pools_are_symmetric_across_endpoints() {
         // The fixture applications each run on one physical core, with ids 0,
@@ -378,7 +377,6 @@ mod tests {
                 assert_eq!(mirror.base_local, pool.base_peer);
                 assert_eq!(mirror.base_peer, pool.base_local);
                 assert_eq!(mirror.budget, pool.budget);
-                assert_eq!(mirror.policy, pool.policy);
             }
         }
     }

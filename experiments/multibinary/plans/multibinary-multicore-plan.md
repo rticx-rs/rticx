@@ -52,8 +52,8 @@ by an out-of-tree distribution.
 | Type discovery | TOML IDL at workspace root, types only; driver generates a shared `ipc_types` module the pass re-emits into each `#[app]` |
 | Type subset v1 | 32-bit-safe only: `u8..u32`, `i8..i32`, `f32`, `[T; N]`, nested messages, optional `repr(u32)` enums. No `u64/i64/f64`, `usize`, `bool`, pointers, references |
 | Layout guarantee | Generated `#[repr(C)]` types + canonical layout consts + per-target compile-time assertions |
-| FIFO ordering | New atomic SPSC queue (`AtomicUsize` head/tail via `portable-atomic`, Release/Acquire) — not `rticx-spsc` |
-| Cache policy | Distribution configures the shared region Normal, Non-cacheable, Shareable; a cacheable mapping is unsupported in v1 (no cache hooks; the generated transport body owns any maintenance) |
+| FIFO ordering | New atomic SPSC queue (4-byte `AtomicU32` head/tail via `portable-atomic`, Release/Acquire) — not `rticx-spsc` |
+| Cache policy | The distribution makes the shared region **effectively non-cacheable and shared** on every core that touches it (mechanism-agnostic); a cacheable mapping without transport-owned maintenance is unsupported in v1 (no cache hooks) |
 | Phase-2 metadata | Driver emits one JSON system view; each binary's pass parses the whole view and filters by its cores |
 | Driver UX | `cargo xbin sync`, `cargo xbin build` (= sync + build, `--verify-elf` to check the linked ELFs) and `cargo xbin verify` (check the plain-`cargo build` output); granular per-app cargo/clippy workflows remain possible after an explicit `sync` |
 | Pass internals | The external pass reimplements needed internals for now, marked `TODO(extract): ...`; may later be promoted/shared with `rticx-sw-pass` |
@@ -521,7 +521,7 @@ EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
    - global core ids consistent across applications and `rticx.toml`.
 5. Allocate per-task FIFO offsets deterministically:
    - pools keyed by `(core_a, core_b)`; within a pool, tasks in global task order;
-   - align each FIFO to 8 bytes (indices cache-line padded in the runtime type);
+   - align each FIFO to 8 bytes (the runtime header is two 4-byte `AtomicU32` indices);
    - depth = `capacity + 1` (ring buffer wastes one slot; effective capacity is
      exact because the dispatcher drains the FIFO directly);
    - hard error if the pool overflows.
@@ -686,10 +686,11 @@ external `task_trait` paths, so no core changes are required.
 ## 9. Runtime crate (`rticx-xbin-rt`)
 
 - Atomic SPSC ring for shared memory:
-  - `AtomicUsize` head/tail (`portable-atomic`), publish with `Release`, consume with
-    `Acquire`;
+  - 4-byte `AtomicU32` head/tail (`portable-atomic`) in an 8-byte header, publish
+    with `Release`, consume with `Acquire`;
   - payload stored in place; element type must be `Copy`;
-  - cache-line-padded indices to avoid false sharing;
+  - a fixed 8-byte header so the canonical image is identical on the host and the
+    target;
   - `unsafe fn view_at(addr: usize) -> *mut Self` for fixed-address placement.
 - `Queue` — the core-local SPSC queue backing generated line ready queues (re-export
   of the software pass's queue type). The `CrossCoreMessage` marker trait lives in
@@ -712,8 +713,8 @@ generated code reads at runtime is baked here or from the synced
 - `physical_core(local_core)` — the distro's stable physical-core id, used to
   match the two endpoints of a dual (identity by default);
 - `ipc_pools(local_core)` — every pool (dual) this core can reach, with the
-  peer, both base views, the shared budget and the cache policy. Both
-  directions of a dual allocate inside the one pool (M6.9-T6).
+  peer, both base views and the shared budget. Both directions of a dual
+  allocate inside the one pool (M6.9-T6).
 
 **Hardware codegen** — the doorbell transport, the shared-memory configuration
 and the executing core id:
@@ -726,7 +727,7 @@ and the executing core id:
 | `custom_interrupt_path(core)` | the interrupt type the router pends through (mirrors the software pass's backend) |
 | `rt_path()` / `ipc_types_path()` | the generated code's runtime `Fifo` path and injected `ipc_types` module path |
 | `current_global_core_id()` | the `cross_spawn` core guard expression (required) |
-| `configure_shared_memory(local_core)` | the per-core pool mapping (Normal, Non-cacheable, Shareable), inlined at `BeforeInit` |
+| `configure_shared_memory(local_core)` | the per-core pool mapping, making the core's view effectively non-cacheable and shared (mechanism-agnostic), inlined at `BeforeInit` |
 | `ipc_base_override(view_core, source, target)` | optional runtime pool-base expression for heap-backed host/mock backends; real fixed-address distributions keep the literal `system.json` address (default `None`) |
 
 Device/Strongly-ordered memory is forbidden for a pool (`ldrex`/`strex` are
@@ -848,6 +849,13 @@ its own acceptance criteria. Milestones M0–M6.5 are complete (task lists remov
 see git history). What remains:
 
 ### M6.9 — Distro-owned IPC pools and link-time verification
+
+> **Historical (M6.9; see `docs/architecture.md` "Cache policy and supported
+> platforms" for the current contract).** This milestone and its task log below
+> describe the per-pool `CachePolicy` and the "Normal, Non-cacheable, Shareable"
+> mapping recipe as originally locked. v1 removed the `CachePolicy` enum and the
+> manifest `policy` field and restated the requirement as a portable
+> "effectively non-cacheable and shared" contract.
 
 The project stops knowing anything about IPC memory addresses. The distribution
 becomes the single owner: it exposes a **capability binding** (which core pairs
@@ -1086,7 +1094,7 @@ distro may use them internally, but no new framework mechanism).
 |---|---|
 | `ipc_types` generation location | `target/rticx-xbin/ipc_types.rs` next to `system.json`; regenerated by `sync`, never checked in |
 | Doorbell/IRQ availability per distro | One doorbell IRQ per producer pair plus one dispatcher IRQ per line, supplied by the cross-line front of the user's `dispatchers` list; the router coalesces all lines of a pair onto that one IRQ |
-| Cacheable-region fallback correctness | v1 requires a Normal, Non-cacheable, Shareable pool; there are no cache hooks and a cacheable mapping is unsupported (the transport body would own any maintenance, D2) |
+| Cacheable-region fallback correctness | v1 requires an effectively non-cacheable and shared pool; there are no cache hooks and a cacheable mapping without transport-owned maintenance is unsupported (D2) |
 | Staleness under plain `cargo build` | Only the changed app detects its own staleness; `cargo xbin build` is the safe path. The freshness checks are now an **interface fingerprint** (`check_interface_hash`) plus a live-IDL layout check (`check_idl_hash`), so a body/comment/local-task edit does not trip them while any cross-binary or IDL change still does (Phase 4) |
 | The interface fingerprint misses a still-relevant change | The targeted checks remain the safety net (`check_application` for topology, `resolve_receiver` per field, the owned-view-task check, the dispatcher-count check); the fingerprint only adds an early, precise `cargo xbin sync` message |
 | A cargo-cached build does not re-run the macro after a pure IDL edit | The pass emits `include_str!(ipc-types.toml)` when the file exists, so rustc's dep-info re-expands the macro and `check_idl_hash` fires (Phase 3) |
@@ -1128,10 +1136,10 @@ distro may use them internally, but no new framework mechanism).
 - **Pool budget** — the maximum number of bytes a distro reserves in a pool for
   IPC; the FIFOs of both directions of the dual must fit it together.
 - **Pool cache policy** — the memory attributes a distro maps a pool with. v1
-  requires Normal, **Non-cacheable, Shareable**; Device/Strongly-ordered is
-  forbidden because the FIFO's `ldrex`/`strex` atomics are invalid there. A
-  cacheable mapping is unsupported: there are no cache hooks, so the generated
-  transport body would own any maintenance.
+  requires the pool to be **effectively non-cacheable and shared** on every core
+  that touches it, by whatever mechanism the platform provides. A cacheable
+  mapping without transport-owned maintenance is unsupported: there are no cache
+  hooks, so the generated transport body would own any maintenance.
 - **FIFO** — per-task atomic SPSC ring inside a pool (formerly a region), one
   element per spawn input.
 - **Doorbell** — hardware signal (mailbox/IPI/HSEM) that wakes a target's

@@ -2,7 +2,8 @@
 //!
 //! Global core 0. The rticx-stm32h7 `#[app]` macro runs the core pass, the
 //! cross-binary pass and the software-tasks pass; the distribution's runtime
-//! backend maps the shared D2 SRAM3 region Non-cacheable through the MPU, and
+//! backend makes the shared D2 SRAM3 region effectively non-cacheable and
+//! shared through the MPU, and
 //! its `post_init` hook (distribution-owned boot sequencing) clears the shared
 //! control area, releases the Cortex-M4 by setting `RCC_GCR.BOOT_C2` and then
 //! signals this core up. The register access goes through the `stm32h7` PAC;

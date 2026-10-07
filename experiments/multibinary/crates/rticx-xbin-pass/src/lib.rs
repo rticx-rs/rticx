@@ -104,8 +104,8 @@ use quote::ToTokens;
 use rticx_core::parse_utils::RticAttr;
 use rticx_core::{InfoBus, MainInjectionPoint};
 use rticx_xbin_proto::{
-    AppManifest, CoreCapability, Hash64, IpcTypes, MANIFEST_SCHEMA_VERSION, PoolCachePolicy,
-    PoolDecl, SystemView, TargetRef, parse_idl_file,
+    AppManifest, CoreCapability, Hash64, IpcTypes, MANIFEST_SCHEMA_VERSION, PoolDecl, SystemView,
+    TargetRef, parse_idl_file,
 };
 use syn::ItemMod;
 
@@ -128,7 +128,7 @@ pub use crate::codegen::XbinPassBackend;
 /// The distribution capability binding of the code-generation contract
 /// (M6.9-T1): the physical-core and IPC-pool vocabulary a distribution uses to
 /// tell the pass which cores it can reach and through which shared pool.
-pub use crate::binding::{CachePolicy, IpcPool, PhysicalCore, PoolId};
+pub use crate::binding::{IpcPool, PhysicalCore, PoolId};
 
 /// Topology resolution from the nearest `rticx.toml` (M7-T2): the
 /// distribution macros and the pass read the application's core mapping and
@@ -794,12 +794,6 @@ fn pool_decl(pool: IpcPool) -> PoolDecl {
         base_local: pool.base_local,
         base_peer: pool.base_peer,
         budget: pool.budget,
-        policy: match pool.policy {
-            CachePolicy::NormalNonCacheableShareable => {
-                PoolCachePolicy::NormalNonCacheableShareable
-            }
-            CachePolicy::NormalCacheableShareable => PoolCachePolicy::NormalCacheableShareable,
-        },
     }
 }
 

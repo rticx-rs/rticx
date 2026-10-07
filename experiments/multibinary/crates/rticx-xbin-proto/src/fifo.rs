@@ -6,18 +6,19 @@
 //! contract that the runtime type of `rticx-xbin-rt` mirrors exactly:
 //!
 //! ```text
-//! offset 0                              head index, one 32-byte slot
-//! offset 32                             tail index, one 32-byte slot
-//! offset 64                             first element
-//! offset 64 + elem_size * depth         end of the FIFO
+//! offset  0                             head index (`AtomicU32`, 4 bytes)
+//! offset  4                             tail index (`AtomicU32`, 4 bytes)
+//! offset  8                             first element
+//! offset  8 + elem_size * depth         end of the FIFO
 //! ```
 //!
-//! The two ring indices sit in separate 32-byte cache-line slots so the
-//! producer and consumer indexes do not share a cache line. The element stride
-//! is the canonical size of the message type (already a multiple of its
-//! alignment, which is capped at 4). [`FIFO_ALIGN`] is the alignment the
-//! allocator guarantees for every FIFO start; it keeps the header front
-//! naturally aligned on 64-bit hosts as well.
+//! The two ring indices are fixed-width 32-bit counters, so the header is a
+//! compact 8 bytes on every target and on the host where the image is
+//! computed. The element stride is the canonical size of the message type
+//! (already a multiple of its alignment, which is capped at 4). [`FIFO_ALIGN`]
+//! is the alignment the allocator guarantees for every FIFO start; it keeps
+//! the 8-byte header and the front element naturally aligned on 64-bit hosts
+//! as well.
 //!
 //! The ring depth is `capacity + 1`: a ring buffer leaves one slot empty to
 //! distinguish a full FIFO from an empty one, and the dispatcher drains the
@@ -31,13 +32,13 @@
 /// Alignment of every FIFO inside its region, in bytes.
 pub const FIFO_ALIGN: u64 = 8;
 
-/// Stride of one ring index, in bytes (a 32-byte cache-line slot).
-pub const FIFO_INDEX_STRIDE: u64 = 32;
+/// Stride of one ring index, in bytes (a 4-byte `AtomicU32`).
+pub const FIFO_INDEX_STRIDE: u64 = 4;
 
 /// Size of the FIFO header before the first element, in bytes.
 ///
-/// Two [`FIFO_INDEX_STRIDE`]-byte slots: the head index starts at offset 0,
-/// the tail index at offset 32.
+/// Two [`FIFO_INDEX_STRIDE`]-byte indices: the head index starts at offset 0,
+/// the tail index at offset 4.
 pub const FIFO_HEADER: u64 = 2 * FIFO_INDEX_STRIDE;
 
 /// Returns the ring depth of a FIFO with `capacity` pending elements.

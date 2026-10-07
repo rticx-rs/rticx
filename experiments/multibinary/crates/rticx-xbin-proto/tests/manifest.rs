@@ -2,15 +2,15 @@
 //!
 //! Schema 3 dropped the topology echo (`cores`/`core_ids`/`external_cores`):
 //! `rticx.toml` is the single topology source. Schema 4 renamed the freshness
-//! hash to `interface_hash`. The schema keeps the distro
+//! hash to `interface_hash`; schema 5 dropped the redundant per-pool cache
+//! policy. The schema keeps the distro
 //! capability binding ([`CoreCapability`]): one entry per local core with its
 //! physical core id and the IPC pools that physical core can reach. These
 //! tests pin the JSON shape, the deterministic serialization (empty
 //! capabilities are omitted) and the schema-version gate.
 
 use rticx_xbin_proto::{
-    AppManifest, CoreCapability, Hash64, MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl,
-    TargetRef,
+    AppManifest, CoreCapability, Hash64, MANIFEST_SCHEMA_VERSION, PoolDecl, TargetRef,
 };
 
 fn manifest() -> AppManifest {
@@ -31,7 +31,6 @@ fn manifest() -> AppManifest {
                     base_local: 0x3004_0000,
                     base_peer: 0x1004_0000,
                     budget: 4096,
-                    policy: PoolCachePolicy::NormalNonCacheableShareable,
                 }],
             },
             CoreCapability {
@@ -48,8 +47,8 @@ fn capabilities_round_trip() {
     let manifest = manifest();
     let json = manifest.to_json();
 
-    assert_eq!(MANIFEST_SCHEMA_VERSION, 4);
-    assert!(json.contains("\"schema_version\": 4"), "{json}");
+    assert_eq!(MANIFEST_SCHEMA_VERSION, 5);
+    assert!(json.contains("\"schema_version\": 5"), "{json}");
     assert!(
         !json.contains("\"core_ids\"")
             && !json.contains("\"external_cores\"")
@@ -60,19 +59,19 @@ fn capabilities_round_trip() {
     assert!(json.contains("\"peer\": 9"), "{json}");
     assert!(json.contains("\"base_local\": 805568512"), "{json}");
     assert!(
-        json.contains("\"policy\": \"normal_non_cacheable_shareable\""),
-        "{json}"
+        !json.contains("\"policy\""),
+        "schema 5 dropped the redundant per-pool policy: {json}"
     );
 
     assert_eq!(AppManifest::from_json(&json).expect("round trip"), manifest);
 }
 
 #[test]
-fn schema_four_names_the_freshness_hash_interface_hash() {
-    assert_eq!(MANIFEST_SCHEMA_VERSION, 4);
+fn schema_five_dropped_the_pool_cache_policy() {
+    assert_eq!(MANIFEST_SCHEMA_VERSION, 5);
 
     let json = manifest().to_json();
-    assert!(json.contains("\"schema_version\": 4"), "{json}");
+    assert!(json.contains("\"schema_version\": 5"), "{json}");
     assert!(json.contains("\"interface_hash\": \"0x"), "{json}");
     assert!(
         !json.contains("source_hash"),
@@ -100,6 +99,6 @@ fn schema_version_one_is_rejected() {
     let mut manifest = manifest();
     manifest.schema_version = 1;
 
-    let error = AppManifest::from_json(&manifest.to_json()).expect_err("v1 is not schema 4");
+    let error = AppManifest::from_json(&manifest.to_json()).expect_err("v1 is not schema 5");
     assert!(error.to_string().contains("schema version 1"), "{error}");
 }

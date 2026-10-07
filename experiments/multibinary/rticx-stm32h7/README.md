@@ -52,8 +52,8 @@ binding as the `h7-sram3` dual:
 | `+0x1000` | the IPC pool: both directions of the dual, 4096-byte budget |
 
 The Cortex-M7 sees the block at `0x3004_0000` and the Cortex-M4 through the
-hardware alias `0x1004_0000`. The MPU maps the whole block Normal,
-Non-cacheable, Shareable (region 15 on the M7, region 7 on the M4); Renode does
+hardware alias `0x1004_0000`. The MPU makes the whole block effectively
+non-cacheable and shared (region 15 on the M7, region 7 on the M4); Renode does
 not model the M7 D-cache, so a green simulation run validates boot, transport
 and interrupt routing, never the cache policy.
 

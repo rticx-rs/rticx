@@ -331,7 +331,7 @@ pub enum MergeError {
     #[error(
         "IPC pool `{id}` between cores {core_a} and {core_b} is not reported consistently by \
          both endpoints; each must report the same pool id with the opposite physical core, \
-         the same budget and policy, and the two base views swapped"
+         the same budget, and the two base views swapped"
     )]
     IpcPoolMismatch {
         /// The pool id the two endpoints disagree on.

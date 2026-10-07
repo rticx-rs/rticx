@@ -108,7 +108,7 @@ fn sample_view() -> SystemView {
         base_from_a: 0x3004_0000,
         base_from_b: 0x3004_0000,
         budget: 4096,
-        used: 100,
+        used: 44,
     }];
     view.doorbells = vec![DoorbellEntry {
         source: 0,

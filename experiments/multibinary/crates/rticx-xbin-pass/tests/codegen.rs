@@ -134,7 +134,7 @@ const SYSTEM_JSON: &str = r#"{
       "base_from_a": "0x30040000",
       "base_from_b": "0x30040000",
       "budget": 4096,
-      "used": 100
+      "used": 44
     }
   ],
   "doorbells": [
@@ -474,7 +474,7 @@ fn sender_codegen_snapshot() {
         "the pool budget is not pinned: {generated}"
     );
     assert!(
-        generated.contains("__RTICX_XBIN_FIFO_OFFSET + 100usize <= __RTICX_XBIN_POOL_BUDGET"),
+        generated.contains("__RTICX_XBIN_FIFO_OFFSET + 44usize <= __RTICX_XBIN_POOL_BUDGET"),
         "the FIFO is not asserted to fit its pool: {generated}"
     );
 

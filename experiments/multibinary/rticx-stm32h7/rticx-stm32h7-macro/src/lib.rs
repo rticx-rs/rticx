@@ -22,7 +22,7 @@ use quote::{format_ident, quote};
 use rticx_core::{AppArgs, CorePassBackend, InfoBus, RticMacroBuilder, SubAnalysis, SubApp};
 use rticx_stm32h7_bindings as bindings;
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
-use rticx_xbin_pass::{CachePolicy, IpcPool, PhysicalCore, PoolId, XbinPass, XbinPassBackend};
+use rticx_xbin_pass::{IpcPool, PhysicalCore, PoolId, XbinPass, XbinPassBackend};
 use syn::{ItemFn, Path, parse_quote};
 
 extern crate proc_macro;
@@ -342,7 +342,6 @@ impl XbinPassBackend for Stm32H7XbinBackend {
             base_local: geometry.base_local,
             base_peer: geometry.base_peer,
             budget: geometry.budget,
-            policy: CachePolicy::NormalNonCacheableShareable,
         }]
     }
 }
@@ -393,7 +392,6 @@ mod tests {
         assert_eq!(pool.base_local, geometry.base_local);
         assert_eq!(pool.base_peer, geometry.base_peer);
         assert_eq!(pool.budget, bindings::POOL_BUDGET);
-        assert_eq!(pool.policy, CachePolicy::NormalNonCacheableShareable);
     }
 
     /// The two endpoints' bindings are mirror images: a project building the

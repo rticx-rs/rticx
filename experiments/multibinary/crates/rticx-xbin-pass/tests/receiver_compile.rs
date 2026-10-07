@@ -83,7 +83,7 @@ const SYSTEM_JSON: &str = r#"{
       "base_from_a": "0x30040000",
       "base_from_b": "0x30040000",
       "budget": 4096,
-      "used": 100
+      "used": 44
     }
   ],
   "doorbells": [

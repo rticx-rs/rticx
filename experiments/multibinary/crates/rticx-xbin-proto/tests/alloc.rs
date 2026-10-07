@@ -8,9 +8,9 @@
 
 use rticx_xbin_proto::{
     AppManifest, CoreCapability, DoorbellEntry, FifoEntry, Hash64, IpcTypes,
-    MANIFEST_SCHEMA_VERSION, PoolCachePolicy, PoolDecl, ProjectConfig, ReceiverDecl,
-    SYSTEM_SCHEMA_VERSION, SystemView, TargetRef, layout_hash, merge_project, parse_idl_str,
-    parse_project_str, system_view,
+    MANIFEST_SCHEMA_VERSION, PoolDecl, ProjectConfig, ReceiverDecl, SYSTEM_SCHEMA_VERSION,
+    SystemView, TargetRef, layout_hash, merge_project, parse_idl_str, parse_project_str,
+    system_view,
 };
 
 const IDL: &str = r#"
@@ -118,7 +118,6 @@ fn pool(id: &str, peer: u32, base: u32) -> PoolDecl {
         base_local: base,
         base_peer: base,
         budget: BUDGET,
-        policy: PoolCachePolicy::NormalNonCacheableShareable,
     }
 }
 
@@ -247,7 +246,7 @@ fn emits_the_reference_system_view() {
     assert_eq!(view.pools[0].base_from_a, BASE_01);
     assert_eq!(view.pools[0].base_from_b, BASE_01);
     assert_eq!(view.pools[0].budget, BUDGET);
-    assert_eq!(view.pools[0].used, 100, "the single FIFO uses the budget");
+    assert_eq!(view.pools[0].used, 44, "the single FIFO uses the budget");
 
     assert_eq!(
         view.doorbells,
@@ -311,15 +310,15 @@ fn allocates_offsets_in_name_order_within_a_direction() {
             .collect::<Vec<_>>(),
         [("Alpha", 1), ("Beta", 2), ("Zeta", 3)]
     );
-    // Each FIFO is 64 + 3 * 12 = 100 bytes; the next start is aligned up.
+    // Each FIFO is 8 + 3 * 12 = 44 bytes; the next start is aligned up.
     assert_eq!(task(&view, "Alpha").fifo.offset, 0);
-    assert_eq!(task(&view, "Beta").fifo.offset, 104);
-    assert_eq!(task(&view, "Zeta").fifo.offset, 208);
+    assert_eq!(task(&view, "Beta").fifo.offset, 48);
+    assert_eq!(task(&view, "Zeta").fifo.offset, 96);
 }
 
 #[test]
 fn offsets_are_shared_within_a_pool() {
-    // m7 -> m4 (`EncryptTask`, 100 bytes) and m4 -> m7 (`BackTask`, 72 bytes)
+    // m7 -> m4 (`EncryptTask`, 44 bytes) and m4 -> m7 (`BackTask`, 12 bytes)
     // are the two directions of the one `p01` pool: they share its budget and
     // are allocated in name order.
     let mut m7 = m7_manifest();
@@ -341,7 +340,7 @@ fn offsets_are_shared_within_a_pool() {
             encrypt.fifo.target,
             encrypt.fifo.offset
         ),
-        (0, 1, 72),
+        (0, 1, 16),
         "the reverse direction continues after the first in the shared pool"
     );
 }

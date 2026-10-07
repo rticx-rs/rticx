@@ -136,7 +136,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(task.elem_size(), 12);
     assert_eq!(task.fifo_offset(), 0);
     assert_eq!(task.fifo_depth(), 3);
-    assert_eq!(task.fifo_bytes(), 100);
+    assert_eq!(task.fifo_bytes(), 44);
     assert_eq!(
         merged.pools().len(),
         1,
@@ -149,7 +149,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(pool.base_from_b, 0x3000_0000);
     assert_eq!(pool.budget, 4096);
     assert_eq!(
-        pool.used, 100,
+        pool.used, 44,
         "the single `0->1` FIFO uses the shared pool budget"
     );
 
@@ -202,7 +202,7 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
             base_from_a: 0x3000_0000,
             base_from_b: 0x3000_0000,
             budget: 4096,
-            used: 100,
+            used: 44,
         }],
         "the emitted view carries the matched mock pool (M6.9-T9)"
     );

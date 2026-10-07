@@ -527,7 +527,7 @@ mod tests {
                     base_from_a: 0x3004_0000,
                     base_from_b: 0x3004_0000,
                     budget: 128,
-                    used: 100,
+                    used: 44,
                 },
                 PoolEntry {
                     id: "p12".to_string(),
@@ -536,7 +536,7 @@ mod tests {
                     base_from_a: 0x2004_1000,
                     base_from_b: 0x3004_1000,
                     budget: 128,
-                    used: 100,
+                    used: 32,
                 },
             ],
             doorbells: vec![
@@ -640,10 +640,10 @@ mod tests {
         assert_eq!(p01.buffers[0].task_name, "EncryptTask");
         assert_eq!(p01.buffers[0].input_type, "EncryptReq");
         assert_eq!((p01.buffers[0].source, p01.buffers[0].target), (0, 1));
-        assert_eq!(p01.buffers[0].total_bytes, 64 + 3 * 12);
+        assert_eq!(p01.buffers[0].total_bytes, 8 + 3 * 12);
         assert_eq!(p01.buffers[0].depth, 3);
         assert_eq!(p01.buffers[0].capacity, 2);
-        assert_eq!(p01.extent, 100, "the bar scales to the occupied extent");
+        assert_eq!(p01.extent, 44, "the bar scales to the occupied extent");
 
         // The `p12` panel aliases the two cores' views and carries the
         // `2 -> 1` FIFO.
@@ -708,7 +708,7 @@ mod tests {
             base_from_a: 0x3004_0000,
             base_from_b: 0x1004_0000,
             budget: 128,
-            used: 100,
+            used: 76,
         }];
         view.doorbells = vec![
             DoorbellEntry {
@@ -781,7 +781,7 @@ mod tests {
         assert_eq!((panel.core_a, panel.core_b), (0, 1));
         assert_eq!(panel.buffers.len(), 1);
         assert_eq!(panel.buffers[0].task_name, "EncryptTask");
-        assert_eq!(panel.extent, 100);
+        assert_eq!(panel.extent, 44);
     }
 
     #[test]

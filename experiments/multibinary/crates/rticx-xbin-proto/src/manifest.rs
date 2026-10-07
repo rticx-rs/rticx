@@ -42,7 +42,10 @@ use crate::project::TargetKind;
 /// and narrowed it from the whole source to a fingerprint of the cross-binary
 /// interface (resolved topology, the stolen cross-dispatcher front and the
 /// receiver declarations).
-pub const MANIFEST_SCHEMA_VERSION: u32 = 4;
+///
+/// Schema 5 removed the redundant per-pool `policy`: v1 has a single supported
+/// cache policy, documented in `rticx-xbin-pass::XbinPassBackend`.
+pub const MANIFEST_SCHEMA_VERSION: u32 = 5;
 
 /// File-name suffix of an application manifest.
 pub const MANIFEST_FILE_SUFFIX: &str = ".xbin.json";
@@ -193,21 +196,6 @@ pub struct PoolDecl {
     /// Bytes the distribution reserves in the pool for IPC, shared by both
     /// directions of the dual.
     pub budget: u32,
-    /// Cache/MPU policy of the pool.
-    pub policy: PoolCachePolicy,
-}
-
-/// Cache/MPU policy of a distro IPC pool, as recorded in the manifest
-/// (M6.9-T2). Mirrors the pass-side capability binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PoolCachePolicy {
-    /// Normal, Non-cacheable, Shareable — the supported v1 policy.
-    NormalNonCacheableShareable,
-    /// Normal, cacheable, Shareable: requires explicit cache maintenance
-    /// around every shared access (the generated transport owns any
-    /// maintenance).
-    NormalCacheableShareable,
 }
 
 /// Returns the last `::`-separated segment of a type path (for example

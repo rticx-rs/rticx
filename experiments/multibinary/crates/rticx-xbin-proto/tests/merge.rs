@@ -12,8 +12,8 @@
 
 use rticx_xbin_proto::{
     AppManifest, CoreCapability, FIFO_HEADER, Hash64, IpcTypes, MANIFEST_SCHEMA_VERSION,
-    MergeError, PoolCachePolicy, PoolDecl, ProjectConfig, ReceiverDecl, TargetRef, TypeKind,
-    merge_project, parse_idl_str, parse_project_str,
+    MergeError, PoolDecl, ProjectConfig, ReceiverDecl, TargetRef, TypeKind, merge_project,
+    parse_idl_str, parse_project_str,
 };
 
 const IDL: &str = r#"
@@ -156,7 +156,6 @@ fn pool(id: &str, peer: u32, base: u32, budget: u32) -> PoolDecl {
         base_local: base,
         base_peer: base,
         budget,
-        policy: PoolCachePolicy::NormalNonCacheableShareable,
     }
 }
 
@@ -299,7 +298,7 @@ fn merges_the_producer_receiver_fixture() {
     assert_eq!(task.fifo_offset(), 0, "the first FIFO starts at offset 0");
     assert_eq!(task.fifo_depth(), 3, "depth = capacity + 1");
     assert_eq!(task.fifo_bytes(), FIFO_HEADER + 3 * 12);
-    assert_eq!(task.fifo_bytes(), 100);
+    assert_eq!(task.fifo_bytes(), 44);
     assert_eq!(
         task.fifo(),
         rticx_xbin_proto::FifoEntry {
@@ -322,7 +321,7 @@ fn merges_the_producer_receiver_fixture() {
     assert_eq!(pool.base_from_a, BASE_01);
     assert_eq!(pool.base_from_b, BASE_01);
     assert_eq!(pool.budget, BUDGET);
-    assert_eq!(pool.used, 100, "one FIFO uses the shared pool budget");
+    assert_eq!(pool.used, 44, "one FIFO uses the shared pool budget");
 }
 
 #[test]
@@ -623,8 +622,8 @@ fn rejects_a_one_sided_pool() {
     assert_eq!(
         error.to_string(),
         "IPC pool `p01` between cores 0 and 1 is not reported consistently by both endpoints; \
-         each must report the same pool id with the opposite physical core, the same budget and \
-         policy, and the two base views swapped"
+         each must report the same pool id with the opposite physical core, the same budget, \
+         and the two base views swapped"
     );
     assert!(matches!(
         &error,
@@ -768,33 +767,34 @@ fn ignores_pools_to_cores_outside_the_project() {
 
 #[test]
 fn shares_one_budget_between_both_directions() {
-    // `BackTask` (1 -> 0, OtherReq, capacity 1) is 72 bytes; `EncryptTask`
-    // (0 -> 1, EncryptReq, capacity 2) is 100. Both use the one `p01` budget,
+    // `BackTask` (1 -> 0, OtherReq, capacity 1) is 12 bytes; `EncryptTask`
+    // (0 -> 1, EncryptReq, capacity 2) is 44. Both use the one `p01` budget,
     // allocated in name order.
     let mut m7 = m7_with_budget(200);
     m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
 
     let merged = merge(TWO_APPS, &[m7, m4_with_budget(200)]).expect("both fit the shared budget");
     assert_eq!(merged.pools().len(), 1);
-    assert_eq!(merged.pools()[0].used, 172);
+    assert_eq!(merged.pools()[0].used, 60);
     assert_eq!(merged.task("BackTask").expect("task").fifo_offset(), 0);
     assert_eq!(
         merged.task("EncryptTask").expect("task").fifo_offset(),
-        72,
+        16,
         "the second direction continues after the first in the shared budget"
     );
 }
 
 #[test]
 fn rejects_pool_budget_overflow() {
-    // Each direction fits in 100 bytes alone, but the shared budget is 150.
-    let mut m7 = m7_with_budget(150);
+    // Each direction fits alone, but the shared budget is 50, below the 60 the
+    // two FIFOs need.
+    let mut m7 = m7_with_budget(50);
     m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
 
-    let error = error(TWO_APPS, &[m7, m4_with_budget(150)]);
+    let error = error(TWO_APPS, &[m7, m4_with_budget(50)]);
     assert_eq!(
         error.to_string(),
-        "the FIFOs of the `0<->1` pool `p01` need 172 bytes, but the distribution reserves 150"
+        "the FIFOs of the `0<->1` pool `p01` need 60 bytes, but the distribution reserves 50"
     );
     assert!(matches!(
         &error,
@@ -802,57 +802,64 @@ fn rejects_pool_budget_overflow() {
             pool,
             core_a: 0,
             core_b: 1,
-            needed: 172,
-            budget: 150
+            needed: 60,
+            budget: 50
         } if pool == "p01"
     ));
 }
 
 #[test]
 fn allows_an_exact_fit() {
-    // `EncryptReq` (12 bytes, capacity 2) needs 64 + 3 * 12 = 100 bytes.
-    let merged = merge(TWO_APPS, &[m7_with_budget(100), m4_with_budget(100)]).expect("exact fit");
-    assert_eq!(merged.pools()[0].used, 100);
-    assert_eq!(merged.tasks()[0].fifo_bytes(), 100);
+    // `BackTask` (OtherReq, capacity 1) needs 8 + 2 * 2 = 12 bytes and
+    // `EncryptTask` (EncryptReq, capacity 2) needs 8 + 3 * 12 = 44; the aligned
+    // total (12 rounded up to the next 8-byte boundary, then 44) exactly fills
+    // the 60-byte `p01` budget.
+    let mut m7 = m7_with_budget(60);
+    m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
+
+    let merged = merge(TWO_APPS, &[m7, m4_with_budget(60)]).expect("exact fit");
+    assert_eq!(merged.pools()[0].used, 60);
+    assert_eq!(merged.task("BackTask").expect("task").fifo_bytes(), 12);
+    assert_eq!(merged.task("EncryptTask").expect("task").fifo_bytes(), 44);
 }
 
 #[test]
 fn pool_fit_accounts_for_fifo_alignment() {
-    let mut m4 = m4_with_budget(203);
+    let mut m4 = m4_with_budget(91);
     m4.receivers = vec![
         receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
         receiver("Beta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
     ];
 
-    // 100 bytes each; the second FIFO starts at the next 8-byte boundary (104).
-    let error = error(TWO_APPS, &[m7_with_budget(203), m4.clone()]);
+    // 44 bytes each; the second FIFO starts at the next 8-byte boundary (48).
+    let error = error(TWO_APPS, &[m7_with_budget(91), m4.clone()]);
     assert_eq!(
         error.to_string(),
-        "the FIFOs of the `0<->1` pool `p01` need 204 bytes, but the distribution reserves 203"
+        "the FIFOs of the `0<->1` pool `p01` need 92 bytes, but the distribution reserves 91"
     );
     assert!(
         matches!(
             &error,
             MergeError::PoolBudgetExceeded {
-                needed: 204,
-                budget: 203,
+                needed: 92,
+                budget: 91,
                 ..
             }
         ),
         "{error}"
     );
 
-    let mut m4 = m4_with_budget(204);
+    let mut m4 = m4_with_budget(92);
     m4.receivers = vec![
         receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
         receiver("Beta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
     ];
-    let merged = merge(TWO_APPS, &[m7_with_budget(204), m4]).expect("204 bytes fit exactly");
+    let merged = merge(TWO_APPS, &[m7_with_budget(92), m4]).expect("92 bytes fit exactly");
     assert_eq!(merged.tasks().len(), 2);
     assert_eq!(merged.task("Alpha").expect("task").fifo_offset(), 0);
     assert_eq!(
         merged.task("Beta").expect("task").fifo_offset(),
-        104,
+        48,
         "the second FIFO is aligned to 8 bytes"
     );
 }

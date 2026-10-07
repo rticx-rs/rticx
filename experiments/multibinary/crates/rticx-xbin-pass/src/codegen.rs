@@ -65,8 +65,8 @@
 //!   functions through [`rticx_core::RticPass::main_injection`]:
 //!   - [`XbinPassBackend::configure_shared_memory`] is inlined on every core at
 //!     the start of its entry (`MainInjectionPoint::BeforeInit`, before the
-//!     user `init`): MPU/MMU attributes are per-core, so each core maps its own
-//!     view of the IPC pools Normal, Non-cacheable, Shareable;
+//!     user `init`): memory attributes are per-core, so each core makes its own
+//!     view of the IPC pools effectively non-cacheable and shared;
 //!   - `__rticx_xbin_init_fifos_core<N>` is generated for every local core
 //!     that produces cross-binary tasks and runs at `BeforePostInit`: it
 //!     zeroes the ring indices of the core's own FIFOs, so a topology whose
@@ -153,16 +153,16 @@ pub trait XbinPassBackend {
     /// Statement(s) configuring local core `local_core`'s view of every IPC
     /// pool before any shared access (D1).
     ///
-    /// MPU/MMU attributes are per-core, so each core maps its own view of the
-    /// pools Normal, Non-cacheable, Shareable. The pass inlines the returned
+    /// Memory attributes are per-core, so each core makes its own view of the
+    /// pools effectively non-cacheable and shared. The pass inlines the returned
     /// tokens at [`rticx_core::MainInjectionPoint::BeforeInit`], before the
     /// user `init`, so the pool is mapped before the first shared write (the
     /// generated `__rticx_xbin_init_fifos_core{N}` runs later, at
     /// `BeforePostInit`).
     ///
-    /// **Device and Strongly-ordered memory is forbidden:** exclusive accesses
-    /// (`ldrex`/`strex` on Cortex-M) are not valid there, so the pool's
-    /// atomics would fault or lose atomicity.
+    /// **The mapping must support the FIFO's atomics:** a region where
+    /// exclusive/atomic accesses are invalid (for example Device/Strongly-
+    /// ordered memory on Cortex-M) would fault or lose atomicity.
     ///
     /// The default is `None` (nothing), which is correct on hosts and targets
     /// whose data cache does not cover the pool.
@@ -203,9 +203,10 @@ pub trait XbinPassBackend {
     /// so `cross_spawn` maps it to `Err(None)` (D2).
     ///
     /// The transport body owns any cache maintenance a cacheable pool mapping
-    /// needs: v1 requires a Normal, Non-cacheable, Shareable pool, so a
-    /// cacheable mapping is unsupported until a distribution appears that
-    /// maintains the caches explicitly around every shared access (D2).
+    /// needs: v1 requires an effectively non-cacheable and shared pool, so a
+    /// cacheable mapping without transport-owned maintenance is unsupported
+    /// until a distribution appears that maintains the caches explicitly
+    /// around every shared access (D2).
     fn ring_doorbell_fn(&self, source: u32, target: u32, template: syn::ItemFn) -> syn::ItemFn;
 
     /// Identifier of the interrupt handler bound to the `(source -> target)`
@@ -1966,7 +1967,7 @@ mod tests {
             base_from_a: 0x3004_0000,
             base_from_b: 0x1004_0000,
             budget: 4096,
-            used: 100,
+            used: 44,
         };
         assert_eq!(pool_endpoint_base(&pool, 0), Some(0x3004_0000));
         assert_eq!(pool_endpoint_base(&pool, 1), Some(0x1004_0000));

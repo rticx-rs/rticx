@@ -8,10 +8,10 @@
 //!   (`rticx-stm32h7-bindings`). The M7 sees it at `0x3004_0000` and the M4
 //!   through the hardware alias `0x1004_0000`; the FIFO area is at `+ 0x1000`,
 //!   the boot-flag word at `+ 0x0000` and the doorbell words at `+ 0x0200`.
-//!   MPU region 15 (M7) / 7 (M4) maps the whole 32 KiB block Normal,
-//!   Non-cacheable, Shareable, so the runtime's atomics are correct on silicon;
-//!   Renode does not model the D-cache, so a green run validates the transport,
-//!   not the cache policy. All HSEM/RCC register access goes through the
+//!   MPU region 15 (M7) / 7 (M4) makes the whole 32 KiB block **effectively
+//!   non-cacheable and shared**, so the runtime's atomics are correct on
+//!   silicon; Renode does not model the D-cache, so a green run validates the
+//!   transport, not the cache policy. All HSEM/RCC register access goes through
 //!   `stm32h7` PAC (selected by the `cm7`/`cm4` feature), not raw addresses.
 //! - **Boot sequencing (distribution-owned).** The framework does not define a
 //!   ready/epoch protocol. The distribution's `post_init` hook runs
@@ -255,10 +255,10 @@ fn hsem_enable_rx() {
     hsem_ack();
 }
 
-/// Maps the reserved SRAM3 block Normal, Non-cacheable, Shareable through the
-/// MPU.
+/// Makes the reserved SRAM3 block effectively non-cacheable and shared through
+/// the MPU.
 ///
-/// Exclusive accesses (`ldrex`/`strex`) are only valid on Normal memory, and
+/// Exclusive accesses (`ldrex`/`strex`) require atomic-capable memory, and
 /// the runtime's atomics provide ordering, not cache maintenance, so a
 /// cacheable mapping would need explicit clean/invalidate around every shared
 /// access. `PRIVDEFENA` keeps the default memory map for everything else
@@ -316,7 +316,7 @@ fn release_secondary_core() {}
 /// receive interrupt (D1).
 ///
 /// The generated entry calls this before the user `init`, so the D2 SRAM3
-/// pool is mapped Normal, Non-cacheable, Shareable and the HSEM receive bank
+/// pool is mapped effectively non-cacheable and shared and the HSEM receive bank
 /// is enabled before any shared access. The macro injects the call through
 /// `XbinPassBackend::configure_shared_memory`.
 pub fn configure_shared_memory() {

@@ -120,7 +120,7 @@ const SYSTEM_JSON: &str = r#"{
       "base_from_a": "0x30040000",
       "base_from_b": "0x30040000",
       "budget": 4096,
-      "used": 100
+      "used": 44
     }
   ],
   "doorbells": [
@@ -832,7 +832,7 @@ fn three_app_system() -> String {
             base_from_a: 0x3004_0000,
             base_from_b: 0x3004_0000,
             budget: 4096,
-            used: 100,
+            used: 44,
         },
         PoolEntry {
             id: "p12".to_string(),
@@ -841,7 +841,7 @@ fn three_app_system() -> String {
             base_from_a: 0x3004_1000,
             base_from_b: 0x3004_1000,
             budget: 4096,
-            used: 88,
+            used: 32,
         },
     ];
     view.doorbells = vec![

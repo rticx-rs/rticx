@@ -31,7 +31,7 @@ fn msg(seq: u32) -> Msg {
 /// `size_of::<Fifo<_, DEPTH>>()` must be on the host.
 fn host_fifo_size(elem_size: usize, depth: usize) -> usize {
     let raw = FIFO_HEADER + elem_size * depth;
-    raw.next_multiple_of(align_of::<usize>())
+    raw.next_multiple_of(align_of::<u32>())
 }
 
 #[test]
@@ -107,6 +107,12 @@ fn init_resets_the_ring() {
 #[test]
 fn layout_mirrors_the_canonical_image() {
     assert_eq!(FIFO_ALIGN, rticx_xbin_proto::FIFO_ALIGN as usize);
+
+    // The canonical image is two 4-byte `AtomicU32` indices: `head` at offset
+    // 0, `tail` at offset 4, so the stride is 4 and the header is 8 bytes.
+    assert_eq!(FIFO_INDEX_STRIDE, 4);
+    assert_eq!(FIFO_HEADER, 8);
+
     assert_eq!(
         FIFO_INDEX_STRIDE,
         rticx_xbin_proto::FIFO_INDEX_STRIDE as usize
@@ -120,7 +126,7 @@ fn layout_mirrors_the_canonical_image() {
 
     assert_eq!(size_of::<Fifo<Msg, 3>>(), host_fifo_size(elem_size, 3));
     assert_eq!(size_of::<Fifo<Word, 2>>(), host_fifo_size(4, 2));
-    assert_eq!(align_of::<Fifo<Msg, 3>>(), align_of::<usize>());
+    assert_eq!(align_of::<Fifo<Msg, 3>>(), align_of::<u32>());
 }
 
 #[test]

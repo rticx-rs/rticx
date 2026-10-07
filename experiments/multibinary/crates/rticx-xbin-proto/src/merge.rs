@@ -23,7 +23,7 @@
 //! - **pool graph and adjacency** (M6.9-T4): the distribution's capability
 //!   binding reports, per physical core, which IPC pools it can reach. The
 //!   driver matches the two endpoints of every dual (same pool id, opposite
-//!   physical cores, same budget and policy, swapped base views); a one-sided
+//!   physical cores, same budget, swapped base views); a one-sided
 //!   or inconsistent entry is [`MergeError::IpcPoolMismatch`]. A used
 //!   `(source -> target)` direction with no matched pool is
 //!   [`MergeError::NoIpcPath`];
@@ -575,7 +575,7 @@ fn ordered_core_pair(left: u32, right: u32) -> (u32, u32) {
 /// The distribution reports, per physical core, the IPC pools it can reach.
 /// Two cores `A` and `B` form a dual exactly when `A` reports a pool whose
 /// `peer` is `B`'s physical core **and** `B` reports the matching pool: the
-/// same id, the opposite physical core, the same budget and policy, and the
+/// same id, the opposite physical core, the same budget, and the
 /// two base views swapped. A one-sided or inconsistent pair is
 /// [`MergeError::IpcPoolMismatch`].
 ///
@@ -654,7 +654,6 @@ fn match_pools(
                     return Err(mismatch());
                 };
                 if reverse.budget != pool.budget
-                    || reverse.policy != pool.policy
                     || reverse.base_local != pool.base_peer
                     || reverse.base_peer != pool.base_local
                 {

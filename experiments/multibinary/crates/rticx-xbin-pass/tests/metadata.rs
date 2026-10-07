@@ -12,8 +12,7 @@ use quote::quote;
 use rticx_core::mock_backend::MockCoreBackend;
 use rticx_core::{RticMacroBuilder, RticPass};
 use rticx_xbin_pass::{
-    AppTopology, CachePolicy, IpcPool, META_OUT_ENV, PhysicalCore, PoolId, XbinPass,
-    XbinPassBackend,
+    AppTopology, IpcPool, META_OUT_ENV, PhysicalCore, PoolId, XbinPass, XbinPassBackend,
 };
 use rticx_xbin_proto::{AppManifest, MANIFEST_SCHEMA_VERSION};
 
@@ -167,54 +166,21 @@ impl XbinPassBackend for CapabilityBackend {
 
     fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool> {
         match local_core {
-            // Deliberately unsorted: the manifest sorts by `(peer, id)`.
-            0 => vec![
-                pool(
-                    "axi",
-                    10,
-                    0x2400_0000,
-                    0x2400_0000,
-                    8192,
-                    CachePolicy::NormalCacheableShareable,
-                ),
-                pool(
-                    "sram3",
-                    8,
-                    0x3004_0000,
-                    0x1004_0000,
-                    4096,
-                    CachePolicy::NormalNonCacheableShareable,
-                ),
-            ],
-            1 => vec![pool(
-                "sram1",
-                7,
-                0x3002_0000,
-                0x1002_0000,
-                1024,
-                CachePolicy::NormalNonCacheableShareable,
-            )],
+            0 => vec![pool("sram3", 8, 0x3004_0000, 0x1004_0000, 4096)],
+            1 => vec![pool("sram1", 7, 0x3002_0000, 0x1002_0000, 1024)],
             _ => Vec::new(),
         }
     }
 }
 
 /// Builds one capability pool for the tests.
-fn pool(
-    id: &str,
-    peer: u32,
-    base_local: u32,
-    base_peer: u32,
-    budget: u32,
-    policy: CachePolicy,
-) -> IpcPool {
+fn pool(id: &str, peer: u32, base_local: u32, base_peer: u32, budget: u32) -> IpcPool {
     IpcPool {
         id: PoolId::new(id),
         peer: PhysicalCore::new(peer),
         base_local,
         base_peer,
         budget,
-        policy,
     }
 }
 
@@ -600,29 +566,13 @@ fn manifest_records_multi_core_backend_capabilities() {
     assert_eq!(first.local_core, 0);
     assert_eq!(first.physical_core, 7);
     let ids: Vec<&str> = first.pools.iter().map(|pool| pool.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        ["sram3", "axi"],
-        "pools are sorted by peer, not by the backend's return order"
-    );
+    assert_eq!(ids, ["sram3"]);
 
     let sram3 = &first.pools[0];
     assert_eq!(sram3.peer, 8);
     assert_eq!(sram3.base_local, 0x3004_0000);
     assert_eq!(sram3.base_peer, 0x1004_0000);
     assert_eq!(sram3.budget, 4096);
-    assert_eq!(
-        sram3.policy,
-        rticx_xbin_proto::PoolCachePolicy::NormalNonCacheableShareable
-    );
-
-    let axi = &first.pools[1];
-    assert_eq!(axi.peer, 10);
-    assert_eq!(axi.budget, 8192);
-    assert_eq!(
-        axi.policy,
-        rticx_xbin_proto::PoolCachePolicy::NormalCacheableShareable
-    );
 
     let second = &manifest.capabilities[1];
     assert_eq!(second.local_core, 1);
@@ -634,8 +584,5 @@ fn manifest_records_multi_core_backend_capabilities() {
     let json = manifest.to_json();
     assert!(json.contains("\"physical_core\": 7"), "{json}");
     assert!(json.contains("\"id\": \"sram3\""), "{json}");
-    assert!(
-        json.contains("\"policy\": \"normal_cacheable_shareable\""),
-        "{json}"
-    );
+    assert!(!json.contains("\"policy\""), "{json}");
 }

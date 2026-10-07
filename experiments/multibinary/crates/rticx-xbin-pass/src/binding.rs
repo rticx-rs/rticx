@@ -27,7 +27,6 @@
 //!             base_local: 0x3004_0000,
 //!             base_peer: 0x1004_0000,
 //!             budget: 4096,
-//!             policy: CachePolicy::NormalNonCacheableShareable,
 //!         }],
 //!         _ => Vec::new(),
 //!     }
@@ -113,36 +112,12 @@ impl std::fmt::Display for PoolId {
     }
 }
 
-/// Cache/MPU policy of an IPC pool.
-///
-/// v1 supports only [`CachePolicy::NormalNonCacheableShareable`]: atomics
-/// provide ordering, not cache maintenance, so a cacheable pool needs explicit
-/// clean/invalidate around every shared access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CachePolicy {
-    /// Normal, Non-cacheable, Shareable — the supported v1 policy.
-    NormalNonCacheableShareable,
-    /// Normal, cacheable, Shareable: unsupported in v1. A cacheable pool would
-    /// need explicit clean/invalidate around every shared access; the
-    /// distribution's generated doorbell/read bodies would own that
-    /// maintenance (D2).
-    NormalCacheableShareable,
-}
-
-impl CachePolicy {
-    /// Returns whether the policy maps the pool cacheable and therefore needs
-    /// explicit cache maintenance.
-    pub const fn is_cacheable(self) -> bool {
-        matches!(self, Self::NormalCacheableShareable)
-    }
-}
-
 /// One shared IPC pool of an unordered core pair (a *dual*), as seen from one
 /// endpoint's side.
 ///
 /// Both directions of a dual (`A -> B` and `B -> A`) allocate inside the same
 /// physical block under [`IpcPool::budget`], so the two endpoints must report
-/// the same [`IpcPool::id`], budget and policy, with the physical cores and
+/// the same [`IpcPool::id`] and budget, with the physical cores and
 /// the two base views swapped (M6.9-T4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpcPool {
@@ -158,8 +133,6 @@ pub struct IpcPool {
     /// Bytes the distribution reserves in the pool for IPC, shared by both
     /// directions of the dual.
     pub budget: u32,
-    /// Cache/MPU policy of the pool.
-    pub policy: CachePolicy,
 }
 
 #[cfg(test)]
@@ -176,7 +149,6 @@ mod tests {
             base_local: 0x3004_0000,
             base_peer: 0x1004_0000,
             budget: 4096,
-            policy: CachePolicy::NormalNonCacheableShareable,
         };
 
         assert_eq!(pool.id.as_str(), "sram3");
@@ -184,7 +156,6 @@ mod tests {
         assert_eq!(pool.base_local, 0x3004_0000);
         assert_eq!(pool.base_peer, 0x1004_0000);
         assert_eq!(pool.budget, 4096);
-        assert!(!pool.policy.is_cacheable());
     }
 
     /// A `PoolId` is a value key: equal strings compare equal, so the driver
@@ -193,14 +164,6 @@ mod tests {
     fn pool_id_is_a_value_key() {
         assert_eq!(PoolId::from("axi"), PoolId::new("axi"));
         assert_ne!(PoolId::new("axi"), PoolId::new("sram3"));
-    }
-
-    /// `CachePolicy` distinguishes the supported v1 policy from the cacheable
-    /// fallback.
-    #[test]
-    fn cache_policy_marks_the_cacheable_fallback() {
-        assert!(!CachePolicy::NormalNonCacheableShareable.is_cacheable());
-        assert!(CachePolicy::NormalCacheableShareable.is_cacheable());
     }
 
     /// Physical-core ids order deterministically, so allocation and rendering

@@ -63,8 +63,8 @@ pub use idl::{
 };
 pub use layout::{EnumLayout, FieldLayout, Layout, Layouts, MessageLayout, VariantLayout};
 pub use manifest::{
-    AppManifest, CoreCapability, MANIFEST_FILE_SUFFIX, MANIFEST_SCHEMA_VERSION, PoolCachePolicy,
-    PoolDecl, ReceiverDecl, TargetRef, simple_type_name,
+    AppManifest, CoreCapability, MANIFEST_FILE_SUFFIX, MANIFEST_SCHEMA_VERSION, PoolDecl,
+    ReceiverDecl, TargetRef, simple_type_name,
 };
 pub use merge::{MergedProject, MergedTask, merge_project};
 pub use project::{

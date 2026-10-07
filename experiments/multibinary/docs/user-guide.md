@@ -724,9 +724,19 @@ shared memory and zeroes the FIFOs each core produces:
 The shared pool memory is special memory; getting these wrong is the most common
 source of runtime-only failures:
 
-- **Attributes:** map every pool Normal, **Non-cacheable, Shareable** (MPU
-  or equivalent). Never Device/Strongly-ordered memory: the FIFO's
-  `ldrex`/`strex`-based atomics are invalid there.
+- **Attributes:** An IPC pool must be usable from every core that touches it as
+  **effectively non-cacheable and shared**, by whatever mechanism the platform
+  provides: a core with no data cache, an MPU/MMU region attribute, a
+  cache-attribute/PMA register, an uncached address alias, or a design-time
+  non-cacheable region. This covers the overwhelming majority of multicore
+  embedded MCUs: all heterogeneous Cortex-M parts in the M7+M4 class, all
+  homogeneous multicore M-class parts whose cores have no data cache, and most
+  multicore RISC-V MCUs. A cacheable shared region without the cache maintenance
+  the transport would have to perform is unsupported in v1 (D2). Cores that also
+  lack cross-core atomic primitives (for example ARMv6-M, which has no
+  `LDREX`/`STREX`) additionally require a distribution-provided cross-core lock;
+  `portable-atomic`'s `critical-section` fallback is local-core only and is not
+  sufficient.
 - **Timing:** the distribution's `XbinPassBackend::configure_shared_memory`
   tokens run at the start of each entry, before the user `init` and before any
   generated code touches a pool, so configure it there.
@@ -739,12 +749,12 @@ source of runtime-only failures:
   endpoint's own view as `base_local` and the peer's as `base_peer`; the
   generated code uses the view of the core that runs it. When both cores see
   the same absolute address, report the same value for both.
-- **Cacheable mapping (unsupported v1):** a pool must be non-cacheable. The
-  pass offers no cache-hook binding; a cacheable mapping would require the
-  generated transport body to clean/invalidate around every shared access, and
-  is out of scope (the
-  [architecture decision tree](architecture.md#6-memory-and-layout) spells
-  this out). Prefer non-cacheable.
+- **Cacheable mapping (unsupported v1):** a cacheable mapping without
+  transport-owned maintenance is unsupported in v1: the pass offers no
+  cache-hook binding, so the generated transport body cannot clean/invalidate
+  around every shared access. Prefer an effectively non-cacheable region (the
+  [architecture platform rule](architecture.md#cache-policy-and-supported-platforms)
+  spells this out).
 - **IRQs:** every `dispatchers` entry and every pair doorbell IRQ must be
   enabled and assigned a priority at least as urgent as the tasks they wake;
   the core pass's used-IRQ machinery does this from the generated
@@ -778,12 +788,12 @@ at the distribution's runtime `Fifo` re-export.
 
 Each `IpcPool` describes one **unordered** core pair (a *dual*) from this
 core's side: a symbolic `id`, the `peer` physical core, this core's view
-(`base_local`) and the peer's view (`base_peer`), the `budget` (bytes reserved
-for IPC, shared by **both** directions of the dual) and a `CachePolicy`. The
-two endpoints of a dual must report the same `id`, budget and policy with the
-physical cores and base views swapped; the driver matches them and rejects a
-one-sided or inconsistent entry, or a used direction with no pool at all. Both
-directions of a dual allocate inside the one shared budget.
+(`base_local`) and the peer's view (`base_peer`), and the `budget` (bytes
+reserved for IPC, shared by **both** directions of the dual). The two endpoints
+of a dual must report the same `id` and budget with the physical cores and base
+views swapped; the driver matches them and rejects a one-sided or inconsistent
+entry, or a used direction with no pool at all. Both directions of a dual
+allocate inside the one shared budget.
 
 **2. Reserve the pools in the linker scripts.** Pool addresses are accessed
 through raw fixed-address pointers (`Fifo::view_at(base + offset)`); a pool is
@@ -820,8 +830,8 @@ SECTIONS {
 ```
 
 `LENGTH(IPC)` must be **>=** the pool's declared `budget`, and the pool must be
-mapped Normal, Non-cacheable, Shareable by the MPU (section 7.4) with a base
-and size that satisfy the MPU's alignment rules. Choose addresses that satisfy
+mapped effectively non-cacheable and shared (section 7.4) with a base
+and size that satisfy the platform's alignment rules. Choose addresses that satisfy
 the linker and the MPU at once, and re-check whenever the memory map, the MPU
 configuration or the capability binding changes.
 
@@ -913,7 +923,7 @@ build instead of corrupting IPC at runtime.
 | ``tasks `A` … and `B` … share priority P on core N`` | give tasks from different source cores disjoint priority lines |
 | ``task `T` needs a `S->T` IPC pool`` | the distribution must report a pool between the producer and receiver physical cores |
 | ``the FIFOs of the `A<->B` pool `P` need N bytes, but the distribution reserves M`` | enlarge the pool budget or lower task `capacity` (both directions share the budget) |
-| ``IPC pool `P` between cores A and B is not reported consistently by both endpoints`` | make the two applications' capability entries symmetric (same id, budget, policy, swapped bases) |
+| ``IPC pool `P` between cores A and B is not reported consistently by both endpoints`` | make the two applications' capability entries symmetric (same id, budget, swapped bases) |
 | ``the `P` and `Q` pool views overlap on core N`` | give the core's pool views disjoint address ranges |
 
 *Build-phase priority-line errors (M6-T1):*
@@ -946,8 +956,8 @@ host fixtures in section 7.6 cannot reproduce them.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| inputs arrive corrupted, or a receiver sees a stale/zeroed value | pool not cache-coherent: cacheable mapping without maintenance, or wrong base alias | map the pool Normal, Non-cacheable, Shareable; reconcile the capability binding's `base_local`/`base_peer` with the MPU view; see section 7.4 |
-| a hard fault or bus error on the first spawn | pool in Device/Strongly-ordered memory (exclusive atomics invalid), or the MPU denies access to one core | map Normal memory and grant both cores the MPU region |
+| inputs arrive corrupted, or a receiver sees a stale/zeroed value | pool not cache-coherent: cacheable mapping without maintenance, or wrong base alias | map the pool effectively non-cacheable and shared; reconcile the capability binding's `base_local`/`base_peer` with the memory-attribute view; see section 7.4 |
+| a hard fault or bus error on the first spawn | the pool mapping is not atomic-capable (for example Device/Strongly-ordered memory, where the exclusive atomics are invalid), or the platform denies access to one core | give both cores an effectively non-cacheable, shared, atomic-capable mapping and grant them access to the region |
 | `Ok(())` but the receiver's `exec` never runs | router or dispatcher IRQ not enabled/mapped, or the `dispatchers` cross-line front does not match the view's ascending `(source, priority)` lines | map every pool entry and pair IRQ in the distribution; re-run `cargo xbin sync` and compare `doorbells`/`line` with the front of `dispatchers` |
 | FIFO stays full while the receiver is idle | dispatcher bound to a line whose IRQ never fires; router read the id but the pend is lost | same IRQ mapping check as above; duplicate notifications are harmless (the dispatcher drains until empty) |
 | `Err(None)` repeatedly | the input is enqueued but the doorbell notification fails (IRQ masked, doorbell word not shareable) | fix the pair IRQ/word mapping; the enqueued input is drained by the next successful notification |
