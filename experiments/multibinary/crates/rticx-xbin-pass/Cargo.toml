@@ -24,4 +24,4 @@ syn = { workspace = true }
 [dev-dependencies]
 rticx-sw-pass = { workspace = true }
 serde_json = { workspace = true }
-tempfile = "3.27.0"
+tempfile = { workspace = true }

@@ -1,13 +1,13 @@
-//! Producer application of the end-to-end fixture (M4-T1, M5.5).
+//! Producer application of the end-to-end fixture.
 //!
 //! Global core 0 spawns `EncryptTask` on the M4 binary (global core 1) through
 //! the cross-binary pass; the input type is the `EncryptReq` IDL message.
 //!
 //! The producer declares nothing: the pass generates the `EncryptTask`
-//! sender stub and its `cross_spawn` from the synced system view (M5.5). The
+//! sender stub and its `cross_spawn` from the synced system view. The
 //! mock distribution provides the `#[app]` macro and the in-process backend,
-//! so the application builds and links on the host; M4-T2 drives the generated
-//! API against the receiver.
+//! so the application builds and links on the host; the end-to-end driver test
+//! drives the generated API against the receiver.
 #![no_main]
 
 use xbin_mock_distro::app;

@@ -1,4 +1,4 @@
-# Type-only IDL of the end-to-end fixture (M4-T1): one message, used as the
+# Type-only IDL of the end-to-end fixture: one message, used as the
 # spawn input of the single cross-binary task.
 schema = 1
 

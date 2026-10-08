@@ -17,6 +17,6 @@ MEMORY
 
 /* `h7-sram3` IPC pool, Cortex-M4 view (`0x1004_0000 + 0x1000`). Plain
  * assignments (not `PROVIDE`) so the absolute symbols are always emitted for
- * the `cargo xbin` ELF verifier (M6.9-T7). */
+ * the `cargo xbin` ELF verifier. */
 __rticx_xbin_pool_h7_sram3_start = 0x10041000;
 __rticx_xbin_pool_h7_sram3_end   = 0x10042000;

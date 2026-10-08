@@ -9,50 +9,15 @@
 //! doorbell router, line dispatcher, init hooks); only the hardware bindings
 //! are mocked.
 
-use std::path::{Path, PathBuf};
-
 use rticx_xbin_driver::build;
 
-/// Root of the checked-in end-to-end fixture.
-fn fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/fixtures/e2e")
-        .canonicalize()
-        .expect("the end-to-end fixture ships with the driver crate")
-}
+mod common;
 
-/// The directory `cargo build` writes the fixture's binaries to, following
-/// `CARGO_TARGET_DIR` when the environment sets one (relative values are
-/// resolved against the project root, like Cargo does).
-fn target_dir(root: &Path) -> PathBuf {
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
-            if dir.is_absolute() {
-                dir
-            } else {
-                root.join(dir)
-            }
-        }
-        None => root.join("target"),
-    }
-}
-
-/// Returns whether the built binary at `binary` contains `needle`.
-///
-/// The generated phase-2 code carries diagnostic strings and symbols that
-/// exist nowhere in the fixture sources, so finding one proves the build ran in
-/// codegen mode (not metadata mode) and linked the generated code.
-fn binary_contains(binary: &Path, needle: &str) -> bool {
-    let bytes = std::fs::read(binary).expect("read the built binary");
-    bytes
-        .windows(needle.len())
-        .any(|window| window == needle.as_bytes())
-}
+use common::{binary_contains, fixture_root, target_dir};
 
 #[test]
 fn cargo_xbin_build_builds_the_fixture_applications() {
-    let root = fixture_root();
+    let root = fixture_root("e2e");
 
     let outcome = build(&root).expect("cargo xbin build succeeds");
 

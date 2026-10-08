@@ -6,9 +6,7 @@
 # the single workspace. The `no_std` library itself only compiles for the
 # Cortex-M targets, so it is excluded from the workspace's default members;
 # build it with `--target thumbv7em-none-eabi[f]` and exactly one of the
-# `cm7`/`cm4` features. Intended to be extracted into its own repository with
-# the rest of the extension once M7-T1/M7-T2 are done (M7-T3).
-
+# `cm7`/`cm4` features.
 [package]
 name = "rticx-stm32h7"
 version = "0.1.0"

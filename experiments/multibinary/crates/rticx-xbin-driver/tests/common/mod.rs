@@ -1,9 +1,11 @@
-//! Helpers shared by the driver's build-phase integration tests.
+//! Helpers shared by the driver's integration tests.
 //!
-//! `fixture_copy` turns the checked-in `crates/mock/fixtures/e2e` project into a
+//! `fixture_root` locates one of the checked-in fixtures below
+//! `crates/mock/fixtures`; `target_dir`/`binary_contains` inspect the binaries a
+//! fixture build produced. `fixture_copy` turns the `e2e` fixture into a
 //! self-contained temporary copy and `cargo_build` runs a plain `cargo build`
-//! over it with the driver's mode variables removed. `negative.rs` and
-//! `freshness.rs` both need them.
+//! over it with the driver's mode variables removed. Every test crate uses a
+//! subset, hence the blanket `dead_code` allowance.
 
 #![allow(dead_code)]
 
@@ -19,6 +21,47 @@ pub fn cargo() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("cargo"))
 }
 
+/// Root of one of the checked-in fixtures below `crates/mock/fixtures`.
+///
+/// `name` is the fixture directory, e.g. `"e2e"`, `"metadata"` or
+/// `"three-app"`.
+pub fn fixture_root(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../mock/fixtures")
+        .join(name)
+        .canonicalize()
+        .unwrap_or_else(|_| panic!("the {name} fixture ships with the driver crate"))
+}
+
+/// The directory `cargo build` writes a fixture's binaries to, following
+/// `CARGO_TARGET_DIR` when the environment sets one (relative values are
+/// resolved against the project root, like Cargo does).
+pub fn target_dir(root: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            if dir.is_absolute() {
+                dir
+            } else {
+                root.join(dir)
+            }
+        }
+        None => root.join("target"),
+    }
+}
+
+/// Returns whether the built binary at `binary` contains `needle`.
+///
+/// The generated cross-binary code carries diagnostic strings and symbols that
+/// exist nowhere in the fixture sources, so finding one proves the build ran in
+/// codegen mode (not metadata mode) and linked the generated code.
+pub fn binary_contains(binary: &Path, needle: &str) -> bool {
+    let bytes = std::fs::read(binary).expect("read the built binary");
+    bytes
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+}
+
 /// Copies the checked-in end-to-end fixture into a fresh temporary directory.
 ///
 /// `target/` is skipped, and dependency paths that leave the fixture root (the
@@ -26,10 +69,7 @@ pub fn cargo() -> PathBuf {
 /// self-contained project. Paths inside the fixture stay relative, so the copy
 /// uses its own application sources.
 pub fn fixture_copy() -> tempfile::TempDir {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/fixtures/e2e")
-        .canonicalize()
-        .expect("the end-to-end fixture ships with the driver crate");
+    let source = fixture_root("e2e");
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("e2e");
     copy_tree(&source, &root);

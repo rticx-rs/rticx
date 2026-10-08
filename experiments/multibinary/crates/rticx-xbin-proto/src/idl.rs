@@ -131,13 +131,14 @@ impl IpcTypes {
         match state.get(name) {
             Some(Visit::Done) => return Ok(()),
             Some(Visit::Active) => {
-                let start = stack.iter().position(|entry| *entry == name).unwrap_or(0);
-                let mut cycle: Vec<&str> = stack[start..].to_vec();
-                cycle.push(name);
-                return Err(IdlError::invalid(format!(
-                    "cyclic message reference: {}",
-                    cycle.join(" -> ")
-                )));
+                if let Some(start) = stack.iter().position(|entry| *entry == name) {
+                    let mut cycle: Vec<&str> = stack[start..].to_vec();
+                    cycle.push(name);
+                    return Err(IdlError::invalid(format!(
+                        "cyclic message reference: {}",
+                        cycle.join(" -> ")
+                    )));
+                }
             }
             None => {}
         }
@@ -260,11 +261,43 @@ pub enum FieldType {
 impl FieldType {
     /// Returns every named type referenced by this type (recursing into
     /// arrays).
-    pub fn named_types(&self) -> Vec<&str> {
+    pub fn named_types(&self) -> impl Iterator<Item = &str> + '_ {
+        self.named_types_iter()
+    }
+
+    fn named_types_iter(&self) -> NamedTypes<'_> {
         match self {
-            FieldType::Prim(_) => Vec::new(),
-            FieldType::Named(name) => vec![name.as_str()],
-            FieldType::Array(inner, _) => inner.named_types(),
+            FieldType::Prim(_) => NamedTypes::Primitive,
+            FieldType::Named(name) => NamedTypes::Named(name),
+            FieldType::Array(inner, _) => NamedTypes::Array(Box::new(inner.named_types_iter())),
+        }
+    }
+}
+
+/// Lazy iterator over the named types referenced by a [`FieldType`].
+///
+/// The array arm boxes the nested iterator because the traversal is recursive.
+enum NamedTypes<'a> {
+    /// Yields nothing (a scalar type references no names).
+    Primitive,
+    /// Yields a single named type.
+    Named(&'a str),
+    /// Yields the named types of the array element type.
+    Array(Box<NamedTypes<'a>>),
+}
+
+impl<'a> Iterator for NamedTypes<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            NamedTypes::Primitive => None,
+            NamedTypes::Named(name) => {
+                let named = *name;
+                *self = NamedTypes::Primitive;
+                Some(named)
+            }
+            NamedTypes::Array(inner) => inner.next(),
         }
     }
 }

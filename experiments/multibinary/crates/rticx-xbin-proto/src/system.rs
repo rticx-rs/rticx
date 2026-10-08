@@ -417,15 +417,11 @@ mod hex_u32 {
     }
 
     fn parse(text: &str) -> Result<u32, String> {
-        let digits = text
-            .strip_prefix("0x")
-            .or_else(|| text.strip_prefix("0X"))
-            .unwrap_or(text);
-        if digits.is_empty() || digits.len() > 8 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(format!(
+        let digits = crate::hash::strip_hex_digits(text, 8).ok_or_else(|| {
+            format!(
                 "invalid address `{text}`; expected `0x` followed by up to 8 hexadecimal digits"
-            ));
-        }
+            )
+        })?;
         u32::from_str_radix(digits, 16)
             .map_err(|_| format!("invalid address `{text}`; value does not fit in 32 bits"))
     }

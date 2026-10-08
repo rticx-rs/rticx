@@ -1,7 +1,7 @@
 //! Host tests for the mock cross-binary backend.
 //!
 //! Covers the pool table, the per-handle core identity and the pair doorbell
-//! message word, plus the M2-T3 acceptance case: two threads spawn and drain
+//! message word, plus the end-to-end case: two threads spawn and drain
 //! through a raw `Fifo` placed in a mock pool, notified through the pair
 //! doorbell.
 
@@ -51,8 +51,7 @@ fn pools_are_aligned_and_addressable_from_both_ends() {
 }
 
 /// Both directions of a dual are the same shared pool: the mock has one
-/// address space per process, so `(0, 1)` and `(1, 0)` resolve the same base
-/// (M6.9-T6).
+/// address space per process, so `(0, 1)` and `(1, 0)` resolve the same base.
 #[test]
 fn both_directions_return_the_same_pool() {
     let mut system = MockSystem::new();

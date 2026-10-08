@@ -16,13 +16,16 @@
 //! The hooks are private to the `#[app]` module, so the fixture declares
 //! `pub` wrappers next to them for the harness to call.
 
-use std::path::{Path, PathBuf};
+mod support;
+
+use std::path::Path;
 use std::process::Command;
 
 use quote::{ToTokens, format_ident, quote};
 use rticx_core::RticPass;
 use rticx_xbin_pass::{AppTopology, XbinPass, XbinPassBackend};
 use rticx_xbin_proto::SystemView;
+use support::{cargo, runtime_and_mock_paths};
 
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, and `app-m4`
@@ -226,22 +229,9 @@ fn expand(system: &Path) -> String {
     module.to_token_stream().to_string()
 }
 
-fn cargo() -> PathBuf {
-    std::env::var_os("CARGO")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("cargo"))
-}
-
 /// Writes the throwaway binary that executes the generated hooks.
 fn write_project(root: &Path, expanded: &str) {
-    let rt = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../rticx-xbin-rt")
-        .canonicalize()
-        .expect("the runtime crate ships with the workspace");
-    let mock = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/rticx-xbin-mock")
-        .canonicalize()
-        .expect("the mock crate ships with the workspace");
+    let (rt, mock) = runtime_and_mock_paths();
 
     std::fs::create_dir_all(root.join("src")).expect("src dir");
     std::fs::write(

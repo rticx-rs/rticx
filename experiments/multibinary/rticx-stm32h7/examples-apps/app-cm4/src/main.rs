@@ -1,4 +1,4 @@
-//! Cortex-M4 side of the rticx-stm32h7 demo (M7-T1 + M7-T2).
+//! Cortex-M4 side of the rticx-stm32h7 demo.
 //!
 //! Global core 1. The Cortex-M4 is held in hold-boot until the Cortex-M7 writes
 //! `RCC_GCR.BOOT_C2`; when it boots it maps the shared SRAM3 through the MPU,
@@ -15,7 +15,7 @@
 //!
 //! `PingTask::exec` logs the arriving ping and answers with the generated
 //! `PongTask::cross_spawn`, so the M7's first ping drives the whole M7 <-> M4
-//! exchange (M7-T2).
+//! exchange.
 
 #![no_std]
 #![no_main]
@@ -62,7 +62,7 @@ pub mod app {
 
             // Answer the M7 through the generated `PongTask` sender stub: the
             // input is enqueued in the `(1 -> 0)` FIFO and the M7's HSEM0 router
-            // is rung (M7-T2).
+            // is rung.
             let _ = PongTask::cross_spawn(ipc_types::PingMsg {
                 seq: input.seq + 1,
                 value: input.value.wrapping_add(1),
@@ -90,7 +90,7 @@ pub mod app {
             self.shared().console.lock(|console| {
                 let _ = writeln!(
                     console,
-                    "[M4] shared region mapped, HSEM1 receive enabled; peer-up signalled (M7-T1)"
+                    "[M4] shared region mapped, HSEM1 receive enabled; peer-up signalled"
                 );
             });
             loop {

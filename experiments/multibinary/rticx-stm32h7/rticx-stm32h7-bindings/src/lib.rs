@@ -26,7 +26,7 @@
 //!
 //! The pool occupies `[SRAM3 + 0x1000, SRAM3 + 0x1000 + POOL_BUDGET)`; the
 //! linker scripts reserve it and export the `__rticx_xbin_pool_<id>_start/_end`
-//! symbols the `cargo xbin` ELF verifier checks (M6.9-T7).
+//! symbols the `cargo xbin` ELF verifier checks.
 
 #![no_std]
 

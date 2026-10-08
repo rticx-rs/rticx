@@ -133,7 +133,7 @@ impl<T: Copy + 'static, const DEPTH: usize> Fifo<T, DEPTH> {
     ///   described in the [module documentation](self);
     /// - at most one producer core calls [`Self::enqueue`] and at most one
     ///   consumer core calls [`Self::dequeue`] on the resulting view, through
-    ///   the protocol in the plan (doorbells/dispatchers), not ad hoc;
+    ///   the generated doorbell/dispatcher protocol, not ad hoc;
     /// - the FIFO has been initialized ([`Self::init`] or zeroed memory)
     ///   before any peer can observe it.
     pub unsafe fn view_at(addr: usize) -> *mut Self {

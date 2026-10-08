@@ -1,4 +1,4 @@
-//! First application of the three-application fixture (M6-T1).
+//! First application of the three-application fixture.
 //!
 //! Global core 0 participates in both directions of its two pairs:
 //!
@@ -6,7 +6,7 @@
 //!   (priority 5) on `app-m4` (global core 1) through the `(0 -> 1)` region,
 //!   and `ConfigTask` (priority 5) on `app-m5` (global core 2) through the
 //!   `(0 -> 2)` region. The producer declares nothing: the pass generates the
-//!   sender stubs and their `cross_spawn` from the synced system view (M5.5);
+//!   sender stubs and their `cross_spawn` from the synced system view;
 //! - as a **receiver** it executes `AckTask` (priority 3), spawned by global
 //!   core 1 over `(1 -> 0)`, and `HeartbeatTask` (priority 6), spawned by
 //!   global core 2 over `(2 -> 0)`.

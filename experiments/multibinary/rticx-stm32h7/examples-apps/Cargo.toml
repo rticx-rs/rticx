@@ -1,4 +1,4 @@
-# Standalone `cargo xbin` project for the STM32H7 acceptance demo (M7-T1).
+# Standalone `cargo xbin` project for the STM32H7 acceptance demo.
 #
 # Deliberately its own workspace (outside the experimental workspace): the two
 # applications select mutually exclusive cores (`cm7` / `cm4`) and `stm32h7`

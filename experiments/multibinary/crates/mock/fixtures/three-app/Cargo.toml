@@ -1,4 +1,4 @@
-# Three-application fixture project (M6-T1).
+# Three-application fixture project.
 #
 # Standalone workspace, intentionally outside the experimental workspace: it
 # models a three-binary `cargo xbin` project that builds end to end on the

@@ -7,8 +7,7 @@
 //! - binds the **cross-binary pass** ([`XbinPass::from_env`]) with a backend
 //!   that points the generated code at `xbin-mock-runtime`, then the
 //!   **software pass** ([`SoftwarePass`]) with a backend that generates the
-//!   `RticSwTask` trait and the `__rticx_local_irq_pend` the router calls
-//!   (M6.5-T5);
+//!   `RticSwTask` trait and the `__rticx_local_irq_pend` the router calls;
 //! - injects the `__rticx_xbin_backend()` helper the generated code calls,
 //!   returning the backend handle of the application's core over the shared
 //!   mock system.
@@ -36,16 +35,16 @@ use xbin_mock_capability::fixture_pools;
 /// calls the injected `__rticx_xbin_backend()` helper for its backend value.
 /// The backend also carries the application's `core_ids`, so its capability
 /// binding ([`XbinPassBackend::physical_core`],
-/// [`XbinPassBackend::ipc_pools`], M6.9-T1) can map a local core index to the
+/// [`XbinPassBackend::ipc_pools`]) can map a local core index to the
 /// fixture's physical core.
 struct MockDistroBackend {
-    /// Local core index -> global core id, resolved from `rticx.toml` (M7-T2);
+    /// Local core index -> global core id, resolved from `rticx.toml`;
     /// empty when the application leaves the identity default.
     core_ids: Vec<u32>,
 }
 
 impl MockDistroBackend {
-    /// Physical core of local core `local_core` (M6.9-T1).
+    /// Physical core of local core `local_core`.
     ///
     /// The mock's physical-core vocabulary is the global core id, so the two
     /// applications running on the endpoints of a dual agree on it. A local
@@ -68,15 +67,14 @@ impl XbinPassBackend for MockDistroBackend {
 
     fn current_global_core_id(&self) -> syn::Expr {
         // The host mock resolves the core at runtime: the same generated code
-        // is expanded for every simulated core, so the guard cannot be baked
-        // (D5).
+        // is expanded for every simulated core, so the guard cannot be baked.
         syn::parse_quote!(__rticx_xbin_backend().global_core_id())
     }
 
     fn ipc_base_override(&self, _view_core: u32, source: u32, target: u32) -> Option<syn::Expr> {
         // The mock pools are heap-backed, not at the addresses `system.json`
-        // records, so the generated FIFO views must look the base up at runtime
-        // (D3). Both endpoints see the pool at the same address.
+        // records, so the generated FIFO views must look the base up at runtime.
+        // Both endpoints see the pool at the same address.
         Some(syn::parse_quote!(
             xbin_mock_runtime::pool_base(#source, #target)
         ))
@@ -118,7 +116,7 @@ impl XbinPassBackend for MockDistroBackend {
     }
 }
 
-/// Software-task backend of the mock distribution (M6.5-T5).
+/// Software-task backend of the mock distribution.
 ///
 /// The fixture has no software tasks of its own (the cross receiver is
 /// rewritten into a core `#[task]` by the cross-binary pass), but the bound
@@ -180,7 +178,7 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     builder.build_rtic_macro(args, quote!(#app_mod).into())
 }
 
-/// Resolves the application's topology from the nearest `rticx.toml` (M7-T2).
+/// Resolves the application's topology from the nearest `rticx.toml`.
 ///
 /// A standalone mock distribution with no project above the crate falls back
 /// to the identity mapping over the declared `cores` (default 1), exactly like
@@ -213,7 +211,7 @@ fn declared_cores(args: &TokenStream2) -> u32 {
     }
 }
 
-/// Injects the fixture interrupt enum (M6.5-T3/T5).
+/// Injects the fixture interrupt enum.
 ///
 /// A real distribution points `custom_interrupt_path` at its PAC; the mock
 /// provides the enum itself. Its variants are the last path segments of the
@@ -299,7 +297,7 @@ mod tests {
     }
 
     /// The mock's physical-core vocabulary is the global core id: the
-    /// capability binding maps the local index through `core_ids` (M6.9-T1).
+    /// capability binding maps the local index through `core_ids`.
     #[test]
     fn physical_core_maps_the_local_index_through_core_ids() {
         let backend = backend(&[7, 9]);
@@ -343,7 +341,7 @@ mod tests {
 
     /// The two endpoints of a dual report the same pool from their own side:
     /// the same id, opposite physical cores, each side's local view equal to
-    /// the other's peer view, and the same shared budget (M6.9-T1).
+    /// the other's peer view, and the same shared budget.
     #[test]
     fn pools_are_symmetric_across_endpoints() {
         // The fixture applications each run on one physical core, with ids 0,

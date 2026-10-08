@@ -8,6 +8,10 @@ use std::process::{Command, Output};
 
 use tempfile::tempdir;
 
+mod common;
+
+use common::fixture_root;
+
 const BIN: &str = env!("CARGO_BIN_EXE_cargo-xbin");
 
 fn run(dir: &Path, args: &[&str]) -> Output {
@@ -219,17 +223,9 @@ fn sync_html_writes_the_visualization() {
     );
 }
 
-/// Root of the checked-in end-to-end fixture.
-fn e2e_fixture_root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/fixtures/e2e")
-        .canonicalize()
-        .expect("the end-to-end fixture ships with the driver crate")
-}
-
 #[test]
 fn sync_html_over_the_fixture_renders_pool_panels() {
-    let root = e2e_fixture_root();
+    let root = fixture_root("e2e");
     let output = run(&root, &["xbin", "sync", "--html"]);
     assert!(
         output.status.success(),

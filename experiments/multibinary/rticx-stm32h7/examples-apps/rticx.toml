@@ -1,4 +1,4 @@
-# Project topology of the STM32H7 acceptance demo (M7-T1).
+# Project topology of the STM32H7 acceptance demo.
 #
 # `app-cm7` owns global core 0 and boots from flash bank 1
 # (`thumbv7em-none-eabihf`); `app-cm4` owns global core 1, is released by the

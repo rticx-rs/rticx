@@ -1,4 +1,4 @@
-# End-to-end fixture project (M4-T1).
+# End-to-end fixture project.
 #
 # Standalone workspace, intentionally outside the experimental workspace: it
 # models a two-application `cargo xbin` project that builds end to end on the

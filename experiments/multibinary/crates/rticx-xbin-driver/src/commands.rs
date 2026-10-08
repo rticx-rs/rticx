@@ -280,9 +280,32 @@ fn run_cargo(
     unset: &[&str],
     output: CargoOutput,
 ) -> Result<(), DriverError> {
+    run_cargo_impl(project_root, args, envs, unset, output, false).map(|_| ())
+}
+
+/// Shared implementation of [`run_cargo`] and [`run_cargo_json`].
+///
+/// Builds the `cargo` invocation (arguments, working directory and the
+/// environment set/unset pairs) and owns both [`CargoOutput`] branches. When
+/// `json` is set the invocation appends
+/// `--message-format json-render-diagnostics` and the captured standard output
+/// is returned; otherwise the caller ignores it.
+fn run_cargo_impl(
+    project_root: &Path,
+    args: &[String],
+    envs: &[(&str, &OsStr)],
+    unset: &[&str],
+    output: CargoOutput,
+    json: bool,
+) -> Result<String, DriverError> {
+    let mut args = args.to_vec();
+    if json {
+        args.extend(argv(&["--message-format", "json-render-diagnostics"]));
+    }
     let command_line = format!("cargo {}", args.join(" "));
+
     let mut command = Command::new(cargo_binary());
-    command.args(args).current_dir(project_root);
+    command.args(&args).current_dir(project_root);
     for name in unset {
         command.env_remove(name);
     }
@@ -307,7 +330,7 @@ fn run_cargo(
                         .to_string(),
                 });
             }
-            Ok(())
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
         CargoOutput::Streamed => {
             // Cargo decides whether to color its output from its own stderr
@@ -333,9 +356,15 @@ fn run_cargo(
             // Drain both pipes on separate threads so the child can never block
             // on a full pipe, forwarding each chunk as Cargo writes it while
             // accumulating standard error for [`DriverError::CargoFailed`].
+            // JSON mode sends standard output to `io::sink()` so it stays
+            // parseable; the other mode forwards it to the driver's stdout.
             let child_stdout = child.stdout.take().expect("piped standard output");
             let child_stderr = child.stderr.take().expect("piped standard error");
-            let stdout = std::thread::spawn(move || forward(child_stdout, io::stdout()));
+            let stdout = if json {
+                std::thread::spawn(move || forward(child_stdout, io::sink()))
+            } else {
+                std::thread::spawn(move || forward(child_stdout, io::stdout()))
+            };
             let stderr = std::thread::spawn(move || forward(child_stderr, io::stderr()));
 
             let status = child.wait().map_err(|source| DriverError::CargoSpawn {
@@ -343,7 +372,7 @@ fn run_cargo(
                 dir: project_root.to_path_buf(),
                 source,
             })?;
-            let _ = stdout.join();
+            let stdout = stdout.join().unwrap_or_default();
             let stderr = stderr.join().unwrap_or_default();
 
             if !status.success() {
@@ -354,7 +383,7 @@ fn run_cargo(
                     stderr: stderr.trim_end().to_string(),
                 });
             }
-            Ok(())
+            Ok(stdout)
         }
     }
 }
@@ -395,79 +424,7 @@ fn run_cargo_json(
     unset: &[&str],
     output: CargoOutput,
 ) -> Result<String, DriverError> {
-    let mut args = args.to_vec();
-    args.extend(argv(&["--message-format", "json-render-diagnostics"]));
-    let command_line = format!("cargo {}", args.join(" "));
-
-    let mut command = Command::new(cargo_binary());
-    command.args(&args).current_dir(project_root);
-    for name in unset {
-        command.env_remove(name);
-    }
-    for (name, value) in envs {
-        command.env(name, value);
-    }
-
-    match output {
-        CargoOutput::Captured => {
-            let output = command.output().map_err(|source| DriverError::CargoSpawn {
-                command: command_line.clone(),
-                dir: project_root.to_path_buf(),
-                source,
-            })?;
-            if !output.status.success() {
-                return Err(DriverError::CargoFailed {
-                    command: command_line,
-                    dir: project_root.to_path_buf(),
-                    status: output.status,
-                    stderr: String::from_utf8_lossy(&output.stderr)
-                        .trim_end()
-                        .to_string(),
-                });
-            }
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-        }
-        CargoOutput::Streamed => {
-            if io::stderr().is_terminal()
-                && std::env::var_os("CARGO_TERM_COLOR").is_none()
-                && std::env::var_os("NO_COLOR").is_none()
-            {
-                command.env("CARGO_TERM_COLOR", "always");
-            }
-            eprintln!("[cargo-xbin] running `{command_line}`");
-            command.stdout(Stdio::piped()).stderr(Stdio::piped());
-            let mut child = command.spawn().map_err(|source| DriverError::CargoSpawn {
-                command: command_line.clone(),
-                dir: project_root.to_path_buf(),
-                source,
-            })?;
-
-            let child_stdout = child.stdout.take().expect("piped standard output");
-            let child_stderr = child.stderr.take().expect("piped standard error");
-            // Capture the JSON on standard output while forwarding the
-            // rendered diagnostics on standard error.
-            let stdout = std::thread::spawn(move || forward(child_stdout, io::sink()));
-            let stderr = std::thread::spawn(move || forward(child_stderr, io::stderr()));
-
-            let status = child.wait().map_err(|source| DriverError::CargoSpawn {
-                command: command_line.clone(),
-                dir: project_root.to_path_buf(),
-                source,
-            })?;
-            let stdout = stdout.join().unwrap_or_default();
-            let stderr = stderr.join().unwrap_or_default();
-
-            if !status.success() {
-                return Err(DriverError::CargoFailed {
-                    command: command_line,
-                    dir: project_root.to_path_buf(),
-                    status,
-                    stderr: stderr.trim_end().to_string(),
-                });
-            }
-            Ok(stdout)
-        }
-    }
+    run_cargo_impl(project_root, args, envs, unset, output, true)
 }
 
 /// Returns the linked executable path of the last `compiler-artifact` message

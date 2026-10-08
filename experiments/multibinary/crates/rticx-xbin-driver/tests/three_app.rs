@@ -11,46 +11,15 @@
 //! runs the real core pass on `MockCoreBackend`, so the generated phase-2 code
 //! compiles and links on the host.
 
-use std::path::{Path, PathBuf};
-
 use rticx_xbin_driver::build;
 
-/// Root of the checked-in three-application fixture.
-fn fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/fixtures/three-app")
-        .canonicalize()
-        .expect("the three-app fixture ships with the driver crate")
-}
+mod common;
 
-/// The directory `cargo build` writes the fixture's binaries to, following
-/// `CARGO_TARGET_DIR` when the environment sets one (relative values are
-/// resolved against the project root, like Cargo does).
-fn target_dir(root: &Path) -> PathBuf {
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
-            if dir.is_absolute() {
-                dir
-            } else {
-                root.join(dir)
-            }
-        }
-        None => root.join("target"),
-    }
-}
-
-/// Returns whether the built binary at `binary` contains `needle`.
-fn binary_contains(binary: &Path, needle: &str) -> bool {
-    let bytes = std::fs::read(binary).expect("read the built binary");
-    bytes
-        .windows(needle.len())
-        .any(|window| window == needle.as_bytes())
-}
+use common::{binary_contains, fixture_root, target_dir};
 
 #[test]
 fn cargo_xbin_build_builds_the_three_applications() {
-    let root = fixture_root();
+    let root = fixture_root("three-app");
 
     let outcome = build(&root).expect("cargo xbin build succeeds");
 

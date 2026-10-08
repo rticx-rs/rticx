@@ -1,8 +1,8 @@
-# Renode support for the STM32H7 acceptance demo (M7)
+# Renode support for the STM32H7 acceptance demo
 
 Dual-core STM32H7 (Cortex-M7 + Cortex-M4) Renode platform used as the
-acceptance target of the multi-binary extension (M7-T1/M7-T2:
-`rticx-stm32h7` cross-binary spawns, M7→M4 and M4→M7).
+acceptance target of the multi-binary extension: `rticx-stm32h7` cross-binary
+spawns, M7→M4 and M4→M7.
 
 ## Provenance
 

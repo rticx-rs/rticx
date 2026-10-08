@@ -8,19 +8,15 @@
 //! `system.json` base over a real section of the linked binary, which must fail
 //! naming both the section and the pool.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
 use object::{Object, ObjectSection};
 use rticx_xbin_driver::{build, build_and_verify, verify, verify_binary};
 
-/// Root of the checked-in end-to-end fixture.
-fn fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/fixtures/e2e")
-        .canonicalize()
-        .expect("the end-to-end fixture ships with the driver crate")
-}
+mod common;
+
+use common::fixture_root;
 
 /// The `build --verify-elf` outcome, shared by the tests so the fixture is
 /// built (and verified) only once.
@@ -30,7 +26,7 @@ fn fixture_root() -> PathBuf {
 fn verified_build() -> &'static rticx_xbin_driver::BuildOutcome {
     static OUTCOME: OnceLock<rticx_xbin_driver::BuildOutcome> = OnceLock::new();
     OUTCOME.get_or_init(|| {
-        build_and_verify(&fixture_root()).expect("`cargo xbin build --verify-elf` succeeds")
+        build_and_verify(&fixture_root("e2e")).expect("`cargo xbin build --verify-elf` succeeds")
     })
 }
 
@@ -134,7 +130,7 @@ fn verify_checks_the_plain_cargo_build_output() {
     // Ensure the project was synced and built first (the plain workflow).
     let outcome = verified_build();
 
-    let verified = verify(&fixture_root()).expect("`cargo xbin verify` succeeds");
+    let verified = verify(&fixture_root("e2e")).expect("`cargo xbin verify` succeeds");
     assert_eq!(
         verified.verifications.len(),
         outcome.builds.len(),
@@ -149,7 +145,7 @@ fn verify_checks_the_plain_cargo_build_output() {
 #[test]
 fn building_without_verification_reports_no_verifications() {
     // `build` (without `--verify-elf`) must stay cheap: no verifications.
-    let root = fixture_root();
+    let root = fixture_root("e2e");
     let outcome = build(&root).expect("`cargo xbin build` succeeds");
     assert!(
         outcome.verifications.is_empty(),

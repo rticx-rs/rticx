@@ -1,4 +1,4 @@
-# Project topology of the three-application fixture (M6-T1).
+# Project topology of the three-application fixture.
 #
 # Three cores, each owning one binary, in a fully connected cross-binary
 # topology:
@@ -6,8 +6,7 @@
 # - `app-m7` owns global core 0, `app-m4` global core 1, `app-m5` global core 2;
 # - the mock distribution's capability binding maps every pair of physical
 #   cores through its own pool (`mock-0-1`, `mock-1-2`, `mock-0-2`), so both
-#   directions of each pair allocate inside that pool's shared 4096-byte budget
-#   (M6.9-T4);
+#   directions of each pair allocate inside that pool's shared 4096-byte budget;
 # - every application is therefore both a producer (it spawns tasks on the two
 #   other cores through generated stubs) and a receiver (it declares its own
 #   `#[sw_task]` cross-binary receivers, each on a priority line disjoint from

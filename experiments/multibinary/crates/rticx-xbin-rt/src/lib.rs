@@ -7,7 +7,7 @@
 //!   [`fifo`] for the in-region image and the memory/ordering rules;
 //! - [`Queue`] — the core-local SPSC queue behind the generated line ready
 //!   queues: the target's router produces task notifications, its line
-//!   dispatcher consumes them (M6.5-T3). It is the same queue type the
+//!   dispatcher consumes them. It is the same queue type the
 //!   software pass uses, re-exported so generated code reaches it through one
 //!   path.
 //!
@@ -22,8 +22,8 @@
 //!
 //! The doorbell transport is likewise generated: the
 //! `__rticx_xbin_ring_{source}_{target}` / `__rticx_xbin_read_{source}_{target}`
-//! bodies are emitted by the pass from the `XbinPassBackend` bindings (M6.5),
-//! so this crate carries no doorbell methods.
+//! bodies are emitted by the pass from the `XbinPassBackend` bindings, so this
+//! crate carries no doorbell methods.
 //!
 //! Boot coordination between cores is **distribution-owned**: the runtime
 //! defines no ready/epoch handshake. Each distribution guarantees that its

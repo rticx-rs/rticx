@@ -24,7 +24,7 @@ with input values between cores in different binaries. The IDL is the only
 source of shared data types; application syntax is the only source of
 tasks/priorities/capacities, and the receiver's native `#[sw_task]`
 declaration is the only task-topology declaration — producer applications
-declare nothing since M5.5. The driver is the only merger and address
+declare nothing. The driver is the only merger and address
 allocator.
 
 Out of scope (v1): async tasks, root-workspace/release integration.
@@ -35,45 +35,45 @@ Out of scope (v1): async tasks, root-workspace/release integration.
 ```text
 distribution (out-of-tree H7 / in-tree mock)
   └─ backend: IPC pools (capability binding), cache/MPU, boot sequencing
-     (doorbell transport = the generated ring/read functions, M6.5)
+     (doorbell transport = the generated ring/read functions)
 compilation passes
-  └─ rticx-xbin-pass: metadata mode (M1) + codegen mode (M3/M4/M6.5/M6.9)
+  └─ rticx-xbin-pass: metadata mode + codegen mode
 core
   └─ rticx-xbin-proto:  IDL + layout + project manifest + system.json schema
-     rticx-xbin-rt:     cross-core SPSC FIFO and ready-queue re-export (M2)
-     rticx-xbin-driver: cargo-xbin sync/build/verify (M0 skeleton, M1 pipeline,
-                        M6.9-T7 ELF verification)
+     rticx-xbin-rt:     cross-core SPSC FIFO and ready-queue re-export
+     rticx-xbin-driver: cargo-xbin sync/build/verify (
+                        ELF verification)
 ```
 
-| Crate | State (through M6-T2) |
+| Crate | State |
 |---|---|
-| `rticx-xbin-proto` | IDL parse/validate, layout engine, `ipc_types.rs` module generator with change-detecting write (`write_if_changed`), `rticx.toml` parse/validate (`[[application]]` `core_ids` + optional `external_cores`; no IPC memory since M6.9-T3), `Hash64`, `system.json` (schema 3) / manifest (schema 5) schemas, merge + validation + FIFO allocation over the distro capability graph (pool matching, shared per-dual budget, M6.9-T4/T5), `system_view` emission and the canonical FIFO image (`fifo`) |
-| `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `target/rticx-xbin/ipc_types.rs` generation with change detection; `build`: `sync`, then `cargo build --package … --bin …` per application with `RTICX_XBIN_SYSTEM` pointing at the just-written view, optionally verifying each linked ELF against the pools (`--verify-elf`, M6.9-T7); `verify`: the same ELF check for a plain `cargo build` output (`--release` for the release profile) |
-| `rticx-xbin-pass` | metadata mode: `#[app]` additions (`device`, optional `cores`, the shared `dispatchers`; `core_ids`/`external_cores` rejected as moved to `rticx.toml`), the application's topology resolved from the nearest `rticx.toml` (`topology.rs`, M7-T2), native `#[sw_task]` cross receivers and the shared `dispatchers` pool parsed, its cross-line front stolen and the remainder re-emitted for the software/async pass (M1-T3, M5.5, M6.5-T1), the per-core distro capability binding (physical core id + reachable pools, M6.9-T2), `<target>.xbin.json` emit (M1-T2), then terminates the compiler so the application is never parsed, analyzed, code-generated or type-checked in phase 1 (a producer may call a phase-2-only sender stub, and RTICX allows task bodies the `#[app]` macro cannot see; M7-T2); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path) for every application listed in it (M5.5 removed the cross-declaration gate), filters it by the application's cores and emits the generated sender stubs (`pub struct <Task>;` + pool-relative FIFO views + `Task::cross_spawn` for every view task it produces, M3-T1/M5.5/M6.9-T6), the per-pair `__rticx_xbin_ring_{s}_{t}` / `__rticx_xbin_read_{s}_{t}` functions from the `XbinPassBackend` templates (M6.5-T2), the receiver FIFO views, the injected `CrossCoreMessage` marker trait plus the `pub mod ipc_types` re-emit of the generated module and the `SpawnInput: CrossCoreMessage` const assertion, one **line dispatcher** per `(source, priority)` line bound to the entry stolen from the front of `dispatchers` and one **doorbell router** per `(source → target)` pair (M6.5-T3/T4), the init hooks (the distribution's `XbinPassBackend::configure_shared_memory` tokens inlined on every core and `__rticx_xbin_init_fifos_core<N>()` per producer core, no per-line arming) wired into the entry functions via `RticPass::main_injection` (M3-T3/M6-T1), the build-phase priority-line validation over the application's raw sw/async declarations plus the view's cross receivers (M6-T1), and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view, of the generated module, of `rticx.toml` and of the IDL) plus the stale-view, stale-interface and stale-IDL hard errors (M3-T4); a discovered `rticx.toml` without a synced view is also a hard error, so plain `cargo build` never silently skips code generation (M4-T3). The pass is bound before `rticx-sw-pass` and requires the distribution's `swtasks` feature: sw-pass generates the `RticSwTask` trait the injected `task_trait = RticSwTask` receivers compile through and the `__rticx_local_irq_pend` the routers call, so without the feature the generated code fails on the unresolved trait (M5.5) |
-| `rticx-xbin-rt` | `Fifo<T, DEPTH>` atomic SPSC ring mirroring the canonical image (Vyukov, `Release`/`Acquire`, `AtomicU32` head/tail in an 8-byte header, `view_at`/`init`/`split`), with a drift guard against `rticx-xbin-proto` and a threaded hand-off test; the `Queue` re-export backing the generated line ready queues (M6.5-T3). It is a pure shared-memory data-structure runtime: the pool base, the executing core id and the doorbell transport are all resolved at compile time by `XbinPassBackend` and baked into the generated code, so there is no runtime backend trait and no doorbell methods (M6.5-T5) |
-| `rticx-xbin-mock` | `MockSystem`: aligned, zeroed in-process IPC **pools** (`add_pool(core_a, core_b, size)`, unordered duals, both directions resolving to the one backing, M6.9-T6), per-`(source → target)` condvar **pair doorbell message word** carrying the task id to the target's router (`doorbell_send`/`take_message`/`router_wait`, M6.5), per-handle `current_global_core_id`; two-thread spawn→drain over a raw `Fifo` notified through the pair word (M2-T3, M6.5-T5) |
+| `rticx-xbin-proto` | IDL parse/validate, layout engine, `ipc_types.rs` module generator with change-detecting write (`write_if_changed`), `rticx.toml` parse/validate (`[[application]]` `core_ids` + optional `external_cores`; no IPC memory), `Hash64`, `system.json` (schema 3) / manifest (schema 5) schemas, merge + validation + FIFO allocation over the distro capability graph (pool matching, shared per-dual budget), `system_view` emission and the canonical FIFO image (`fifo`) |
+| `rticx-xbin-driver` | `sync`: project discovery, per-application `cargo clean -p` + `cargo check` metadata collection, IDL parse, merge/validation, FIFO allocation, `system.json` emit, `target/rticx-xbin/ipc_types.rs` generation with change detection; `build`: `sync`, then `cargo build --package … --bin …` per application with `RTICX_XBIN_SYSTEM` pointing at the just-written view, optionally verifying each linked ELF against the pools (`--verify-elf`); `verify`: the same ELF check for a plain `cargo build` output (`--release` for the release profile) |
+| `rticx-xbin-pass` | metadata mode: `#[app]` additions (`device`, optional `cores`, the shared `dispatchers`; `core_ids`/`external_cores` rejected as moved to `rticx.toml`), the application's topology resolved from the nearest `rticx.toml` (`topology.rs`), native `#[sw_task]` cross receivers and the shared `dispatchers` pool parsed, its cross-line front stolen and the remainder re-emitted for the software/async pass, the per-core distro capability binding (physical core id + reachable pools), `<target>.xbin.json` emit, then terminates the compiler so the application is never parsed, analyzed, code-generated or type-checked in phase 1 (a producer may call a phase-2-only sender stub, and RTICX allows task bodies the `#[app]` macro cannot see); codegen mode: loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path) for every application listed in it, filters it by the application's cores and emits the generated sender stubs (`pub struct <Task>;` + pool-relative FIFO views + `Task::cross_spawn` for every view task it produces), the per-pair `__rticx_xbin_ring_{s}_{t}` / `__rticx_xbin_read_{s}_{t}` functions from the `XbinPassBackend` templates, the receiver FIFO views, the injected `CrossCoreMessage` marker trait plus the `pub mod ipc_types` re-emit of the generated module and the `SpawnInput: CrossCoreMessage` const assertion, one **line dispatcher** per `(source, priority)` line bound to the entry stolen from the front of `dispatchers` and one **doorbell router** per `(source → target)` pair, the init hooks (the distribution's `XbinPassBackend::configure_shared_memory` tokens inlined on every core and `__rticx_xbin_init_fifos_core<N>()` per producer core, no per-line arming) wired into the entry functions via `RticPass::main_injection`, the build-phase priority-line validation over the application's raw sw/async declarations plus the view's cross receivers, and the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of the view, of the generated module, of `rticx.toml` and of the IDL) plus the stale-view, stale-interface and stale-IDL hard errors; a discovered `rticx.toml` without a synced view is also a hard error, so plain `cargo build` never silently skips code generation. The pass is bound before `rticx-sw-pass` and requires the distribution's `swtasks` feature: sw-pass generates the `RticSwTask` trait the injected `task_trait = RticSwTask` receivers compile through and the `__rticx_local_irq_pend` the routers call, so without the feature the generated code fails on the unresolved trait |
+| `rticx-xbin-rt` | `Fifo<T, DEPTH>` atomic SPSC ring mirroring the canonical image (Vyukov, `Release`/`Acquire`, `AtomicU32` head/tail in an 8-byte header, `view_at`/`init`/`split`), with a drift guard against `rticx-xbin-proto` and a threaded hand-off test; the `Queue` re-export backing the generated line ready queues. It is a pure shared-memory data-structure runtime: the pool base, the executing core id and the doorbell transport are all resolved at compile time by `XbinPassBackend` and baked into the generated code, so there is no runtime backend trait and no doorbell methods |
+| `rticx-xbin-mock` | `MockSystem`: aligned, zeroed in-process IPC **pools** (`add_pool(core_a, core_b, size)`, unordered duals, both directions resolving to the one backing), per-`(source → target)` condvar **pair doorbell message word** carrying the task id to the target's router (`doorbell_send`/`take_message`/`router_wait`), per-handle `current_global_core_id`; two-thread spawn→drain over a raw `Fifo` notified through the pair word |
 
 No public API of the root workspace changes in v1; the generated code only
 uses the frozen external `task_trait` surface.
 
 ## 3. Phase 1: `cargo xbin sync`
 
-*Landed through M1-T7:* `sync` parses `rticx.toml` and `ipc-types.toml`, lays
+*Implemented:* `sync` parses `rticx.toml` and `ipc-types.toml`, lays
 out `target/rticx-xbin/` and, for every `[[application]]`, runs
 `cargo clean -p <package>` + `cargo check -p <package> --bin <target>` with
 `RTICX_XBIN_META_OUT=<output dir>`; the pass writes `<target>.xbin.json`, which
 `sync` reads back. The manifests are then merged and validated by
-`rticx_xbin_proto::merge_project` (M1-T5; pool-aware since M6.9-T4): it resolves
+`rticx_xbin_proto::merge_project` (pool-aware): it resolves
 global core ids, matches the two endpoints' distro capability entries into IPC
 pools, checks the receiver topology (`spawn_by` visibility in both directions),
 priority disjointness, type existence and pool-budget fit, and yields a
 `MergedProject` with the deterministic per-task FIFO allocations inside the
 shared per-dual budgets.
-`rticx_xbin_proto::system_view` (M1-T6) then emits the sealed `system.json`
+`rticx_xbin_proto::system_view` then emits the sealed `system.json`
 view and `sync` writes it. When the project has an
 `ipc-types.toml`, `rticx_xbin_proto::generate_module` builds the generated
 `target/rticx-xbin/ipc_types.rs` module in memory and `write_if_changed`
-(M1-T7) rewrites it only when its contents differ. The module is plain text
+rewrites it only when its contents differ. The module is plain text
 next to `system.json`; the cross-binary pass re-emits it into each
 application's `#[app]` module (section 4), so there is no crate, no
 `Cargo.toml` and no `rticx-xbin-rt` dependency to keep in sync. An
@@ -87,10 +87,10 @@ the path). The `crates/mock/fixtures/metadata` project covers this end to end.
    `RTICX_XBIN_META_OUT=<dir>`; the pass writes `<app>.xbin.json` (package/
    target, interface fingerprint, cross receivers with their `SpawnInput` type
    paths, priorities, capacities, and the per-local-core distro capability
-   binding: physical core id and reachable pools, M6.9-T2). The manifest
-   (schema 5) carries no topology echo since M7-T2: the application's `core_ids`
+   binding: physical core id and reachable pools). The manifest
+   (schema 5) carries no topology echo: the application's `core_ids`
    and `external_cores` are read from `rticx.toml` by the pass. There are no
-   sender declarations since M5.5: the driver infers each task's single
+   sender declarations: the driver infers each task's single
    producer application from the receivers' `spawn_by`.
 3. Parse `ipc-types.toml`, compute canonical layout, validate the subset.
 4. Merge and validate:
@@ -98,24 +98,23 @@ the path). The `crates/mock/fixtures/metadata` project covers this end to end.
      is listed in the receiver's `external_cores`, and the producer
      application lists the receiver's core in its `external_cores`;
    - per-target priority lines disjoint across producer cores (collisions with
-     the target application's own tasks are checked by the pass at `build`,
-     M6-T1);
+     the target application's own tasks are checked by the pass at `build`);
    - referenced types exist and are cross-core safe;
    - global core ids consistent across apps and `rticx.toml`;
    - the capability entries match pairwise into pools: same pool id with
      opposite physical cores, the same shared budget and swapped
      base views (`IpcPoolMismatch` otherwise); a used `(source -> target)`
      direction with no pool is `NoIpcPath`; the per-core pool views must not
-     overlap (`PoolViewOverlap`), M6.9-T4.
+     overlap (`PoolViewOverlap`).
 5. Allocate FIFO offsets deterministically (inside the merge): sort by
    `(source_global, target_global, task_name)`, align each FIFO to 8 bytes,
    depth = `capacity + 1`, and place both directions of a dual inside its one
    shared pool budget; the first FIFO that does not fit fails with the task,
-   dual and pool named in the error (`PoolBudgetExceeded`, M6.9-T4).
+   dual and pool named in the error (`PoolBudgetExceeded`).
 6. Write `target/rticx-xbin/system.json`
    (`rticx_xbin_proto::system_view`: copies the merged view, computes the
    doorbell lines, sets `layout_hash` and seals `topology_hash`).
-7. Generate/update `target/rticx-xbin/ipc_types.rs` and report changes (M1-T7).
+7. Generate/update `target/rticx-xbin/ipc_types.rs` and report changes.
 
 `system.json` shape (schema 3): `schema_version`, `rticx_generation`,
 `topology_hash`, `layout_hash`, `apps`, `cores` (each with its distro
@@ -130,10 +129,7 @@ section is the human-readable reference for both.
 
 ## 4. Phase 2: `cargo xbin build`
 
-*Sender side landed in M3-T1, the receiver dispatchers in M3-T2, the init
-hooks in M3-T3 and the M6.5 router/line-dispatcher split in M6.5; the
-freshness anchors and hard errors landed in M3-T4. `cargo xbin build` runs
-phase 2 for every application in M4-T1: after
+*`cargo xbin build` runs phase 2 for every application: after
 `sync`, the driver builds each `[[application]]` with
 `cargo build --package <package> --bin <target>` and
 `RTICX_XBIN_SYSTEM=<project root>/target/rticx-xbin/system.json`, so the pass
@@ -150,31 +146,31 @@ own cores and emits, per app:
 - a generated sender stub (`pub struct <Task>;`) plus the sender-side FIFO
   view at the task's pool view (`base_local`) + pool-relative offset for every
   view task whose
-  `spawner_core` belongs to the application (M3-T1/M5.5/M6.9-T6; no local input
+  `spawner_core` belongs to the application (no local input
   queue, no forwarder). The producer source declares nothing; a generated stub
   name colliding with a user item is a dedicated compile error;
 - receiver-side FIFO views plus, per `(source → target, priority)` line, one
   generated **line dispatcher**: a `#[task(binds = <dispatchers entry>,
   priority, core, init = generated)]` hardware task whose `exec` drains the
   line's ready queue and, per popped task, drains its FIFO until empty and
-  calls the receiver task's `exec(input)` (M6.5-T4). One **doorbell router**
+  calls the receiver task's `exec(input)`. One **doorbell router**
   per `(source → target)` pair runs at the pair's highest line priority, reads
   task ids from the pair doorbell word and pends the line dispatcher through
   the software pass's `__rticx_local_irq_pend[_core{N}]`; unknown ids are
-  ignored (M6.5-T3). The native `#[sw_task]` receiver structs themselves are
+  ignored. The native `#[sw_task]` receiver structs themselves are
   rewritten into `#[task(priority, core, task_trait = RticSwTask,
   init = generated)]` (preserving `shared`), the same external-`task_trait`
   shape the single-binary software-task pass uses, so the core pass generates
-  the task static and enforces the user's `impl RticSwTask` (M3-T2/M5.5);
+  the task static and enforces the user's `impl RticSwTask`;
 - `Task::cross_spawn(input)`: runtime global-core guard, enqueue inside
   `__rticx_interrupt_free` (v1), then call the per-pair ring function
   `__rticx_xbin_ring_{source}_{target}(task_id)`; `Ok(())` / `Err(None)`
   (enqueued, notification failed) / `Err(Some(input))` (not enqueued: full
-  FIFO or wrong core) (M3-T1/M6.5-T2);
+  FIFO or wrong core);
 - init hooks: `configure_shared_memory` on every core before its user `init`
-  and `init_fifos_core<N>` on every producer core before its `post_init`
-  (M3-T3/M6-T1). No per-line arming: the router IRQs are enabled and
-  prioritized by the core pass's used-IRQ machinery (M6.5-T4);
+  and `init_fifos_core<N>` on every producer core before its `post_init`.
+  No per-line arming: the router IRQs are enabled and
+  prioritized by the core pass's used-IRQ machinery;
 - IDL types: the injected `pub unsafe trait CrossCoreMessage: Copy + 'static`
   plus a `pub mod ipc_types` that re-emits the tokens of the driver-generated
   `target/rticx-xbin/ipc_types.rs` (wrapped with `use super::CrossCoreMessage;`
@@ -182,18 +178,18 @@ own cores and emits, per app:
   code names `ipc_types::TypeX` inside `#[app]` without a checked-in crate or a
   runtime dependency. The pass rejects a user `CrossCoreMessage`/`ipc_types`
   item in the app module, and an `include_str!` anchor keeps rustc rebuilding
-  the application when the file changes (M1-T7); a second `include_str!` anchor
+  the application when the file changes; a second `include_str!` anchor
   on `ipc-types.toml` makes a pure IDL edit re-run the macro so the stale-IDL
-  check below can fire (Phase 3);
+  check below can fire;
 - assertions: layout consts, `__RTICX_XBIN_TOPOLOGY_HASH`, FIFO bounds and
-  alignment (layout consts in M3-T1, freshness in M3-T4), the application's
+  alignment, the application's
   interface fingerprint against the view and the live IDL layout hash against
-  `layout_hash` (M3-T4/Phase 3), and the
-  `SpawnInput: CrossCoreMessage` const assertion per receiver (M5.5).
+  `layout_hash`, and the
+  `SpawnInput: CrossCoreMessage` const assertion per receiver.
 
 Every application listed in the view is processed, including ones that declare
 no cross task (their stubs are still generated and every core still runs the
-shared-memory configure hook, M5.5). The
+shared-memory configure hook). The
 generated `#[task]` items use the core pass's external `task_trait` paths, and
 the receivers require the distribution's `swtasks` feature (see section 2), so
 the root workspace is untouched. Async cross-binary tasks remain out of scope
@@ -205,10 +201,10 @@ Identical inputs must produce byte-identical `system.json`. FIFO allocation
 is sorted, JSON output is canonical. `topology_hash` covers the merged view;
 each app embeds `const __RTICX_XBIN_TOPOLOGY_HASH: u64` and fails to compile
 on mismatch with a "run `cargo xbin sync`" hint. Phase 2 recomputes the
-topology hash from the loaded view (`load_system`, M3-T4), recomputes the
+topology hash from the loaded view (`load_system`), recomputes the
 application's `interface_hash` against the one recorded at sync time
-(`check_interface_hash`, M3-T4) and recomputes the IDL's live layout hash
-against the view's `layout_hash` (`check_idl_hash`, Phase 3); each mismatch is
+(`check_interface_hash`) and recomputes the IDL's live layout hash
+against the view's `layout_hash` (`check_idl_hash`); each mismatch is
 a hard error naming `cargo xbin sync`.
 
 The interface fingerprint covers only the parts the driver merges into the
@@ -233,7 +229,7 @@ them changes.
 
 ## 6. Memory and layout
 
-- **Pools are distro-owned (M6.9).** `rticx.toml` declares no IPC memory. The
+- **Pools are distro-owned.** `rticx.toml` declares no IPC memory. The
   distribution exposes a *capability binding* — `physical_core(local_core)` and
   `ipc_pools(local_core)` — and one **pool per unordered core pair** (a
   *dual*). Each `IpcPool` names the peer physical core, this core's view
@@ -249,23 +245,22 @@ them changes.
   in `rticx_xbin_proto::fifo`.
 - Canonical layout: `repr(C)`, little-endian, natural alignment capped at 4;
   `bool`/pointers/64-bit scalars rejected by the IDL subset.
-- Runtime FIFO (`rticx_xbin_rt::Fifo<T, DEPTH>`, M2-T1): atomic SPSC ring,
+- Runtime FIFO (`rticx_xbin_rt::Fifo<T, DEPTH>`): atomic SPSC ring,
   head/tail as 4-byte `AtomicU32` indices in an 8-byte header (Release publish /
   Acquire consume), element in place, `Copy` payload, `view_at(addr)`
   placement, `split()` producer/consumer endpoints; deliberately `!Sync` so
   safe code cannot alias the FIFO. The pass places each view at the pool base
   recorded in `system.json` (both directions of a dual share one pool and
-  budget, M6.9-T6)
+  budget)
   plus the task's pool-relative offset; a host/mock backend whose pools are
-  heap-backed substitutes its own base through `XbinPassBackend::ipc_base_override`
-  (D3).
+  heap-backed substitutes its own base through `XbinPassBackend::ipc_base_override`.
 - Cache/MPU: `XbinPassBackend::configure_shared_memory` makes the executing
   core's view of the pools **effectively non-cacheable and shared** by whatever
   mechanism the platform provides (see
   [Cache policy and supported platforms](#cache-policy-and-supported-platforms)).
   There are no cache hooks: a cacheable mapping without transport-owned cache
-  maintenance is unsupported in v1 (D2).
-- Link-time verification (M6.9-T7): `cargo xbin build --verify-elf` /
+  maintenance is unsupported in v1.
+- Link-time verification: `cargo xbin build --verify-elf` /
   `cargo xbin verify` parse each linked ELF with `object` and reject an
   `SHF_ALLOC` section or the stack bound symbol intersecting a pool view of the
   application's cores, and a distro `__rticx_xbin_pool_<id>_start/_end` that
@@ -313,7 +308,7 @@ the FIFO directly instead of queueing a copy.
 > heterogeneous Cortex-M parts in the M7+M4 class, all homogeneous multicore
 > M-class parts whose cores have no data cache, and most multicore RISC-V MCUs.
 > A cacheable shared region without the cache maintenance the transport would
-> have to perform is unsupported in v1 (D2). Cores that also lack cross-core
+> have to perform is unsupported in v1. Cores that also lack cross-core
 > atomic primitives (for example ARMv6-M, which has no `LDREX`/`STREX`)
 > additionally require a distribution-provided cross-core lock; `portable-atomic`'s
 > `critical-section` fallback is local-core only and is not sufficient.
@@ -333,8 +328,7 @@ plus the per-distro hook — not a compile-time gate.
   `check_uniform_spawn_by` to the project view). `sync` rejects
   producer-vs-producer collisions from the manifests; the pass rejects a cross
   receiver sharing its line with the target application's own
-  `#[sw_task]`/`#[async_task]` declarations, which only exist at `build`
-  (M6-T1). The driver never shifts priorities.
+  `#[sw_task]`/`#[async_task]` declarations, which only exist at `build`. The driver never shifts priorities.
 - One dispatcher line per `(source, priority)` on a target core, taken from
   the cross-line front of the application's shared `dispatchers` pool in
   ascending `(source, priority)` order; the generated dispatcher runs at the
@@ -342,8 +336,7 @@ plus the per-distro hook — not a compile-time gate.
   software/async pass for the local task dispatchers. One doorbell
   router per `(source → target)` pair runs at the pair's highest line
   priority and pends the line dispatchers, so a router is at least as urgent
-  as every dispatcher it wakes and enqueueing happens before the pend
-  (M6.5).
+  as every dispatcher it wakes and enqueueing happens before the pend.
 
 ## 8. Boot sequencing (distribution-owned) and reset
 
@@ -354,13 +347,13 @@ before IPC or the router interrupts are used, most naturally through
 `CorePassBackend::post_init` (the H7 and RP2040 distributions release their
 secondary core there) or its own `RticPass::main_injection`.
 
-The generated code wires exactly two boot hooks (M3-T3, M6-T1):
+The generated code wires exactly two boot hooks:
 
 - the distribution's `XbinPassBackend::configure_shared_memory(local_core)`
   tokens are inlined at the start of each core's generated entry, before the
   user `init`: memory attributes are per-core, so each core makes its own view
   of the IPC pools effectively non-cacheable and shared before any generated
-  access (D1);
+  access;
 - `__rticx_xbin_init_fifos_core<N>()` runs on every core that produces
   cross-binary tasks, before that core's `post_init`: it zeroes the ring
   indices of exactly the FIFOs the core produces (its outbound half of each
@@ -369,7 +362,7 @@ The generated code wires exactly two boot hooks (M3-T3, M6-T1):
 
 The router IRQs are enabled and prioritized by the core pass's used-IRQ
 machinery from the generated router `#[task(binds = …)]`, so there is no
-per-line arming step (M6.5-T4).
+per-line arming step.
 
 The generated `cross_spawn` does not gate on a target-readiness flag: it checks
 the caller's core, enqueues the input in the task's FIFO and rings the pair's
@@ -394,28 +387,28 @@ discarded with it.
 
 ## 9. Distribution/backend contract
 
-The distribution is the single owner of IPC memory (M6.9): it chooses the pool
+The distribution is the single owner of IPC memory: it chooses the pool
 addresses and aliases, the shared per-dual budget, the cache/MPU policy and the
 linker reservations, and reports them through the single code-generation
 contract `rticx_xbin_pass::XbinPassBackend`:
 
 | Binding | Emits / names |
 |---|---|
-| `physical_core(local_core) -> PhysicalCore` | the distro physical-core id of a local core, used to match the two endpoints of a dual (M6.9-T1) |
-| `ipc_pools(local_core) -> Vec<IpcPool>` | the adjacency: every pool (dual) this core can reach, with the peer, both views and the shared budget (M6.9-T1) |
+| `physical_core(local_core) -> PhysicalCore` | the distro physical-core id of a local core, used to match the two endpoints of a dual |
+| `ipc_pools(local_core) -> Vec<IpcPool>` | the adjacency: every pool (dual) this core can reach, with the peer, both views and the shared budget |
 | `ring_doorbell_fn(source, target, template)` | `__rticx_xbin_ring_{source}_{target}(task_id) -> Result<(), ()>` on the producer side |
 | `doorbell_interrupt(target, source) -> Ident` | the router's `binds` |
 | `read_doorbell_msg_fn(target, source, template)` | `__rticx_xbin_read_{source}_{target}() -> Option<u32>` on the target side |
 | `custom_interrupt_path(core)` | the interrupt type the router pends through (mirrors the software pass's backend) |
 | `rt_path()` / `ipc_types_path()` | the generated code's runtime `Fifo` path and injected `ipc_types` module path |
-| `current_global_core_id()` | the expression of the executing core's global id, used by the `cross_spawn` core guard (required, D5) |
-| `configure_shared_memory(local_core)` | the statements making local core `local_core`'s pool view effectively non-cacheable and shared (mechanism-agnostic), inlined at `BeforeInit` (D1) |
-| `ipc_base_override(view_core, source, target)` | an optional runtime pool-base expression for host/mock backends; real fixed-address distributions keep the default `None` and the pass emits the literal `system.json` address (D3) |
+| `current_global_core_id()` | the expression of the executing core's global id, used by the `cross_spawn` core guard (required) |
+| `configure_shared_memory(local_core)` | the statements making local core `local_core`'s pool view effectively non-cacheable and shared (mechanism-agnostic), inlined at `BeforeInit` |
+| `ipc_base_override(view_core, source, target)` | an optional runtime pool-base expression for host/mock backends; real fixed-address distributions keep the default `None` and the pass emits the literal `system.json` address |
 
 A portable implementation writes the task id to a per-pair shared atomic word
 and triggers one IRQ; hardware with a payload-capable doorbell can implement
 the same contract directly. The router IRQ is enabled and prioritized by the
-core pass's used-IRQ machinery (no `doorbell_setup` call remains, M6.5).
+core pass's used-IRQ machinery (no `doorbell_setup` call remains).
 
 The pass bakes the pool base (the literal `system.json` address, or the
 `ipc_base_override` expression) and the executing core id into the generated
@@ -423,22 +416,22 @@ helpers, so the generated code threads **no runtime backend value**:
 `rticx-xbin-rt` is a pure shared-memory data-structure runtime (`Fifo` plus the
 ready `Queue`), and the transport is the generated per-pair ring/read bodies
 above. The platform-support rule and the cacheable-mapping caveat are in
-section 6; there are no cache hooks (D2). Boot sequencing is distribution-owned.
+section 6; there are no cache hooks. Boot sequencing is distribution-owned.
 The
 distribution also ships the linker reservations that keep each pool out of
 every binary's `.data`/`.bss`; `cargo xbin build --verify-elf` / `cargo xbin
-verify` independently check the linked images against the pools (M6.9-T7).
+verify` independently check the linked images against the pools.
 
 ## 10. Failure modes
 
 | Failure | Detection | Behaviour |
 |---|---|---|
 | topologies disagree (receiver `spawn_by` visibility, priorities, FIFO overflow) | `sync` merge | hard error naming the offending task/pool |
-| the two endpoints of a dual report inconsistent capabilities | `sync` merge | `IpcPoolMismatch` naming the pool and dual (M6.9-T4) |
-| a used `(source -> target)` direction has no distro pool | `sync` merge | `NoIpcPath` naming the task and cores (M6.9-T4) |
-| the FIFOs of a dual do not fit its shared budget | `sync` allocation | `PoolBudgetExceeded` with needed vs. reserved bytes (M6.9-T4) |
-| two pool views overlap on one core | `sync` merge | `PoolViewOverlap` naming both pools and the core (M6.9-T4) |
-| a linked binary places allocated data (or its stack bound) on a pool | `cargo xbin build --verify-elf` / `verify` | `Overlap`/`StackOverlap` naming the application, section/symbol, range and pool; a distro pool bound symbol that disagrees with `system.json` is `PoolBounds` (M6.9-T7) |
+| the two endpoints of a dual report inconsistent capabilities | `sync` merge | `IpcPoolMismatch` naming the pool and dual |
+| a used `(source -> target)` direction has no distro pool | `sync` merge | `NoIpcPath` naming the task and cores |
+| the FIFOs of a dual do not fit its shared budget | `sync` allocation | `PoolBudgetExceeded` with needed vs. reserved bytes |
+| two pool views overlap on one core | `sync` merge | `PoolViewOverlap` naming both pools and the core |
+| a linked binary places allocated data (or its stack bound) on a pool | `cargo xbin build --verify-elf` / `verify` | `Overlap`/`StackOverlap` naming the application, section/symbol, range and pool; a distro pool bound symbol that disagrees with `system.json` is `PoolBounds` |
 | app interface or IDL changed since `sync` | recorded `interface_hash` / `layout_hash` / `TOPOLOGY_HASH` / dep-info | compile error: run `cargo xbin sync` |
 | FIFO full or caller on the wrong core | runtime check in `cross_spawn` | `Err(Some(input))`, input returned |
 | doorbell ring failed | runtime | `Err(None)` (already enqueued) |
@@ -447,39 +440,40 @@ verify` independently check the linked images against the pools (M6.9-T7).
 
 Unit (IDL/layout goldens, allocator determinism, every validation error,
 native-syntax extraction and `spawn_by` resolution (identity default, in-app
-global→local mapping, external classification, unknown-core error, M5.5),
+global→local mapping, external classification, unknown-core error),
 codegen snapshots — including a receiver expansion run through the full core
-pass and compiled on the host (M3-T2), a receiver with `shared` passed through
+pass and compiled on the host, a receiver with `shared` passed through
 to the core pass, an application declaring no cross task receiving its
-generated stubs, a missing `RticSwTask` failing to compile (M5.5), and the
-generated init hooks executed against the mock (M3-T3) —, JSON round-trip);
+generated stubs, a missing `RticSwTask` failing to compile, and the
+generated init hooks executed against the mock —, JSON round-trip);
 host mock (two threads over `rticx-xbin-rt`, backpressure);
 cross-compile layout checks (`thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
 optionally `riscv32imc`); the in-tree two-app fixture `crates/mock/fixtures/e2e` built via
-`cargo xbin build` (M4-T1), with its own mock distribution so the generated
+`cargo xbin build`, with its own mock distribution so the generated
 phase-2 code compiles and links on the host.
-M4-T2 expands both fixture applications into one host binary and drives the
-generated code end to end: `cross_spawn` on the sender, the per-pair ring
+The extended runtime harness expands both fixture applications into one host
+binary and drives the generated code end to end: `cross_spawn` on the sender, the per-pair ring
 function, the generated router ISR, the pended line dispatcher, input
 verification and FIFO backpressure (`Err(Some(input))`), including coalesced
-and duplicate notifications (M6.5-T3/T5). M4-T3 adds the negative acceptance
-suite: a plain build without a synced view, an interface changed after `sync`, a
+and duplicate notifications. The negative acceptance suite adds
+a plain build without a synced view, an interface changed after `sync`, a
 hand-edited `system.json`, a priority line shared by two source cores, an input
 type absent from the IDL, an edited IDL after `sync` and a pool budget too
 small for its FIFOs, each asserted against its documented message.
-M6-T1 adds the three-application fixture `crates/mock/fixtures/three-app` (two producers
-onto one receiver, two lines and two per-pair routers) built via `cargo xbin
-build`, the build-phase priority-line validation tests (cross vs. core-local
+The three-application fixture `crates/mock/fixtures/three-app` (two producers
+onto one receiver, two lines and two per-pair routers) is built via `cargo xbin
+build`, alongside the build-phase priority-line validation tests (cross vs.
+core-local
 sw/async, vs. in-app `spawn_by`, cross-producer collisions, same-producer
 sharing) and the extended runtime harness: three applications in one process,
 spawns from both producer cores drained through their own router and
 dispatcher, per-source backpressure, and the non-owner producer initializing
 its own pool half.
-M6-T3 completes this document and the [user guide](user-guide.md): the
-commands and listings there describe the same `cargo xbin sync`/`build` path
+This document and the [user guide](user-guide.md) describe the same
+`cargo xbin sync`/`build` path
 that the tests above exercise over `crates/mock/fixtures/e2e` and `crates/mock/fixtures/three-app`, so
 a fresh reader follows tested steps.
-M6.9 makes the distro the single owner of IPC memory: `proto/tests/merge.rs`
+The distribution is the single owner of IPC memory: `proto/tests/merge.rs`
 pins the capability graph (symmetric/mismatched entries, impossible links, the
 shared per-dual budget fitting two directions together but not separately, and
 overflow), `proto/tests/{alloc,system}.rs` pin the schema-2 `pools[]` and
@@ -490,21 +484,21 @@ overlap naming the section and pool, the standalone `verify`), and the
 `visualize` module tests pin one panel per pool (both directions in one panel,
 occupied-extent scaling, the unpooled fallback). `crates/mock/fixtures/metadata` binds the
 mock capability table (shared through `xbin-mock-capability`) so `sync` emits
-`pools[]` and physical core ids for the metadata-only fixture too (M6.9-T9).
+`pools[]` and physical core ids for the metadata-only fixture too.
 
 ## 12. Open questions
 
 - `Producer` shared resource replacing `cross_spawn` for SRP locking.
 - Async cross-binary tasks and cross-binary locks are explicitly out of scope
-  for v1; the pass requires the distribution's `swtasks` feature (M5.5).
-- A **project-level pool pin** (M6.9 decided against one): pools are distro
+  for v1; the pass requires the distribution's `swtasks` feature.
+- A **project-level pool pin** (deliberately not added): pools are distro
   vocabulary, so two images built by one `cargo xbin sync` stay consistent and
   the topology hash catches drift, but a **pre-built peer image** would silently
   break if a distro change relocates a pool. A pin becomes worth adding if an
   independently built peer appears.
-- **ELF verification is detection, not prevention** (M6.9-T7): it sees static
+- **ELF verification is detection, not prevention**: it sees static
   `SHF_ALLOC` sections only, not runtime stack/heap growth, and its symbol
   checks need the unstripped link output.
-- Pool budgets are shared per dual (M6.9): a busy direction can exhaust the
+- Pool budgets are shared per dual: a busy direction can exhaust the
   other's room. A larger distro budget is the documented fix; the per-dual
   budget is deliberate, to avoid fragmentation.

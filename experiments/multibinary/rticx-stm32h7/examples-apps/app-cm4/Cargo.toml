@@ -3,7 +3,7 @@ name = "app-cm4"
 version = "0.1.0"
 edition.workspace = true
 publish = false
-description = "Cortex-M4 side of the rticx-stm32h7 acceptance demo (M7-T1)"
+description = "Cortex-M4 side of the rticx-stm32h7 acceptance demo"
 
 [[bin]]
 name = "cm4"

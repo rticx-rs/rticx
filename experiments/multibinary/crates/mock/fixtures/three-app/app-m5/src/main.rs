@@ -1,4 +1,4 @@
-//! Second application of the three-application fixture (M6-T1).
+//! Second application of the three-application fixture.
 //!
 //! Global core 2 participates in both directions of its two pairs:
 //!
@@ -6,14 +6,14 @@
 //!   (priority 6) on `app-m4` (global core 1) through the `(2 -> 1)` region,
 //!   and `HeartbeatTask` (priority 6) on `app-m7` (global core 0) through the
 //!   `(2 -> 0)` region. Like the other producer it declares nothing; the
-//!   cross-binary pass injects the synced `ipc_types` module (M5.5);
+//!   cross-binary pass injects the synced `ipc_types` module;
 //! - as a **receiver** it executes `ConfigTask` (priority 5), spawned by global
 //!   core 0 over `(0 -> 2)`, and `StatusTask` (priority 3), spawned by global
 //!   core 1 over `(1 -> 2)`.
 //!
 //! `dispatchers` lists the cross-binary lines first: one interrupt per cross
 //! line in ascending `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the
-//! `(0, 5)` dispatcher and `XBIN_IPC_LINE_1` the `(1, 3)` one (M6.5-T1).
+//! `(0, 5)` dispatcher and `XBIN_IPC_LINE_1` the `(1, 3)` one.
 #![no_main]
 
 use xbin_mock_distro::app;

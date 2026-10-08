@@ -8,7 +8,7 @@ The extension is experimental and lives in its own workspace
 release process.
 
 1. [Installing `cargo-xbin`](#1-installing-cargo-xbin)
-2. [Project layout](#2-project-layout)
+2. [Project layout](#2-multibin-multicore-project-layout)
 3. [Writing `rticx.toml`](#3-writing-rticxtoml)
 4. [Writing `ipc-types.toml`](#4-writing-ipc-typestoml)
 5. [Declaring cross-binary tasks](#5-declaring-cross-binary-tasks)
@@ -62,7 +62,7 @@ receiver). Section 6 walks through `e2e/`.
 
 ## 3. Writing `rticx.toml`
 
-*Implemented (M0; IPC memory removed in M6.9-T3).* Parsed and validated by
+*Implemented.* Parsed and validated by
 `cargo xbin sync`; canonical rendering is available through
 `rticx_xbin_proto::ProjectConfig::to_toml_string`.
 
@@ -75,7 +75,7 @@ receiver). Section 6 walks through `e2e/`.
 | `core_ids` | array of integers | yes | local core index `i` maps to the globally unique id `core_ids[i]` |
 | `external_cores` | array of integers | no | global core ids in other binaries this application can see; must be disjoint from its own `core_ids` |
 
-That is the whole schema: since M6.9 the project declares **no IPC memory**.
+That is the whole schema: the project declares **no IPC memory**.
 The distribution owns it and exposes a *capability binding* — which core pairs
 it can reach, through which pool, with each core's view and a shared per-dual
 budget — which each application records in its metadata manifest. A leftover
@@ -107,11 +107,11 @@ them, and the system view records them. `#[app]` no longer accepts `core_ids` or
 `external_cores` — the pass reads them from here (section 5). Each application
 also reports the distribution's **physical core id** for its cores; the driver
 matches the two endpoints of a dual through it and allocates both directions of
-the pair inside one shared pool budget (M6.9-T4).
+the pair inside one shared pool budget.
 
 ## 4. Writing `ipc-types.toml`
 
-*Implemented (M0 parser, M1 generation).* `rticx_xbin_proto::{parse_idl_str,
+*Implemented.* `rticx_xbin_proto::{parse_idl_str,
 parse_idl_file}` plus the canonical
 [layout engine](architecture.md#6-memory-and-layout) checks the 32-bit-safe
 subset. `cargo xbin sync` writes `target/rticx-xbin/ipc_types.rs` from this
@@ -163,7 +163,7 @@ module (for example one holding `impl RticSwTask`) reaches the types through
 
 ## 5. Declaring cross-binary tasks
 
-*Implemented (M5.5).* Cross-binary receivers are **ordinary native software
+*Implemented.* Cross-binary receivers are **ordinary native software
 tasks**: a `#[sw_task]` struct plus `impl RticSwTask` with a `SpawnInput`
 associated type. The extension adds no xbin-specific attribute or trait, and
 the receiver declaration is the only declaration of the task. The pass parses
@@ -235,7 +235,7 @@ the software/async pass, so the convention is *cross lines first, then local
 task dispatchers*. Within the stolen front the entries must be unique: two cross
 lines cannot share one interrupt.
 
-At runtime a spawn travels through the M6.5 dispatch chain: `cross_spawn`
+At runtime a spawn travels through the dispatch chain: `cross_spawn`
 checks the caller's core, enqueues the input in the task's FIFO and calls the
 generated per-pair ring function, which
 publishes the task id on the pair's doorbell word and triggers the target's
@@ -352,7 +352,7 @@ The pass is bound **before** `rticx-sw-pass` and requires the distribution's
 core pass compiles the receiver through its external `task_trait` mechanism.
 Without the feature `RticSwTask` is undefined and the receiver fails to
 compile. A distribution that does **not** bind the extension pass never reads
-`rticx.toml`: `core_ids` is understood natively by `rticx-core` (M5) and
+`rticx.toml`: `core_ids` is understood natively by `rticx-core` and
 `external_cores` only warns as an unknown `#[app]` argument, while `spawn_by`
 keeps the local-index reading — so cross-binary declarations require the pass.
 
@@ -602,7 +602,7 @@ mod app {
 ```
 
 Each producer gets its own pool, ring function, router and dispatcher line. See
-[architecture §7](architecture.md#7-priorities-and-locking) for why the
+[architecture: priorities and locking](architecture.md#7-priorities-and-locking) for why the
 priority lines must be disjoint.
 
 ## 7. Building and running
@@ -627,20 +627,20 @@ application that stops expanding its `#[app]` macro fails with a clear error.
 Without `rticx.toml`, `sync` and `build` stay no-ops.
 
 The collected manifests carry only receiver declarations — there are no sender
-declarations since M5.5, the driver infers each task's single producer
-application from the receivers' `spawn_by` — and are then merged and validated
-(M1-T5): every receiver's `spawn_by` must name a single core in another
+declarations, the driver infers each task's single producer
+application from the receivers' `spawn_by` — and are then merged and validated:
+every receiver's `spawn_by` must name a single core in another
 application, be listed in the receiver's `external_cores`, and the producer
 application must list the receiver's core in its `external_cores` (both read
 from `rticx.toml`); every referenced type must exist in the IDL; and the per-task
 FIFOs must fit their dual's shared distro pool budget. The same
-deterministic pass allocates every FIFO address (8-byte aligned, plan order,
-depth `capacity + 1`) inside the pool, sharing one budget between both
-directions of the dual (M6.9-T4); the first FIFO that does not fit names its
-task, dual and pool in the error. The sealed system view is written to
-`target/rticx-xbin/system.json` (M1-T6), and — when the project has an
-`ipc-types.toml` — `target/rticx-xbin/ipc_types.rs` is generated/updated
-(M1-T7). `sync` prints one `created`/`updated` line naming that file, or
+deterministic pass allocates every FIFO address (8-byte aligned, global
+task-name order, depth `capacity + 1`) inside the pool, sharing one budget
+between both directions of the dual; the first FIFO that does not fit names
+its task, dual and pool in the error. The sealed system view is written to
+`target/rticx-xbin/system.json`, and — when the project has an
+`ipc-types.toml` — `target/rticx-xbin/ipc_types.rs` is generated/updated.
+`sync` prints one `created`/`updated` line naming that file, or
 `target/rticx-xbin/ipc_types.rs is up to date` when nothing changed; since the
 file is rewritten only when its contents change, an unchanged IDL does not
 retrigger the applications that re-emit it.
@@ -650,7 +650,7 @@ After `sync`, `build` compiles every `[[application]]` with
 when the application declares one) and `RTICX_XBIN_SYSTEM` pointing at the
 `system.json` it just wrote, so the pass generates the cross-binary code and
 the freshness checks reject a stale view, a changed cross-binary interface or a
-stale IDL (M4-T1). `build` always runs `sync` first; a plain `cargo build` after
+stale IDL. `build` always runs `sync` first; a plain `cargo build` after
 an explicit `sync` is supported, but fails with a staleness error (stale
 `system.json`, a changed interface fingerprint, or an edited `ipc-types.toml`)
 once the synced inputs change, until the next `sync`. The fingerprint covers
@@ -665,7 +665,7 @@ fingerprint. Both errors name `cargo xbin sync`. Without a synced view (for
 example after `cargo clean`), every
 application listed in the view — even one declaring no cross task — fails with
 ``failed to read the system view …; run `cargo xbin sync` `` instead of
-silently generating no code (M5.5 removed the cross-declaration gate).
+silently generating no code.
 
 ### 7.2 Running on real hardware
 
@@ -697,7 +697,7 @@ different triple, linker script or MPU configuration); Cargo supports a
 `.cargo/config.toml` per package for that. The in-tree fixtures use the host
 mock instead: `.cargo/config.toml` is absent, the apps build for the host, and
 the runtime harnesses exercise the generated code (section 7.6). The
-out-of-tree STM32H7 acceptance demo (M7) is the reference for a real
+out-of-tree STM32H7 acceptance demo is the reference for a real
 M7+M4/Renode setup.
 
 ### 7.3 Expected boot order
@@ -717,7 +717,7 @@ shared memory and zeroes the FIFOs each core produces:
    FIFO lives in shared memory; otherwise the distribution must order the boot
    itself. Handling a reset is likewise a distribution responsibility, not a
    framework one
-   ([architecture §8](architecture.md#8-boot-sequencing-distribution-owned-and-reset)).
+   ([architecture: boot sequencing and reset](architecture.md#8-boot-sequencing-distribution-owned-and-reset)).
 
 ### 7.4 Cache and MPU checklist
 
@@ -732,7 +732,7 @@ source of runtime-only failures:
   embedded MCUs: all heterogeneous Cortex-M parts in the M7+M4 class, all
   homogeneous multicore M-class parts whose cores have no data cache, and most
   multicore RISC-V MCUs. A cacheable shared region without the cache maintenance
-  the transport would have to perform is unsupported in v1 (D2). Cores that also
+  the transport would have to perform is unsupported in v1. Cores that also
   lack cross-core atomic primitives (for example ARMv6-M, which has no
   `LDREX`/`STREX`) additionally require a distribution-provided cross-core lock;
   `portable-atomic`'s `critical-section` fallback is local-core only and is not
@@ -763,7 +763,7 @@ source of runtime-only failures:
 ### 7.5 For distribution authors: pools, linker reservations and ELF verification
 
 Everything in this section is the **distribution author's** responsibility.
-Since M6.9 the project (`rticx.toml`) declares no IPC memory: the distribution
+The project (`rticx.toml`) declares no IPC memory: the distribution
 owns the pools, their addresses and aliases, the shared budget, and the linker
 reservations that keep them out of every binary's allocated data. 
 
@@ -879,7 +879,7 @@ build instead of corrupting IPC at runtime.
 
 ## 8. Common errors
 
-*Parser errors (M0):*
+*Parser errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
@@ -889,13 +889,13 @@ build instead of corrupting IPC at runtime.
 | ``global core id N is declared by both ...`` | core ids must be unique across applications |
 | ```application[0].external_cores` lists core id N more than once`` | list each foreign core once |
 | ```application[0].external_cores` lists core id N, which this application owns via `core_ids` `` | `external_cores` must be disjoint from the application's own `core_ids` |
-| ```[ipc.regions]` was removed: IPC memory is owned by the distribution's capability binding `` | delete the table; since M6.9 the distribution owns the IPC pools (section 7.5) |
+| ```[ipc.regions]` was removed: IPC memory is owned by the distribution's capability binding `` | delete the table; the distribution owns the IPC pools (section 7.5) |
 | ``references unknown type `T` `` | declare `[message.T]` or `[enum.T]` in `ipc-types.toml` |
 | ``cyclic message reference: A -> B -> A`` | break the cycle; messages are stored inline |
 | ``message `FooBar` and message `Foo_Bar` would both generate the constant `SIZE_FOO_BAR` `` | rename one IDL type so the generated constants stay unique |
 | ``failed to write the generated `ipc_types` module at `…` `` | fix the permissions or the conflicting path under `target/rticx-xbin/` |
 
-*Metadata collection errors (M1-T4):*
+*Metadata collection errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
@@ -903,7 +903,7 @@ build instead of corrupting IPC at runtime.
 | `` `cargo check --package x --bin b` failed `` | fix the application's compile errors; `cargo check` diagnostics follow |
 | `` `cargo check` for package `x` did not write `.../<b>.xbin.json` `` | bind the cross-binary pass in the application's `#[app]` macro |
 
-*Merge/validation errors (M1-T5):*
+*Merge/validation errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
@@ -924,14 +924,14 @@ build instead of corrupting IPC at runtime.
 | ``IPC pool `P` between cores A and B is not reported consistently by both endpoints`` | make the two applications' capability entries symmetric (same id, budget, swapped bases) |
 | ``the `P` and `Q` pool views overlap on core N`` | give the core's pool views disjoint address ranges |
 
-*Build-phase priority-line errors (M6-T1):*
+*Build-phase priority-line errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
 | ``cross-binary receiver `T` is scheduled at priority P on global core N, but the software task `L` (spawned by global core N) already owns that priority line`` | give the receiver a priority no core-local `#[sw_task]`/`#[async_task]` (or in-app `spawn_by` task) of that core uses |
 | ``cross-binary receiver `T` is scheduled at priority P on global core N, but the cross-binary receiver `U` (spawned by global core M) already owns that priority line`` | producers of one target core must declare disjoint priorities; `sync` normally catches this already |
 
-*Build-phase dispatcher errors (M6.5):*
+*Build-phase dispatcher errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
@@ -939,7 +939,7 @@ build instead of corrupting IPC at runtime.
 | `` `dispatchers` lists `IRQ` more than once for local core N; each cross line needs its own interrupt line `` | two cross lines of one core cannot share an interrupt; give each its own entry in the front of `dispatchers` |
 | ``Expected N dispatchers, but found M.`` (raised by the software/async pass) | the remainder the xbin pass left for the local tasks is too short: append one interrupt per remaining local priority group. **Known confusing:** the pass only sees that remainder, so `found` counts the leftover entries, not the combined cross + local demand — compare `expected` against your local priority groups, not the full `dispatchers` length |
 
-*Freshness/staleness errors (M3-T4, M4-T3):*
+*Freshness/staleness errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
@@ -949,7 +949,7 @@ build instead of corrupting IPC at runtime.
 | ``receiver `T` declares priority …, but the synced system view has …`` (also `capacity`, `core`, `input type`, `spawn_by`) | a per-field receiver edit is reported by the field-level `resolve_receiver` check before the interface fingerprint; run `cargo xbin sync` |
 | ``the IDL `ipc-types.toml` changed since the last `cargo xbin sync` (the system view records layout hash …, the current IDL hashes to …)`` | `ipc-types.toml` was edited after the last `sync`; run `cargo xbin sync` before a plain `cargo build` |
 
-*Runtime, cache and IRQ symptoms (M6-T3):* these appear only on hardware; the
+*Runtime, cache and IRQ symptoms:* these appear only on hardware; the
 host fixtures in section 7.6 cannot reproduce them.
 
 | Symptom | Likely cause | Fix |

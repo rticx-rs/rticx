@@ -17,15 +17,15 @@
 //! assert_eq!(receiver.global_core_id(), 1);
 //! ```
 //!
-//! A pool is backed by an 8-byte-aligned, zeroed in-process array (the
-//! "array" variant of the plan's `mmap`/array choice) and carries the FIFOs of
-//! **both** directions of its dual: [`MockSystem::pool_base`] resolves the
-//! same address for `(a, b)` and `(b, a)` (M6.9-T6). The doorbell transport
-//! is the per-`(source -> target)` **pair message word** of the M6.5 router
+//! A pool is backed by an 8-byte-aligned, zeroed in-process array rather than
+//! an `mmap`, and carries the FIFOs of **both** directions of its dual:
+//! [`MockSystem::pool_base`] resolves the same address for `(a, b)` and
+//! `(b, a)`. The doorbell transport is the per-`(source -> target)` **pair
+//! message word** of the router
 //! ([`MockBackend::doorbell_send`], [`MockBackend::take_message`],
 //! [`MockBackend::router_wait`]): it carries the task id a producer publishes
 //! to the target's router, which then pends the line dispatcher. There are no
-//! per-line doorbell methods (M6.5).
+//! per-line doorbell methods.
 //!
 //! This crate is host-only test support: it is not `no_std` and provides no
 //! cache/MPU work, which is correct because host memory needs no cache
@@ -33,7 +33,7 @@
 //! so they are *not* at the addresses `system.json` records; the mock
 //! distribution's `XbinPassBackend::ipc_base_override` emits a call to
 //! [`MockBackend::pool_base`] so the generated FIFO views resolve the real
-//! address at runtime (D3).
+//! address at runtime.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -63,7 +63,7 @@ struct SystemInner {
     /// One backing per unordered core pair, keyed by `(core_a, core_b)` with
     /// `core_a < core_b`.
     pools: BTreeMap<(u32, u32), PoolBacking>,
-    /// Per-`(source -> target)` pair message words of the M6.5 doorbell
+    /// Per-`(source -> target)` pair message words of the doorbell
     /// routers, keyed by `(source, target)`.
     pair_doorbells: Mutex<BTreeMap<(u32, u32), Arc<PairDoorbell>>>,
 }
@@ -98,7 +98,7 @@ impl MockSystem {
     /// Declares the shared pool of the `{core_a, core_b}` dual with `size`
     /// bytes of zeroed, [`FIFO_ALIGN`]-aligned shared memory.
     ///
-    /// Both directions of the dual share this one block (M6.9-T6); the order
+    /// Both directions of the dual share this one block; the order
     /// of `core_a`/`core_b` is irrelevant. Both cores see the pool at the same
     /// base address (the mock has a single address space); the pool must be
     /// configured before any backend handle is taken.
@@ -149,7 +149,7 @@ impl MockSystem {
     ///
     /// The mock pools are heap-backed, so the generated FIFO views cannot use
     /// the addresses recorded in `system.json`; they call this through the
-    /// distribution's `ipc_base_override` instead (D3).
+    /// distribution's `ipc_base_override` instead.
     pub fn pool_base(&self, core_a: u32, core_b: u32) -> Option<usize> {
         self.inner
             .pools
@@ -205,7 +205,7 @@ impl MockBackend {
     ///
     /// This backs the generated FIFO views on the host: the mock pools are
     /// heap-backed, so the distribution overrides the synced literal base with
-    /// this lookup (D3). Both directions of a dual share one address.
+    /// this lookup. Both directions of a dual share one address.
     pub fn pool_base(&self, source: u32, target: u32) -> usize {
         self.system.pool_base(source, target).unwrap_or_else(|| {
             panic!("the mock backend was asked for the `{{{source}, {target}}}` pool, which was never declared")
@@ -213,7 +213,7 @@ impl MockBackend {
     }
 
     /// Publishes `task_id` to the `(source -> target)` pair message word and
-    /// triggers the target's router interrupt (M6.5-T2).
+    /// triggers the target's router interrupt.
     ///
     /// This is what the generated `__rticx_xbin_ring_{source}_{target}`
     /// function calls: it is the mock's portable doorbell transport. An
@@ -230,7 +230,7 @@ impl MockBackend {
     }
 
     /// Takes the pending task id of the `(source -> target)` pair message
-    /// word, or `None` when no notification is pending (M6.5-T3).
+    /// word, or `None` when no notification is pending.
     ///
     /// This is what the generated `__rticx_xbin_read_{source}_{target}`
     /// function calls; the router drains the word in a loop.
@@ -252,7 +252,7 @@ impl MockBackend {
 }
 
 /// The per-`(source -> target)` pair message word: the mock's doorbell
-/// transport for task-id routing (M6.5-T2/T3).
+/// transport for task-id routing.
 ///
 /// `message` holds the latest published task id (`0` means empty; the driver
 /// numbers tasks from 1), and the condition variable lets a test thread wait

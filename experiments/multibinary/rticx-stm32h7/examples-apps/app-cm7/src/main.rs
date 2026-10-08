@@ -1,4 +1,4 @@
-//! Cortex-M7 side of the rticx-stm32h7 demo (M7-T1 + M7-T2).
+//! Cortex-M7 side of the rticx-stm32h7 demo.
 //!
 //! Global core 0. The rticx-stm32h7 `#[app]` macro runs the core pass, the
 //! cross-binary pass and the software-tasks pass; the distribution's runtime
@@ -17,7 +17,7 @@
 //!
 //! `idle` waits until the M4 is up (the distribution's peer-up flag) and then
 //! starts the cross-binary ping-pong by calling the generated
-//! `PingTask::cross_spawn` (M7-T2). Each handler logs its hop and spawns the
+//! `PingTask::cross_spawn`. Each handler logs its hop and spawns the
 //! next one through the other core, so a single `renode/run.sh` boot shows both
 //! directions executing through the generated dispatch path.
 #![no_std]
@@ -66,8 +66,7 @@ pub mod app {
                 self.shared().console.lock(|console| {
                     let _ = writeln!(
                         console,
-                        "[M7] cross-binary ping-pong complete after {PING_PONG_LIMIT} hops \
-                         (M7-T2)"
+                        "[M7] cross-binary ping-pong complete after {PING_PONG_LIMIT} hops"
                     );
                 });
                 return;
@@ -75,7 +74,7 @@ pub mod app {
 
             // Answer the M4 through the generated `PingTask` sender stub: the
             // input is enqueued in the `(0 -> 1)` FIFO and the M4's HSEM1 router
-            // is rung (M7-T2).
+            // is rung.
             let _ = PingTask::cross_spawn(ipc_types::PingMsg {
                 seq: input.seq + 1,
                 value: input.value.wrapping_add(1),
@@ -110,10 +109,7 @@ pub mod app {
                 core::hint::spin_loop();
             }
             self.shared().console.lock(|console| {
-                let _ = writeln!(
-                    console,
-                    "[M7] Cortex-M4 up; starting the M7 -> M4 ping (M7-T2)"
-                );
+                let _ = writeln!(console, "[M7] Cortex-M4 up; starting the M7 -> M4 ping");
             });
 
             // Start the ping-pong; the M4's `PingTask::exec` answers with a pong

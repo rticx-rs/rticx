@@ -5,12 +5,12 @@ runs its own binary; cross-binary software-task spawns travel through a shared
 D2 SRAM3 pool with HSEM doorbells, reusing the RTICX task/dispatcher model of
 the multi-binary extension (`experiments/multibinary`).
 
-This is the M7 acceptance distribution: boot sequencing is distribution-owned.
+This is the acceptance distribution: boot sequencing is distribution-owned.
 The distribution's `post_init` hook clears the shared control area, releases the
 Cortex-M4 through `RCC_GCR.BOOT_C2` and then signals each core up through a
 distribution-owned boot flag; both cores map the shared pool through the MPU.
 The cross-binary transport is bound and generated, and the demo runs an M7↔M4
-software-task ping-pong through the generated `cross_spawn` stubs (M7-T2).
+software-task ping-pong through the generated `cross_spawn` stubs.
 
 ## Features
 
@@ -94,13 +94,13 @@ The M7 prints on USART1 and the M4 on USART2:
 [M7] boot; initializing shared IPC region
 [M7] shared region ready; waiting for the M4 to come up
 [M4] released by RCC_GCR.BOOT_C2; mapping shared region
-[M7] Cortex-M4 up; starting the M7 -> M4 ping (M7-T2)
-[M4] shared region mapped, HSEM1 receive enabled; peer-up signalled (M7-T1)
+[M7] Cortex-M4 up; starting the M7 -> M4 ping
+[M4] shared region mapped, HSEM1 receive enabled; peer-up signalled
 [M4] rx ping seq=1 value=0x00004d37
 [M7] rx pong seq=2 value=0x00004d38
 [M4] rx ping seq=3 value=0x00004d39
 [M7] rx pong seq=4 value=0x00004d3a
-[M7] cross-binary ping-pong complete after 4 hops (M7-T2)
+[M7] cross-binary ping-pong complete after 4 hops
 ```
 
 The ping-pong exercises both directions end to end: the M7 starts it by
@@ -116,7 +116,7 @@ that run the receiver tasks.
   is verified statically, not simulated.
 - Phase 1 (`cargo xbin sync`) does not type-check the applications: the pass
   terminates the compilation right after writing its manifest, and the typed
-  sender stubs are generated and checked at `cargo xbin build` (M7-T2).
+  sender stubs are generated and checked at `cargo xbin build`.
 
 ## License
 

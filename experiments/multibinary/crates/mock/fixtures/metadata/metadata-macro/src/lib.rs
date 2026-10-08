@@ -2,9 +2,10 @@
 //!
 //! It runs only the cross-binary metadata pass, which is enough for
 //! `cargo xbin sync` to collect `<target>.xbin.json` on the host. The real
-//! distributions run the full core pass and are exercised in M3/M4.
+//! distributions run the full core pass and are exercised by the build
+//! fixtures.
 //!
-//! Since M6.9-T9 the stand-in binds the mock distribution's capability table
+//! The stand-in binds the mock distribution's capability table
 //! (shared through `xbin-mock-capability`), so the fixture manifests carry the
 //! physical core ids and IPC pools `sync` needs to emit `system.json` schema 2.
 //! Only `physical_core`/`ipc_pools` are reached in metadata mode; the codegen
@@ -25,7 +26,7 @@ use xbin_mock_capability::fixture_pools;
 ///
 /// The mock's physical-core vocabulary is the global core id, so the local
 /// index is mapped through the application's resolved `rticx.toml` topology
-/// exactly like the real mock distribution does (M6.9-T1, M7-T2).
+/// exactly like the real mock distribution does.
 struct MetadataCapabilityBackend {
     /// Local core index -> global core id, resolved from `rticx.toml`;
     /// empty for the identity default.
@@ -108,7 +109,7 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-/// Resolves the application's topology from the nearest `rticx.toml` (M7-T2).
+/// Resolves the application's topology from the nearest `rticx.toml`.
 ///
 /// A standalone project with no `rticx.toml` falls back to the identity
 /// mapping over the declared `cores` (default 1), exactly like the pass.

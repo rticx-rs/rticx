@@ -279,7 +279,7 @@ impl CorePassBackend for Stm32H7Rtic {
 
 // ======================================= Cross-binary backend =======================================
 
-/// Compile-time half of the distro contract (M6.9-T1, M6.5).
+/// Compile-time half of the distro contract.
 struct Stm32H7XbinBackend;
 
 impl XbinPassBackend for Stm32H7XbinBackend {
@@ -289,13 +289,13 @@ impl XbinPassBackend for Stm32H7XbinBackend {
 
     fn current_global_core_id(&self) -> syn::Expr {
         // Each binary is single-core, so the core guard folds away to this
-        // binary's physical core id (D5).
+        // binary's physical core id.
         parse_quote!(rticx_stm32h7::xbin::CURRENT_CORE)
     }
 
     fn configure_shared_memory(&self, _local_core: u32) -> Option<TokenStream2> {
         // Each binary runs one physical core, so `local_core` is always 0:
-        // the MPU mapping and the HSEM receive interrupt are per-core (D1).
+        // the MPU mapping and the HSEM receive interrupt are per-core.
         Some(quote!(rticx_stm32h7::xbin::configure_shared_memory();))
     }
 
@@ -427,7 +427,7 @@ mod tests {
     }
 
     /// The core guard folds to this binary's physical core id: a single-core
-    /// binary has no runtime core lookup (D5).
+    /// binary has no runtime core lookup.
     #[test]
     fn current_global_core_id_is_the_binarys_constant_core() {
         assert_eq!(
@@ -440,7 +440,7 @@ mod tests {
     }
 
     /// The generated entry configures this core's MPU view and enables its
-    /// HSEM receive interrupt before the user `init` (D1); the physical cores
+    /// HSEM receive interrupt before the user `init`; the physical cores
     /// use the same free function.
     #[test]
     fn configure_shared_memory_emits_the_distro_free_function() {
@@ -455,7 +455,7 @@ mod tests {
     }
 
     /// The H7 pools are at the synced fixed addresses, so the distribution
-    /// never overrides the base (D3).
+    /// never overrides the base.
     #[test]
     fn ipc_base_override_stays_unset() {
         assert!(

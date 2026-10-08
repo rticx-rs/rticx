@@ -1,4 +1,4 @@
-//! Receiver application of the end-to-end fixture (M4-T1, M5.5).
+//! Receiver application of the end-to-end fixture.
 //!
 //! Global core 1 executes `EncryptTask` for spawns from the M7 binary (global
 //! core 0). The receiver is a native `#[sw_task]` plus `impl RticSwTask`; the
@@ -17,7 +17,7 @@ use xbin_mock_distro::app;
 mod app {
     /// Receiver task: one spawn input per execution, `EncryptReq` from the
     /// shared IDL. `RticSwTask` is generated inside this module by the
-    /// software pass the mock distribution binds (M6.5-T5).
+    /// software pass the mock distribution binds.
     #[sw_task(priority = 3, capacity = 2, spawn_by = 0)]
     pub struct EncryptTask;
 
@@ -25,7 +25,8 @@ mod app {
         type SpawnInput = ipc_types::EncryptReq;
 
         fn exec(&mut self, _input: Self::SpawnInput) {
-            // M4-T2 runs this through the generated doorbell dispatcher.
+            // The end-to-end driver test runs this through the generated
+            // doorbell dispatcher.
         }
     }
 

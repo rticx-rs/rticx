@@ -35,7 +35,7 @@ build:
 	$(CARGO) build -p rticx-stm32h7 --target $(M4_TRIPLE) --features cm4
 
 # Build the two acceptance binaries through the cross-binary driver, including
-# the linked-ELF pool verification (M6.9-T7).
+# the linked-ELF pool verification.
 examples:
 	cd $(APP_DIR) && $(CARGO_XBIN) build --verify-elf
 

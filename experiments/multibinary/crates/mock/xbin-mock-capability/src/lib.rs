@@ -1,13 +1,13 @@
-//! Fixture IPC capability table of the mock distributions (M6.9-T9).
+//! Fixture IPC capability table of the mock distributions.
 //!
 //! The `xbin-mock-distro` proc-macro half and the metadata-only
 //! `metadata-macro` fixture stand-in both need the same capability binding, so
 //! the mock vocabulary lives here in a normal library the two proc-macro
 //! crates can share. It is the compile-time counterpart of the runtime pools
-//! declared by `xbin-mock-runtime::system` (M6.9-T6).
+//! declared by `xbin-mock-runtime::system`.
 //!
 //! Physical cores 0, 1 and 2 are fully connected through the three duals
-//! `{0, 1}`, `{1, 2}` and `{0, 2}` (M6.9-T1). The mock has a single address
+//! `{0, 1}`, `{1, 2}` and `{0, 2}`. The mock has a single address
 //! space, so both endpoints of a dual see its base at the same address; the
 //! budget matches the runtime's 4096-byte pools.
 
@@ -16,7 +16,7 @@ use rticx_xbin_pass::{IpcPool, PhysicalCore, PoolId};
 /// Bytes reserved for both directions of one dual.
 pub const BUDGET: u32 = 4096;
 
-/// Every IPC pool the mock physical core `local` can reach (M6.9-T1).
+/// Every IPC pool the mock physical core `local` can reach.
 ///
 /// The entries are ordered by ascending peer for determinism; a physical core
 /// outside the fixture topology reaches nothing.

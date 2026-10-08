@@ -1,4 +1,4 @@
-//! Receiver application of the metadata fixture (M5.5).
+//! Receiver application of the metadata fixture.
 //!
 //! Executes `EncryptTask` for the M7 core (global core id 0) through the
 //! native `#[sw_task]` syntax. The local `RticSwTask` trait stands in for the

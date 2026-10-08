@@ -1,9 +1,9 @@
-# Project topology of the end-to-end fixture (M4-T1).
+# Project topology of the end-to-end fixture.
 #
 # `app-m7` owns global core 0 and `app-m4` global core 1; `EncryptTask` is
 # spawned by core 0 and runs on core 1.
 #
-# Since M6.9 the project declares no IPC memory: the mock distribution's
+# The project declares no IPC memory: the mock distribution's
 # capability binding (reported per application in the metadata manifests) maps
 # physical core 0 to physical core 1 through the `mock-0-1` pool, and its
 # 4096-byte budget carries the `0->1` FIFO. The mock runtime places the pool in

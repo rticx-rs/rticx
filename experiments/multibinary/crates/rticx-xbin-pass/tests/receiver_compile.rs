@@ -10,7 +10,9 @@
 //! the in-tree mock backend) and built on the host, which type-checks the
 //! generated FIFO views, dispatcher and task-trait calls.
 
-use std::path::{Path, PathBuf};
+mod support;
+
+use std::path::Path;
 use std::process::Command;
 
 use proc_macro2::TokenStream;
@@ -22,6 +24,7 @@ use rticx_core::{
 use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 use rticx_xbin_pass::{AppTopology, XbinPass, XbinPassBackend};
 use rticx_xbin_proto::SystemView;
+use support::{cargo, runtime_and_mock_paths};
 
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.
@@ -377,22 +380,9 @@ fn expand_without_sw_pass(system: &Path) -> String {
         .to_string()
 }
 
-fn cargo() -> PathBuf {
-    std::env::var_os("CARGO")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("cargo"))
-}
-
 /// Writes the throwaway project that compiles the expansion.
 fn write_project(root: &Path, expanded: &str) {
-    let rt = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../rticx-xbin-rt")
-        .canonicalize()
-        .expect("the runtime crate ships with the workspace");
-    let mock = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/rticx-xbin-mock")
-        .canonicalize()
-        .expect("the mock crate ships with the workspace");
+    let (rt, mock) = runtime_and_mock_paths();
 
     std::fs::create_dir_all(root.join("src")).expect("src dir");
     std::fs::write(

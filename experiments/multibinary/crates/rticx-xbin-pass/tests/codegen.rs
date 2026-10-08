@@ -14,65 +14,16 @@
 //! Environment-variable tests are serialized behind [`ENV_LOCK`] because the
 //! process environment is global.
 
+mod support;
+
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use rticx_core::{MainInjectionPoint, RticPass};
 use rticx_xbin_pass::{AppTopology, SYSTEM_ENV, XbinPass, XbinPassBackend};
 use rticx_xbin_proto::{Hash64, IPC_TYPES_FILE, IpcTypes, SystemView, layout_hash, parse_idl_str};
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-/// Saves and restores environment variables around a test that sets them.
-struct EnvGuard {
-    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-}
-
-impl EnvGuard {
-    fn set_all(vars: &[(&'static str, &std::ffi::OsStr)]) -> Self {
-        let saved = vars
-            .iter()
-            .map(|(name, _)| (*name, std::env::var_os(name)))
-            .collect();
-        for (name, value) in vars {
-            // SAFETY: the process environment is guarded by ENV_LOCK.
-            unsafe { std::env::set_var(name, value) };
-        }
-        Self { saved }
-    }
-
-    /// Removes `names` from the environment, restoring them on drop.
-    ///
-    /// Models compilers that leave a variable unset: rust-analyzer's
-    /// proc-macro server never defines `CARGO_BIN_NAME`.
-    fn unset_all(names: &[&'static str]) -> Self {
-        let saved = names
-            .iter()
-            .map(|name| (*name, std::env::var_os(name)))
-            .collect();
-        for name in names {
-            // SAFETY: the process environment is guarded by ENV_LOCK.
-            unsafe { std::env::remove_var(name) };
-        }
-        Self { saved }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (name, value) in &self.saved {
-            // SAFETY: the process environment is guarded by ENV_LOCK.
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-}
+use support::{ENV_LOCK, EnvGuard};
 
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.

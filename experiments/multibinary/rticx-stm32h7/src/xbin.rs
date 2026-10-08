@@ -30,9 +30,9 @@
 //!
 //! [`CURRENT_CORE`] is the executing core's id the pass inlines into the
 //! generated `cross_spawn` guard, and [`configure_shared_memory`] is the free
-//! function the pass injects at `BeforeInit` (D1). The pass emits the pool base
+//! function the pass injects at `BeforeInit`. The pass emits the pool base
 //! as the literal `system.json` address, so this module needs no runtime
-//! address lookup (D3).
+//! address lookup.
 
 use core::sync::atomic::Ordering;
 
@@ -191,7 +191,7 @@ fn doorbell_word(source: u32, target: u32) -> *const AtomicU32 {
 /// core. The target's router reads the word with [`doorbell_take`]. The word
 /// carries a single id, so a producer that rings twice before the target runs
 /// coalesces them; the target's line dispatcher drains its FIFOs until empty,
-/// which makes a lost duplicate id harmless (M6.5-T3).
+/// which makes a lost duplicate id harmless.
 pub fn doorbell_send(source: u32, target: u32, task_id: u32) {
     let word = doorbell_word(source, target);
     // SAFETY: this core is the single producer for the pair's word.
@@ -313,7 +313,7 @@ fn release_secondary_core() {
 fn release_secondary_core() {}
 
 /// Configures this core's view of the IPC pools and enables its cross-binary
-/// receive interrupt (D1).
+/// receive interrupt.
 ///
 /// The generated entry calls this before the user `init`, so the D2 SRAM3
 /// pool is mapped effectively non-cacheable and shared and the HSEM receive bank

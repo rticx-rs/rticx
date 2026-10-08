@@ -52,19 +52,29 @@ impl Hash64 {
     /// Parses the canonical hex form (with or without `0x`/`0X`, 1..=16
     /// hexadecimal digits).
     pub fn from_hex(text: &str) -> Result<Self, HashParseError> {
-        let digits = text
-            .strip_prefix("0x")
-            .or_else(|| text.strip_prefix("0X"))
-            .unwrap_or(text);
-        if digits.is_empty() || digits.len() > 16 {
-            return Err(HashParseError::invalid(text));
-        }
-        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(HashParseError::invalid(text));
-        }
+        let digits = strip_hex_digits(text, 16).ok_or_else(|| HashParseError::invalid(text))?;
         let value = u64::from_str_radix(digits, 16).map_err(|_| HashParseError::invalid(text))?;
         Ok(Self(value))
     }
+}
+
+/// Strips the optional `0x`/`0X` prefix from `text` and validates the
+/// remainder.
+///
+/// Returns the bare digit slice when it is non-empty, no longer than
+/// `max_digits` and made up entirely of ASCII hex digits; otherwise `None`.
+pub(crate) fn strip_hex_digits(text: &str, max_digits: usize) -> Option<&str> {
+    let digits = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text);
+    if digits.is_empty() || digits.len() > max_digits {
+        return None;
+    }
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(digits)
 }
 
 impl fmt::Display for Hash64 {

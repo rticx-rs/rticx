@@ -1,4 +1,4 @@
-//! Third application of the three-application fixture (M6-T1).
+//! Third application of the three-application fixture.
 //!
 //! Global core 1 is the busiest core: it receives from both other producers and
 //! produces back to both of them.
@@ -19,8 +19,8 @@
 //! `dispatchers` lists the cross-binary lines first: one interrupt per cross
 //! line in ascending `(source, priority)` order, so `XBIN_IPC_LINE_0` wakes the
 //! `(0, 3)` dispatcher, `XBIN_IPC_LINE_1` the `(0, 5)` one, `XBIN_IPC_LINE_2`
-//! the `(2, 4)` one and `XBIN_IPC_LINE_3` the `(2, 6)` one (M6.5-T1). The lines
-//! are disjoint across sources, which the pass enforces at build (M6-T1).
+//! the `(2, 4)` one and `XBIN_IPC_LINE_3` the `(2, 6)` one. The lines
+//! are disjoint across sources, which the pass enforces at build.
 #![no_main]
 
 use xbin_mock_distro::app;

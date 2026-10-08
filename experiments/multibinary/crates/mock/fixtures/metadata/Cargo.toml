@@ -1,4 +1,4 @@
-# Metadata fixture project (M1-T4).
+# Metadata fixture project.
 #
 # Standalone workspace, intentionally outside the experimental workspace: it
 # models a two-application `cargo xbin` project so the driver can be exercised
@@ -9,7 +9,7 @@
 # - `metadata-macro` is a minimal `#[app]` stand-in that runs only the
 #   cross-binary metadata pass: enough to write `<target>.xbin.json` under
 #   `RTICX_XBIN_META_OUT` without a target distribution. The real
-#   distributions run the full core pass and are exercised by the M3/M4
+#   distributions run the full core pass and are exercised by the build
 #   fixtures.
 #
 # Commanded by `rticx_xbin_driver::sync` from

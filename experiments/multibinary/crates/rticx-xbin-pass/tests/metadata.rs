@@ -5,7 +5,7 @@
 //! Environment-variable tests are serialized behind [`ENV_LOCK`] because the
 //! process environment is global.
 
-use std::sync::Mutex;
+mod support;
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -15,8 +15,7 @@ use rticx_xbin_pass::{
     AppTopology, IpcPool, META_OUT_ENV, PhysicalCore, PoolId, XbinPass, XbinPassBackend,
 };
 use rticx_xbin_proto::{AppManifest, MANIFEST_SCHEMA_VERSION};
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use support::{ENV_LOCK, EnvGuard};
 
 /// A receiver application: declares the native cross receiver task it
 /// executes for a remote core.
@@ -304,52 +303,17 @@ fn env_detection_switches_on_metadata_mode() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
 
-    struct EnvGuard {
-        saved: Vec<(&'static str, Option<String>)>,
-    }
-    impl EnvGuard {
-        fn set(name: &'static str, value: &str) -> Self {
-            let saved = vec![(name, std::env::var(name).ok())];
-            // SAFETY: the process environment is guarded by ENV_LOCK.
-            unsafe { std::env::set_var(name, value) };
-            Self { saved }
-        }
-        fn set_all(names: &[(&'static str, String)]) -> Self {
-            let saved = names
-                .iter()
-                .map(|(name, _)| (*name, std::env::var(name).ok()))
-                .collect();
-            for (name, value) in names {
-                // SAFETY: the process environment is guarded by ENV_LOCK.
-                unsafe { std::env::set_var(name, value) };
-            }
-            Self { saved }
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                // SAFETY: the process environment is guarded by ENV_LOCK.
-                unsafe {
-                    match value {
-                        Some(value) => std::env::set_var(name, value),
-                        None => std::env::remove_var(name),
-                    }
-                }
-            }
-        }
-    }
-
     // Without the trigger variable the pass stays disabled.
     let _unset = EnvGuard::set(META_OUT_ENV, "");
     // SAFETY: the process environment is guarded by ENV_LOCK.
     unsafe { std::env::remove_var(META_OUT_ENV) };
     assert!(!XbinPass::from_env().is_metadata_mode());
 
+    let meta_out = dir.path().display().to_string();
     let _env = EnvGuard::set_all(&[
-        (META_OUT_ENV, dir.path().display().to_string()),
-        ("CARGO_PKG_NAME", "fixture-pkg".to_string()),
-        ("CARGO_BIN_NAME", "fixture-bin".to_string()),
+        (META_OUT_ENV, std::ffi::OsStr::new(&meta_out)),
+        ("CARGO_PKG_NAME", std::ffi::OsStr::new("fixture-pkg")),
+        ("CARGO_BIN_NAME", std::ffi::OsStr::new("fixture-bin")),
     ]);
     assert!(
         XbinPass::from_env().is_metadata_mode(),

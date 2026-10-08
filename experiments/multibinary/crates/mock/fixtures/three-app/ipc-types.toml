@@ -1,4 +1,4 @@
-# Type-only IDL of the three-application fixture (M6-T1).
+# Type-only IDL of the three-application fixture.
 #
 # Every cross-binary task of the three applications draws its spawn input from
 # one of these messages. The sizes vary (4, 8 and 12 bytes) so the visualization

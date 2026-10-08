@@ -7,7 +7,7 @@
  * The Cortex-M7 runs from flash bank 1 and uses D1 AXI SRAM for data and
  * stack. The cross-binary IPC pool lives in D2 SRAM3, which is *not* part of
  * this `MEMORY` map, so no `.data`/`.bss`/`.noinit` section can land in it;
- * the pool's bounds are exported for the `cargo xbin` ELF verifier (M6.9-T7).
+ * the pool's bounds are exported for the `cargo xbin` ELF verifier.
  */
 MEMORY
 {
@@ -17,6 +17,6 @@ MEMORY
 
 /* `h7-sram3` IPC pool, Cortex-M7 view (`0x3004_0000 + 0x1000`). Plain
  * assignments (not `PROVIDE`) so the absolute symbols are always emitted for
- * the `cargo xbin` ELF verifier (M6.9-T7). */
+ * the `cargo xbin` ELF verifier. */
 __rticx_xbin_pool_h7_sram3_start = 0x30041000;
 __rticx_xbin_pool_h7_sram3_end   = 0x30042000;

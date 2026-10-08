@@ -15,7 +15,7 @@ members = [
     "crates/mock/xbin-mock-capability",
     "crates/mock/xbin-mock-distro",
     "crates/mock/xbin-mock-runtime",
-    # STM32H7 (Cortex-M7 + Cortex-M4) cross-binary distribution (M7-T1). Its
+    # STM32H7 (Cortex-M7 + Cortex-M4) cross-binary distribution. Its
     # `no_std` library only compiles for the Cortex-M targets, so it is a
     # member (its macro/bindings share the workspace) but not a default member:
     # build it with `--target` and exactly one of `cm7`/`cm4`.
@@ -52,14 +52,15 @@ homepage = "https://github.com/rticx-rs/rticx/wiki"
 # --- external ---
 clap = { version = "4.5", features = ["derive"] }
 heck = "0.5.0"
-# `read` + `std` parse the linked ELF for `cargo xbin build --verify-elf`
-# (M6.9-T7); the compression/default features are not needed.
+# `read` + `std` parse the linked ELF for `cargo xbin build --verify-elf`;
+# the compression/default features are not needed.
 object = { version = "0.39", default-features = false, features = ["read", "std"] }
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 syn = { version = "2.0.53", features = ["extra-traits", "full"] }
+tempfile = "3.27.0"
 thiserror = "1.0.63"
 # `preserve_order`: message field declaration order must be preserved by the
 # parser -- the canonical layout depends on it.

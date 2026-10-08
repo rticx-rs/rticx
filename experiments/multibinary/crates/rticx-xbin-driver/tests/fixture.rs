@@ -5,8 +5,6 @@
 //! `crates/mock/fixtures/metadata`, read back one manifest per application, and merge the
 //! manifests into the validated project view.
 
-use std::path::{Path, PathBuf};
-
 use rticx_xbin_driver::{IPC_TYPES_FILE, SYSTEM_FILE, sync};
 use rticx_xbin_proto::{
     DoorbellEntry, FifoEntry, FileChange, Hash64, PoolEntry, RTICX_GENERATION,
@@ -14,17 +12,13 @@ use rticx_xbin_proto::{
 };
 use tempfile::tempdir;
 
-/// Root of the checked-in metadata fixture.
-fn fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../mock/fixtures/metadata")
-        .canonicalize()
-        .expect("the metadata fixture ships with the driver crate")
-}
+mod common;
+
+use common::fixture_root;
 
 #[test]
 fn sync_collects_a_manifest_for_every_fixture_application() {
-    let root = fixture_root();
+    let root = fixture_root("metadata");
     let output_dir = root.join("target/rticx-xbin");
 
     // A manifest left over from an earlier run must never be read back.
