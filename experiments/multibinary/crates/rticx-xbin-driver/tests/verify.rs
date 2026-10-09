@@ -16,13 +16,15 @@ use rticx_xbin_driver::{build, build_and_verify, verify, verify_binary};
 
 mod common;
 
-use common::fixture_root;
+use common::{fixture_lock, fixture_root};
 
 /// The `build --verify-elf` outcome, shared by the tests so the fixture is
 /// built (and verified) only once.
 ///
-/// The fixture is a standalone Cargo workspace below `crates/mock/fixtures/e2e`; building
-/// it is expensive, and Cargo serializes concurrent builds on its lock anyway.
+/// The fixture is a standalone Cargo workspace below `crates/mock/fixtures/e2e`;
+/// building it is expensive. Callers must hold [`fixture_lock`]: the plain
+/// `build`/`verify` workflows below mutate the same workspace, and running them
+/// concurrently with this build corrupts the shared `target/` state.
 fn verified_build() -> &'static rticx_xbin_driver::BuildOutcome {
     static OUTCOME: OnceLock<rticx_xbin_driver::BuildOutcome> = OnceLock::new();
     OUTCOME.get_or_init(|| {
@@ -51,6 +53,7 @@ fn first_allocated_section(binary: &Path) -> (String, u64) {
 
 #[test]
 fn build_with_verify_elf_passes_for_the_fixture() {
+    let _guard = fixture_lock();
     let outcome = verified_build();
 
     assert_eq!(outcome.builds.len(), 2, "both applications build");
@@ -88,6 +91,7 @@ fn build_with_verify_elf_passes_for_the_fixture() {
 
 #[test]
 fn an_overlapping_pool_view_is_rejected_with_the_pool_named() {
+    let _guard = fixture_lock();
     let outcome = verified_build();
     let build = outcome
         .builds
@@ -127,6 +131,7 @@ fn an_overlapping_pool_view_is_rejected_with_the_pool_named() {
 
 #[test]
 fn verify_checks_the_plain_cargo_build_output() {
+    let _guard = fixture_lock();
     // Ensure the project was synced and built first (the plain workflow).
     let outcome = verified_build();
 
@@ -144,6 +149,7 @@ fn verify_checks_the_plain_cargo_build_output() {
 
 #[test]
 fn building_without_verification_reports_no_verifications() {
+    let _guard = fixture_lock();
     // `build` (without `--verify-elf`) must stay cheap: no verifications.
     let root = fixture_root("e2e");
     let outcome = build(&root).expect("`cargo xbin build` succeeds");

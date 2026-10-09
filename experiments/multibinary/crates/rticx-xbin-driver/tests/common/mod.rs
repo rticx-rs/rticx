@@ -11,8 +11,25 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use tempfile::tempdir;
+
+/// Serializes tests that build or read a shared, checked-in fixture.
+///
+/// `sync`/`build`/`verify` all run Cargo against the same standalone fixture
+/// workspace: `sync` removes and rewrites `target/rticx-xbin/*` (including the
+/// per-application `<target>.xbin.json` manifests) while a concurrent build
+/// links into `target/`. Two of them at once race; the reproduction was a
+/// `RemoveManifest { … NotFound }` from the check-then-remove in
+/// `collect_manifest`. Tests that touch a shared fixture (rather than a
+/// [`fixture_copy`] or their own tempdir) take this guard.
+pub fn fixture_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// The `cargo` executable Cargo itself invoked the tests with.
 pub fn cargo() -> PathBuf {
