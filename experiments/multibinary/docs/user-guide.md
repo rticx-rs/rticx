@@ -1,89 +1,105 @@
 # User guide
 
-This guide covers the multi-binary /
-heterogeneous multi-core extension as implemented in `experiments/multibinary/`.
+This guide shows how to build a **multi-binary / heterogeneous multicore**
+RTICX application: one Cargo binary per core (or core group), where a task in
+one binary can spawn a software task in another binary through a typed,
+cross-core message.
 
-The extension is experimental and lives in its own workspace
+The extension is **experimental** and lives in its own workspace
 (`experiments/multibinary/`), deliberately outside the root workspace and its
-release process.
+release process. This guide is task-oriented; the internals — the two-phase
+build, hashing, memory layout, locking and the distribution/backend contract —
+are documented in [architecture.md](architecture.md).
 
-1. [Installing `cargo-xbin`](#1-installing-cargo-xbin)
-2. [Project layout](#2-multibin-multicore-project-layout)
-3. [Writing `rticx.toml`](#3-writing-rticxtoml)
-4. [Writing `ipc-types.toml`](#4-writing-ipc-typestoml)
-5. [Declaring cross-binary tasks](#5-declaring-cross-binary-tasks)
-6. [Worked example: the two-application fixture](#6-worked-example-the-two-application-fixture)
-7. [Building and running](#7-building-and-running)
-8. [Common errors](#8-common-errors)
+**Contents**
+
+1. [What you get](#1-what-you-get)
+2. [Install `cargo-xbin`](#2-install-cargo-xbin)
+3. [Project layout](#3-project-layout)
+4. [Project topology: `rticx.toml`](#4-project-topology-rticxtoml)
+5. [Shared types: `ipc-types.toml`](#5-shared-types-ipc-typestoml)
+6. [Declaring cross-binary tasks](#6-declaring-cross-binary-tasks)
+7. [Worked example](#7-worked-example)
+8. [Building and running](#8-building-and-running)
+9. [Common errors](#9-common-errors)
 
 ---
 
-## 1. Installing `cargo-xbin`
+## 1. What you get
+
+- **One binary per core.** A project is a Cargo workspace whose members are the
+  per-core applications. Each application is a normal RTICX `#[app]`; tasks,
+  priorities, resources and `#[init]`/`#[idle]` work exactly as in a
+  single-binary application.
+- **Cross-binary spawn.** A producer calls `Task::cross_spawn(input)`. The input
+  travels through a driver-allocated FIFO and is delivered to the
+  `exec(input)` of a software task declared in the receiving binary.
+- **Typed shared data.** Shared message and enum types are declared once in a
+  small IDL file and generated into every application — no shared crate.
+- **Validated at build time.** `cargo xbin sync` checks the topology, types,
+  priorities and pool budgets before anything is compiled; `cargo xbin build`
+  compiles every binary against that sealed view.
+
+## 2. Install `cargo-xbin`
+
+From the repository root:
 
 ```bash
 cargo install --path experiments/multibinary/crates/rticx-xbin-driver
 ```
 
-(Run that from the repository root.) Cargo discovers external subcommands by
-`<name>` on `PATH`, so `cargo-xbin` is invoked as `cargo xbin`. Verify with:
+Cargo discovers external subcommands by `<name>` on `PATH`, so `cargo-xbin` is
+invoked as `cargo xbin`. Verify with:
 
 ```bash
 cargo xbin --help
 ```
 
-Run `cargo xbin` from inside a multicore project cargo workspace or one of the crates of the workspace.
-the driver discovers the project root by walking up from the current directory until it finds `rticx.toml`, and
-runs Cargo from there.
+Run `cargo xbin` from inside a multicore project's Cargo workspace (or from any
+of its crates). The driver finds the project root by walking up from the current
+directory until it sees `rticx.toml`, and runs Cargo from there.
 
-## 2. Multibin Multicore Project layout
+## 3. Project layout
 
 ```text
 my-project/
-├── Cargo.toml            # (optional) cargo workspace
-├── rticx.toml            # RTICX Multicore project workspace describing the topology (cores, applications)
-├── ipc-types.toml        # shared data types, the type-only IDL
+├── Cargo.toml            # (optional) Cargo workspace
+├── rticx.toml            # topology: which binary runs on which core(s)
+├── ipc-types.toml        # shared data types (the type-only IDL)
 ├── .cargo/config.toml    # target triple, linker, runner (as usual)
 └── app-m7/, app-m4/      # one Cargo package per binary
 ```
 
-`target/rticx-xbin/` is driver output; it is regenerated, not edited:
+`cargo xbin` writes everything it generates under `target/rticx-xbin/`. That
+directory is regenerated, never edited:
 
 ```text
 target/rticx-xbin/
 ├── <app>.xbin.json       # per-application metadata, written by `cargo xbin sync`
-├── system.json           # merged, validated, allocated system view
-└── ipc_types.rs          # generated IDL types; re-emitted into each `#[app]`
+├── system.json           # the merged, validated, allocated system view
+└── ipc_types.rs          # the generated IDL types; re-emitted into each `#[app]`
 ```
 
-The repository ships complete examples under
-`experiments/multibinary/crates/mock/fixtures/`: `e2e/` (two applications, one cross task),
-`metadata/` (metadata phase only) and `three-app/` (two producers onto one
-receiver). Section 6 walks through `e2e/`.
+Complete examples ship under `experiments/multibinary/crates/mock/fixtures/`:
+`e2e/` (two applications, one cross task), `metadata/` (metadata phase only) and
+`three-app/` (two producers onto one receiver). Section 7 walks through `e2e/`.
 
-## 3. Writing `rticx.toml`
+## 4. Project topology: `rticx.toml`
 
-*Implemented.* Parsed and validated by
-`cargo xbin sync`; canonical rendering is available through
-`rticx_xbin_proto::ProjectConfig::to_toml_string`.
+`rticx.toml` is the only place the project's cores are declared. `schema` must
+be `1`, and each `[[application]]` describes one binary:
 
-`schema` must be `1`. Each `[[application]]` declares one binary:
+| Key | Required | Meaning |
+|---|---|---|
+| `package` | yes | Cargo package name |
+| `target` | yes | `{ kind = "bin", name = "<bin>", triple = "<triple>"? }`; `kind` is `"bin"` in v1, `triple` overrides `.cargo/config.toml` |
+| `core_ids` | yes | local core index `i` maps to globally unique id `core_ids[i]` |
+| `external_cores` | no | global core ids in other binaries this application can see; must be disjoint from its own `core_ids` |
 
-| Key | Type | Required | Meaning |
-|---|---|---|---|
-| `package` | string | yes | Cargo package name |
-| `target` | table | yes | `{ kind = "bin", name = "<bin>", triple = "<triple>"? }`; `kind` is `"bin"` in v1, `triple` overrides `.cargo/config.toml` |
-| `core_ids` | array of integers | yes | local core index `i` maps to the globally unique id `core_ids[i]` |
-| `external_cores` | array of integers | no | global core ids in other binaries this application can see; must be disjoint from its own `core_ids` |
-
-That is the whole schema: the project declares **no IPC memory**.
-The distribution owns it and exposes a *capability binding* — which core pairs
-it can reach, through which pool, with each core's view and a shared per-dual
-budget — which each application records in its metadata manifest. A leftover
-`[ipc.regions]` table is a hard `sync` error naming the removal. Addresses and
-pool budgets are the distribution author's concern (section 7.5); the project
-author only maps applications to cores and declares their visibility.
-
-Example (the `crates/mock/fixtures/e2e` topology):
+The project declares **no IPC memory**. The distribution owns the IPC pools
+(their addresses, aliases and shared budgets) and exposes which core pairs it
+can reach; the project author only maps applications to cores and declares
+their visibility. A leftover `[ipc.regions]` table is rejected by `sync`.
 
 ```toml
 schema = 1
@@ -101,26 +117,16 @@ core_ids = [1]
 external_cores = [0]
 ```
 
-`rticx.toml` is the only place global core ids are declared: the `#[app]` macro
-uses them in the runtime core checks, `external_cores`/`spawn_by` refer to
-them, and the system view records them. `#[app]` no longer accepts `core_ids` or
-`external_cores` — the pass reads them from here (section 5). Each application
-also reports the distribution's **physical core id** for its cores; the driver
-matches the two endpoints of a dual through it and allocates both directions of
-the pair inside one shared pool budget.
+These global core ids are what `spawn_by` and `external_cores` refer to, and what
+the generated code uses in its runtime core checks. `#[app]` no longer accepts
+`core_ids` or `external_cores` — they are read from here.
 
-## 4. Writing `ipc-types.toml`
+## 5. Shared types: `ipc-types.toml`
 
-*Implemented.* `rticx_xbin_proto::{parse_idl_str,
-parse_idl_file}` plus the canonical
-[layout engine](architecture.md#6-memory-and-layout) checks the 32-bit-safe
-subset. `cargo xbin sync` writes `target/rticx-xbin/ipc_types.rs` from this
-file: the generated module contains the `#[repr(C)]` types, the
-`SIZE_*`/`ALIGN_*`/`OFF_*` layout constants, the `LAYOUT_HASH` and the
-compile-time layout assertions. The file is rewritten only when its contents
-change, so an unchanged IDL is a no-op. The cross-binary pass then re-emits the
-file into each application's `#[app]` module as `pub mod ipc_types` (see
-section 5), so user code writes `ipc_types::EncryptReq` with no crate
+Cross-binary messages must be `#[repr(C)]`, 32-bit-safe types. Declare them once
+here; `cargo xbin sync` generates `target/rticx-xbin/ipc_types.rs`, and the
+cross-binary pass injects it into every application's `#[app]` module as
+`pub mod ipc_types`, so user code writes `ipc_types::EncryptReq` with no crate
 dependency.
 
 ```toml
@@ -147,44 +153,38 @@ Allowed field types (v1):
 | enum reference | an `[enum.X]` name |
 
 Rejected with a specific error: `u64`/`i64`/`f64` and wider, `usize`/`isize`,
-`bool`, `char`, strings, pointers/references, tuples, generics, zero-sized
-and unknown messages, recursive messages. Enums are C-like with `repr(u32)`
-semantics: `variants` is either an array of names (implicit discriminants
-`0..N` in declaration order) or a table `{ Name = <u32> }` with unique
-discriminants in `0..=u32::MAX`.
+`bool`, `char`, strings, pointers/references, tuples, generics, zero-sized and
+unknown messages, and recursive messages. Enums are C-like (`repr(u32)`):
+`variants` is either an array of names (implicit discriminants `0..N`) or a table
+`{ Name = <u32> }` with unique discriminants.
 
-Every cross-binary receiver's `SpawnInput` must be one of these generated
-types. The pass injects an `unsafe trait CrossCoreMessage: Copy + 'static` into
-the `#[app]` module and emits a const assertion that `SpawnInput` implements
-it, so a wrong or hand-written type fails at compile time. `ipc_types` is
-nameable only inside the `#[app]` module and its descendants; an external
-module (for example one holding `impl RticSwTask`) reaches the types through
-`crate::app::ipc_types::…` — see section 5.
+Every cross-binary receiver's `SpawnInput` must be one of these generated types.
+The pass emits a const assertion that it implements the injected
+`CrossCoreMessage` marker, so a wrong or hand-written type fails at compile time.
+Inside `#[app]` and its descendants the module is reachable as `ipc_types`; from
+an external module (for example one holding `impl RticSwTask`) import it with
+`crate::app::ipc_types::…` — see [Declaring cross-binary tasks](#6-declaring-cross-binary-tasks).
 
-## 5. Declaring cross-binary tasks
+## 6. Declaring cross-binary tasks
 
-*Implemented.* Cross-binary receivers are **ordinary native software
-tasks**: a `#[sw_task]` struct plus `impl RticSwTask` with a `SpawnInput`
-associated type. The extension adds no xbin-specific attribute or trait, and
-the receiver declaration is the only declaration of the task. The pass parses
-and strips its syntax (the `#[app]` extensions and the cross-receiver
-declaration) before the software/core passes run, so other passes and
-distributions never see it.
+Cross-binary receivers are **ordinary RTICX software tasks**: a `#[sw_task]`
+struct plus an `impl RticSwTask` with a `SpawnInput` associated type. There is
+no xbin-specific attribute or trait, and the receiver declaration is the *only*
+declaration of the task.
 
-Who declares what:
+**What you write vs. what is generated.** You write the receiver and call the
+sender. The build generates everything between them:
 
-| Piece | Declared by | Produced by |
+| Piece | Written by | Produced by |
 |---|---|---|
-| receiver task (`#[sw_task]` + `impl RticSwTask`) | receiver application | rewritten into `#[task(…, task_trait = RticSwTask)]` by the pass |
-| sender stub (`struct <Task>;` + `Task::cross_spawn`) | nobody | the pass, in every producing application, from `system.json` |
-| line dispatcher (`#[task(binds = <dispatchers entry>)]`) | nobody | the pass, one per `(source, priority)` line |
-| doorbell router (`#[task(binds = <pair IRQ>)]`) | nobody | the pass, one per `(source → target)` pair |
-| `dispatchers` pool | receiver application | shared: the pass steals the cross-line front, the software/async pass takes the remainder |
-| per-task FIFO | nobody | driver allocation inside the dual's distro pool, view generated by the pass |
-| IPC pools | the distribution (capability binding) | reported per core in the metadata manifest |
-| shared types | `ipc-types.toml` | the injected `ipc_types` module (re-emitted from `target/rticx-xbin/ipc_types.rs`) |
+| receiver task (`#[sw_task]` + `impl RticSwTask`) | receiver application | rewritten into a native `#[task(…, task_trait = RticSwTask)]` |
+| sender stub (`pub struct <Task>;` + `Task::cross_spawn`) | nobody | the build, in every producing application |
+| FIFOs, line dispatchers, doorbell routers, shared-memory setup | nobody | the build |
 
-Receiver binary (the task runs here):
+### The receiver
+
+The task runs here. Declare it like any software task and give it the producer's
+global core id via `spawn_by`:
 
 ```rust
 use my_distro::app;
@@ -207,57 +207,26 @@ mod app {
 }
 ```
 
-`RticSwTask` is generated inside the `#[app]` module by the software pass the
-distribution binds (its `swtasks` feature), together with the
-`__rticx_local_irq_pend` the generated router calls — do not import it from
-the distribution.
+`RticSwTask` (and the machinery the generated dispatcher calls) is provided
+inside `#[app]` by the software pass the distribution binds through its
+`swtasks` feature — do not import it from the distribution.
 
-The pass also injects the shared types. `cargo xbin sync` writes
-`target/rticx-xbin/ipc_types.rs`, and the pass re-emits its tokens into the
-`#[app]` module as `pub mod ipc_types`, next to an
-`unsafe trait CrossCoreMessage: Copy + 'static` that every generated type
-implements. Both live inside `#[app]`, so `ipc_types::EncryptReq` resolves with
-no crate dependency; a user item named `CrossCoreMessage` or `ipc_types` in the
-app module is a dedicated compile error. A child module does not see its
-parent's items by bare name, so an `impl RticSwTask` that lives in an external
-module imports `crate::app::ipc_types` (or names the type fully as
-`crate::app::ipc_types::EncryptReq`); a `pub use app::ipc_types;` in `main.rs`
-shortens it to `crate::ipc_types::EncryptReq`.
+`dispatchers` is one shared pool of interrupt lines per local core. **The
+cross-binary lines come first**: one entry per distinct `(producer core,
+priority)` pair, in ascending order, followed by the local task dispatchers the
+software/async pass assigns (one per local priority group, ascending). The shape
+is a flat array for one core, or one inner array per core otherwise. Within the
+cross-line front every entry must be unique.
 
-The receiver's `dispatchers` argument is one shared pool of interrupt lines per
-local core. **The cross-binary lines come first**: one entry per distinct
-`(producer core, priority)` pair, in ascending `(producer core, priority)`
-order, followed by the **local task dispatchers** the software/async pass
-assigns (one per local priority group, ascending priority; surplus entries are
-ignored). The shape is a flat array for `cores = 1`, one inner array per core
-otherwise. The xbin pass steals the cross-line front and hands the remainder to
-the software/async pass, so the convention is *cross lines first, then local
-task dispatchers*. Within the stolen front the entries must be unique: two cross
-lines cannot share one interrupt.
+A `#[sw_task]` at one target core may be fed by only one origin core per
+priority: receivers fed by different producer cores need disjoint priorities
+(see [priorities and locking](architecture.md#10-priorities-and-locking)).
+Receivers from the same producer may share a line.
 
-At runtime a spawn travels through the dispatch chain: `cross_spawn`
-checks the caller's core, enqueues the input in the task's FIFO and calls the
-generated per-pair ring function, which
-publishes the task id on the pair's doorbell word and triggers the target's
-**doorbell router**; the router enqueues the task in its line's ready queue and
-pends the line's **line dispatcher** from the pool, whose `exec` drains the
-task FIFO until empty and calls the receiver's `exec(input)`. Duplicate and
-coalesced notifications are idempotent because the dispatcher drains until
-empty. 
+### The producer
 
-On one target core every priority level belongs to exactly one origin core:
-receivers fed by different producer cores need disjoint priorities. `cargo
-xbin sync` rejects producer-vs-producer collisions; at `cargo xbin build` the
-pass also rejects a cross receiver that shares its priority with a core-local
-`#[sw_task]`/`#[async_task]` or with an in-app `spawn_by` task of the
-receiving application, naming the conflicting task. Receivers from the same
-producer may share a line. The FIFO indices of each task are initialized by
-its producer core before that core's `post_init`, so a topology whose owner
-core is not an endpoint of a pool still initializes correctly; releasing and
-waking the cores is the distribution's responsibility (section 7.3).
-
-Producer binary (declares nothing; the pass generates the stub from the
-synced system view):
+The producer declares nothing — the build generates the sender stub from the
+synced system view. Just call it:
 
 ```rust
 use my_distro::app;
@@ -272,20 +241,7 @@ mod app {
 }
 ```
 
-The pass generates `pub struct EncryptTask;` and
-`EncryptTask::cross_spawn(input) -> Result<(), Option<Input>>` inside the
-producer's `#[app]` module for every view task whose producer core belongs to
-the application; the producer source never *declares* the task and adds no
-dependency — the IDL types arrive through the injected `ipc_types` module. A
-generated stub name colliding with a user item is a dedicated compile error.
-
-Because the real stub only exists once `system.json` does, phase 1
-(`cargo xbin sync`) does not type-check the application at all: after writing
-its manifest, metadata mode terminates the compiler, so a `cross_spawn` call —
-and any external task body the `#[app]` macro cannot see — is accepted as-is.
-`cargo xbin build` generates the typed, view-derived stub from the synced view,
-so a misspelled task or a wrong input type is still a hard build error. The
-error semantics match the single-binary `cross_spawn`:
+`cross_spawn` returns:
 
 | Result | Meaning |
 |---|---|
@@ -293,26 +249,26 @@ error semantics match the single-binary `cross_spawn`:
 | `Err(None)` | input enqueued, but the doorbell could not be rung; re-notify the target |
 | `Err(Some(input))` | nothing enqueued (FIFO full or wrong core); retry later or raise `capacity` |
 
+The generated stub exists only once `system.json` does. `cargo xbin sync` only
+collects metadata and does not type-check the application; `cargo xbin build`
+generates the typed stub, so a misspelled task or a wrong input type is a hard
+build error.
+
 ### `#[app]` arguments
 
-Topology is not declared in `#[app]` any more: `cores`, `core_ids` and
-`external_cores` come from `rticx.toml` (section 3). A leftover `core_ids` or
-`external_cores` key is a hard error naming the migration; `cores` is optional
-and must equal the project's `core_ids.len()` when present. The pass injects the
-resolved `cores`/`core_ids` for the core pass.
+Topology is no longer declared in `#[app]`: `cores`, `core_ids` and
+`external_cores` come from `rticx.toml`, and a leftover `core_ids` /
+`external_cores` key is a hard error naming the migration.
 
-| Key | Required | Meaning |
-|---|---|---|
-| `cores = N` | no | derived from `rticx.toml` `core_ids`; declare it only for a single-binary multicore application, and it must equal `core_ids.len()` |
-| `dispatchers = [IRQ...]` | yes (when the application has cross-binary receivers or local `#[sw_task]`/`#[async_task]` priority groups) | per-core pool of interrupt lines: the cross-binary line dispatchers first (one entry per `(source, priority)` cross line of the core, in ascending `(source, priority)` order), then the local task dispatchers (one per local priority group, ascending priority). The pass steals the cross-line front and re-emits the remainder for the software/async pass |
+| Key | Meaning |
+|---|---|
+| `cores = N` | optional; derived from `rticx.toml` `core_ids`. Declare it only for a single-binary multicore application, and it must equal `core_ids.len()` |
+| `dispatchers = [IRQ…]` | per-core pool of interrupt lines: the cross-binary line dispatchers first (one entry per `(source, priority)` cross line of the core, ascending), then the local task dispatchers. Required when the application has cross-binary receivers or local `#[sw_task]`/`#[async_task]` priority groups |
 
 ### `spawn_by` resolution
 
-`spawn_by` names the producer core. Without `external_cores` in the
-application's `[[application]]` entry the native local-index reading applies
-(`spawn_by < cores`, validated by `rticx-sw-pass`). In an application whose
-entry declares `external_cores`, the pass resolves it in the **global**
-namespace:
+`spawn_by` names the producer core. In an application whose entry declares
+`external_cores`, it is resolved in the **global** namespace:
 
 | `spawn_by` | Classification |
 |---|---|
@@ -321,7 +277,7 @@ namespace:
 | ∈ `external_cores` | cross-binary receiver |
 | anything else | hard error naming the unknown core |
 
-The identity `core_ids` default makes both readings identical. `core` always
+Without `external_cores` the native local-index reading applies. `core` always
 stays a **local** index (`0..cores`, default `0`).
 
 ### Cross-receiver arguments
@@ -332,72 +288,44 @@ stays a **local** index (`0..cores`, default `0`).
 | `capacity` | no (default `1`, `>= 1`) | pending inputs the FIFO holds |
 | `core` | no (default `0`) | **local** core index running the task |
 | `spawn_by` | yes | the single **global** producer core id |
-| `init` | no (default `generated`) | must be `generated`; the pass generates the receiver's init |
-| `shared` | no | passed through to the core pass, which computes the SRP ceilings |
+| `init` | no (default `generated`) | must be `generated`; the build generates the receiver's init |
+| `shared` | no | passed to the core pass, which computes the SRP ceilings |
 
-Rejected with a precise error: unknown, duplicate or multi-segment keys;
-non-integer `priority`/`capacity`/`core`; `capacity = 0`; `priority = 0` on a
-cross receiver; `spawn_by` as an array (a task has exactly one producer core);
-a receiver without an `impl RticSwTask { type SpawnInput = …; }` block; a
-receiver `core` outside `0..cores`; a `dispatchers` shape violation, a duplicate
-interrupt within the stolen cross-line front, or a list too short for the
-core's cross lines (the error names the affected core and, for a missing
-entry, the cross line). A leftover `core_ids`/`external_cores`
-`#[app]` key, or a `cores` that disagrees with the project's `core_ids`, is a
-hard error naming the migration; `rticx.toml` rejects an `external_cores` that
-repeats or overlaps the application's own `core_ids` (section 3).
+Invalid arguments (unknown or duplicate keys, non-integer values,
+`capacity = 0`, `priority = 0` on a cross receiver, a `spawn_by` array, a
+receiver with no `impl RticSwTask`, an out-of-range `core`, or a malformed
+`dispatchers` list) are reported with a precise error.
 
-The pass is bound **before** `rticx-sw-pass` and requires the distribution's
-`swtasks` feature: the software pass generates the `RticSwTask` trait and the
-core pass compiles the receiver through its external `task_trait` mechanism.
-Without the feature `RticSwTask` is undefined and the receiver fails to
-compile. A distribution that does **not** bind the extension pass never reads
-`rticx.toml`: `core_ids` is understood natively by `rticx-core` and
-`external_cores` only warns as an unknown `#[app]` argument, while `spawn_by`
-keeps the local-index reading — so cross-binary declarations require the pass.
+Cross-binary code requires the distribution's `swtasks` feature; without it
+`RticSwTask` is undefined and the receiver fails to compile.
 
-## 6. Worked example: the two-application fixture
+## 7. Worked example
 
-The repository ships this project at
-`experiments/multibinary/crates/mock/fixtures/e2e/`; a fresh checkout can build it
-without writing any code. Follow the steps, then use section 7 to run the
-same layout on real hardware.
+`experiments/multibinary/crates/mock/fixtures/e2e/` is a complete two-core
+project that builds and links on the host (its mock distribution replaces the
+real target distribution and PAC). Nothing needs to be written to build it.
 
 ```text
 crates/mock/fixtures/e2e/
-├── rticx.toml, ipc-types.toml      # sections 3 and 4
+├── rticx.toml, ipc-types.toml
 ├── app-m7/  (binary `m7`, global core 0)   # producer, declares nothing
 └── app-m4/  (binary `m4`, global core 1)   # receiver, declares EncryptTask
-
-crates/mock/                        # shared by every fixture
-├── rticx-xbin-mock/                # in-process mock backend for host tests
-├── mock-pac/                       # stand-in for a real PAC
-└── xbin-mock-distro/, xbin-mock-runtime/   # stand-in for a real distribution
 ```
 
-`cargo xbin sync` writes the IDL types to
-`target/rticx-xbin/ipc_types.rs`; nothing is checked in and no application
-depends on a generated crate.
-
-The mock distribution binds the cross-binary pass and the software pass on a
-host-testable backend, so the example compiles and links on your machine; a
-real project replaces it with the target distribution and PAC (section 7.2).
-
-**Step 1 — install the driver** (section 1), then go to the fixture:
+**1. Install the driver** (section 2) and enter the fixture:
 
 ```bash
 cargo install --path experiments/multibinary/crates/rticx-xbin-driver
 cd experiments/multibinary/crates/mock/fixtures/e2e
 ```
 
-**Step 2 — the two configuration files.** `ipc-types.toml` declares one
-message — the `EncryptReq` declaration from section 4 — and `rticx.toml` is
-exactly the example from section 3: it maps the two binaries to global cores 0
-and 1 and declares no IPC memory. The mock distribution's capability binding
-provides the `mock-0-1` pool — a 4096-byte budget shared by both directions of
-the `{0, 1}` dual — which `sync` records in the view.
+**2. Configuration.** `ipc-types.toml` declares the single `EncryptReq`
+message, and `rticx.toml` maps the two binaries to global cores 0 and 1 and
+declares no IPC memory (both as in sections 4 and 5). The mock distribution
+provides the shared `mock-0-1` pool.
 
-**Step 3 — the receiver** (`app-m4/src/main.rs`, abridged):
+**3. The receiver** (`app-m4/src/main.rs`, abridged) is the `EncryptTask` from
+section 6, plus the usual `#[idle]`/`#[init]`:
 
 ```rust
 use xbin_mock_distro::app;
@@ -418,47 +346,18 @@ mod app {
         }
     }
 
-    #[idle]
-    struct Idle;
-
-    impl RticIdleTask for Idle {
-        fn exec(&mut self) -> ! {
-            loop {
-                core::hint::spin_loop();
-            }
-        }
-    }
-
-    #[init]
-    fn init() -> TaskInits {
-        TaskInits { idle: Idle }
-    }
+    // `#[idle]` + `#[init]` as usual.
 }
 ```
 
-**Step 4 — the producer** (`app-m7/src/main.rs`, abridged): it declares no
-task at all.
+**4. The producer** (`app-m7/src/main.rs`, abridged) declares no task:
 
 ```rust
 use xbin_mock_distro::app;
 
 #[app(device = mock_pac)]
 mod app {
-    #[idle]
-    struct Idle;
-
-    impl RticIdleTask for Idle {
-        fn exec(&mut self) -> ! {
-            loop {
-                core::hint::spin_loop();
-            }
-        }
-    }
-
-    #[init]
-    fn init() -> TaskInits {
-        TaskInits { idle: Idle }
-    }
+    // `#[idle]` + `#[init]` as usual.
 
     // A local task or `#[init]` would call, once the view is synced:
     //     EncryptTask::cross_spawn(ipc_types::EncryptReq { addr: 0, len: 0, key: 0 });
@@ -466,125 +365,51 @@ mod app {
 ```
 
 Each application's `Cargo.toml` adds the PAC and the distribution and pins the
-binary name (the fixture additionally adds `xbin-mock-runtime` for the host
-backend). No generated-crate dependency is needed — the pass injects the IDL
-module:
+binary name (the fixture adds `xbin-mock-runtime` for the host backend). No
+generated-crate dependency is needed:
 
 ```toml
-[package]
-name = "app-m4"
-version = "0.1.0"
-edition = "2024"
-
 [[bin]]
 name = "m4"
 path = "src/main.rs"
 
 [dependencies]
-my-pac = "0.1"          # the fixture uses mock-pac
-my-distro = "0.1"       # the fixture uses xbin-mock-distro
+my-pac = "0.1"       # the fixture uses mock-pac
+my-distro = "0.1"    # the fixture uses xbin-mock-distro
 ```
 
-**Step 5 — sync and build** with one command:
+**5. Sync and build** with one command:
 
 ```bash
 cargo xbin build
 ```
 
-`build` runs phase 1 (`sync`) and then compiles every application. It streams
-the output of each `cargo` step it drives, so the per-application progress is
-visible. The first run also prints one `created`/`updated` line naming
-`target/rticx-xbin/ipc_types.rs`; when the IDL is unchanged it prints the
-`is up to date` line instead. Abridged:
+`build` runs `sync` and then compiles every application, streaming each Cargo
+step it drives. From the sealed view it generates, inside the `#[app]` modules:
 
-```text
-[cargo-xbin] running `cargo clean --package app-m7`
-     Removed 34 files, 10.9MiB total
-[cargo-xbin] running `cargo check --package app-m7 --bin m7`
-    Checking app-m7 v0.1.0 (...)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
-...
-[cargo-xbin] running `cargo build --package app-m7 --bin m7`
-   Compiling app-m7 v0.1.0 (...)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
-[cargo-xbin] running `cargo build --package app-m4 --bin m4`
-   Compiling app-m4 v0.1.0 (...)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
-[cargo-xbin] target/rticx-xbin/ipc_types.rs is up to date
-```
+- in `app-m7`, `pub struct EncryptTask;` with an associated
+  `cross_spawn(input: ipc_types::EncryptReq) -> Result<(), Option<ipc_types::EncryptReq>>`,
+  plus that task's FIFO view;
+- in `app-m4`, the receiver's FIFO view, the `SpawnInput` assertion, the
+  `EncryptTask` line dispatcher and the `0->1` doorbell router;
+- in both, the injected `ipc_types` module and `CrossCoreMessage` marker, the
+  shared-memory setup, and the freshness anchor that ties the binary to the view.
 
-**Step 6 — inspect what was generated.**
-
-```text
-target/rticx-xbin/
-├── m7.xbin.json    # producer manifest: package, target, interface fingerprint, no tasks
-├── m4.xbin.json    # receiver manifest: the EncryptTask declaration
-├── ipc_types.rs    # the IDL types, re-emitted into each `#[app]` module
-└── system.json     # sealed whole-project view
-```
-
-`system.json` is the single source of truth phase 2 consumes; the parts that
-matter here (abridged):
-
-```jsonc
-"tasks": [ {
-    "id": 1, "name": "EncryptTask",
-    "receiver_core": 1, "spawner_core": 0,
-    "priority": 3, "capacity": 2, "input_type": "EncryptReq",
-    "fifo": { "source": 0, "target": 1, "pool": "mock-0-1",
-              "offset": 0, "elem_size": 12, "depth": 3 }
-} ],
-"pools": [ { "id": "mock-0-1", "core_a": 0, "core_b": 1,
-             "base_from_a": "0x30000000", "base_from_b": "0x30000000",
-             "budget": 4096, "used": 100 } ],
-"doorbells": [ { "source": 0, "target": 1, "priority": 3, "line": 0 } ]
-```
-
-From the view, the pass generated inside the `#[app]` modules:
-
-- in `app-m7`: `pub struct EncryptTask;` with
-
-  ```rust
-  pub fn cross_spawn(input: ipc_types::EncryptReq)
-      -> Result<(), Option<ipc_types::EncryptReq>>;
-  ```
-
-  and its FIFO view at pool `mock-0-1` + 0;
-- in `app-m4`: the `#[sw_task]` rewritten to
-  `#[task(priority = 3, task_trait = RticSwTask, init = generated)]`, the FIFO
-  view, the `SpawnInput: CrossCoreMessage` assertion, the `EncryptTask` line
-  dispatcher bound to `XBIN_IPC_LINE_0`, and the `0->1` doorbell router;
-- in both: the injected `CrossCoreMessage` trait and `pub mod ipc_types` (from
-  `ipc_types.rs`), the entry hooks (the distribution's inlined
-  `configure_shared_memory` on every core and `init_fifos` on core 0 as the
-  producer, with the distribution owning the boot handshake) and the
-  `__RTICX_XBIN_TOPOLOGY_HASH` freshness anchor.
-
-**Step 7 — run it.** `cargo xbin build` compiles the host binaries. 
-
-And end-to-end behaviour (spawn → ring function → router →
-line dispatcher → `exec`, backpressure) is driven by the in-tree harness, which
-expands both applications into one process over a
-shared mock system. Back in `experiments/multibinary/`:
+**6. Run it.** `cargo xbin build` compiles the host binaries. The end-to-end
+behaviour (spawn → doorbell → line dispatcher → `exec`, plus backpressure) is
+exercised by the in-tree harness, which expands both applications into one
+process. From `experiments/multibinary/`:
 
 ```bash
-cd ../../..
 cargo test -p rticx-xbin-pass --test e2e_runtime
 ```
 
 ### Multi-source variant
 
 `crates/mock/fixtures/three-app/` is the same project with a second producer
-(`app-m5`, global core 2) spawning `SensorTask` onto the same receiver core.
-The mock capability binding provides one pool per dual (`mock-0-1`,
-`mock-1-2`, `mock-0-2`), each with its own 4096-byte shared budget; the `0->1`
-and `2->1` directions each carry two FIFOs inside their dual's pool. The
-project's `rticx.toml` still declares only the three applications, their
-`core_ids` and their `external_cores`.
-
-The receiver lists the cross-line front of `dispatchers` first, one dispatcher
-line per cross line in ascending `(source, priority)` order, and the two
-producers use disjoint priorities:
+(`app-m5`, global core 2) spawning `SensorTask` onto the same receiver core. The
+receiver lists one cross line per `(source, priority)` in ascending order, and
+the producers use disjoint priorities:
 
 ```rust
 #[app(
@@ -601,79 +426,36 @@ mod app {
 }
 ```
 
-Each producer gets its own pool, ring function, router and dispatcher line. See
-[architecture: priorities and locking](architecture.md#7-priorities-and-locking) for why the
-priority lines must be disjoint.
+## 8. Building and running
 
-## 7. Building and running
-
-### 7.1 `sync` and `build`
+### Commands
 
 ```bash
-cargo xbin --help     # CLI overview
-cargo xbin sync       # validate rticx.toml, collect <app>.xbin.json per application
-cargo xbin build      # sync, then build every application
+cargo xbin sync                 # validate the project and write the system view
+cargo xbin build                # sync, then build every application
 cargo xbin build --verify-elf   # ... and verify each linked binary against the pools
-cargo xbin verify               # verify a plain `cargo build` output (--release for the release profile)
+cargo xbin verify               # verify a plain `cargo build` output (--release for release)
 ```
 
-`sync` parses `rticx.toml` and `ipc-types.toml`, creates
-`target/rticx-xbin/` and, for every `[[application]]`, runs
-`cargo clean -p <package>` followed by
-`cargo check -p <package> --bin <target>` with `RTICX_XBIN_META_OUT` pointing
-at the output directory. The `#[app]` macro writes `<target>.xbin.json`, which
-the driver reads back; a stale manifest is removed before each check, so an
-application that stops expanding its `#[app]` macro fails with a clear error.
-Without `rticx.toml`, `sync` and `build` stay no-ops.
+`sync` parses `rticx.toml` and `ipc-types.toml`, collects each application's
+receiver declarations, then merges and validates the whole project: visibility
+of every `spawn_by`, type existence, disjoint priority lines, and whether the
+per-task FIFOs fit their pool budget. It writes `target/rticx-xbin/system.json`
+and (re)generates `ipc_types.rs` when the IDL changed. Without `rticx.toml`,
+`sync` and `build` are no-ops.
 
-The collected manifests carry only receiver declarations — there are no sender
-declarations, the driver infers each task's single producer
-application from the receivers' `spawn_by` — and are then merged and validated:
-every receiver's `spawn_by` must name a single core in another
-application, be listed in the receiver's `external_cores`, and the producer
-application must list the receiver's core in its `external_cores` (both read
-from `rticx.toml`); every referenced type must exist in the IDL; and the per-task
-FIFOs must fit their dual's shared distro pool budget. The same
-deterministic pass allocates every FIFO address (8-byte aligned, global
-task-name order, depth `capacity + 1`) inside the pool, sharing one budget
-between both directions of the dual; the first FIFO that does not fit names
-its task, dual and pool in the error. The sealed system view is written to
-`target/rticx-xbin/system.json`, and — when the project has an
-`ipc-types.toml` — `target/rticx-xbin/ipc_types.rs` is generated/updated.
-`sync` prints one `created`/`updated` line naming that file, or
-`target/rticx-xbin/ipc_types.rs is up to date` when nothing changed; since the
-file is rewritten only when its contents change, an unchanged IDL does not
-retrigger the applications that re-emit it.
+`build` always runs `sync` first. A plain `cargo build` after an explicit `sync`
+is supported, but once the cross-binary interface or the IDL changes it fails
+with a staleness error naming `cargo xbin sync`; a missing view (for example
+after `cargo clean`) is reported the same way.
 
-After `sync`, `build` compiles every `[[application]]` with
-`cargo build --package <package> --bin <target>` (plus `--target <triple>`
-when the application declares one) and `RTICX_XBIN_SYSTEM` pointing at the
-`system.json` it just wrote, so the pass generates the cross-binary code and
-the freshness checks reject a stale view, a changed cross-binary interface or a
-stale IDL. `build` always runs `sync` first; a plain `cargo build` after
-an explicit `sync` is supported, but fails with a staleness error (stale
-`system.json`, a changed interface fingerprint, or an edited `ipc-types.toml`)
-once the synced inputs change, until the next `sync`. The fingerprint covers
-only what the driver merges — the resolved topology, the stolen
-cross-dispatcher front and the receiver declarations — so a task body, a doc
-comment, a local `#[sw_task]`/`#[async_task]`, a `shared` list, `device`/`pacs`
-or a surplus local `dispatchers` entry can change freely without a re-sync. A
-per-field receiver edit (priority/capacity/core/spawn_by/input_type) is caught
-by the more specific field-level check; adding or removing a receiver, a
-topology change or a changed cross-dispatcher front is caught by the
-fingerprint. Both errors name `cargo xbin sync`. Without a synced view (for
-example after `cargo clean`), every
-application listed in the view — even one declaring no cross task — fails with
-``failed to read the system view …; run `cargo xbin sync` `` instead of
-silently generating no code.
+### Running on real hardware
 
-### 7.2 Running on real hardware
-
-`cargo xbin build` only builds; running is plain Cargo, so the distribution's
-runner configuration applies. A typical `.cargo/config.toml` for a Cortex-M
-target:
+`cargo xbin build` only builds. Running is plain Cargo, so the distribution's
+runner configuration applies:
 
 ```toml
+# .cargo/config.toml
 [build]
 target = "thumbv7em-none-eabihf"
 
@@ -683,288 +465,118 @@ runner = "probe-rs run --chip STM32H745ZITx"
 rustflags = ["-C", "link-arg=-Tlink.x"]
 ```
 
-Then:
-
 ```bash
 cargo xbin sync                 # one system view for every binary
 cargo run -p app-m7 --bin m7    # builds and runs/uploads through the runner
 cargo run -p app-m4 --bin m4
 ```
 
-Both binaries must be flashed (or loaded by the simulator) because each owns
+Both binaries must be flashed (or loaded by the simulator), because each owns
 its own core. Heterogeneous targets may need per-application settings (a
 different triple, linker script or MPU configuration); Cargo supports a
-`.cargo/config.toml` per package for that. The in-tree fixtures use the host
-mock instead: `.cargo/config.toml` is absent, the apps build for the host, and
-the runtime harnesses exercise the generated code (section 7.6). The
-out-of-tree STM32H7 acceptance demo is the reference for a real
-M7+M4/Renode setup.
+`.cargo/config.toml` per package for that. The in-tree fixtures use the host mock
+instead; the out-of-tree STM32H7 acceptance demo is the reference for a real
+M7+M4 setup.
 
-### 7.3 Expected boot order
+### Boot order
 
 Boot sequencing is **distribution-owned**; the generated code only configures
-shared memory and zeroes the FIFOs each core produces:
+shared memory and zeroes the FIFOs each core produces. In short:
 
-1. the distribution releases the cores (H7: the CM7 initializes shared memory
-   and then releases the CM4 from reset, from the distribution's `post_init`);
-2. **every core** runs the distribution's inlined `configure_shared_memory`
-   tokens before its user `init` (mapping its own pool view), and every core
-   that produces cross-binary tasks zeroes the ring indices of exactly the
-   FIFOs it produces at `BeforePostInit`, before its `post_init` can spawn;
+1. the distribution releases the cores (for example the H7 CM7 initializes
+   shared memory and then releases the CM4 from reset);
+2. every core runs the distribution's shared-memory configuration before its
+   user `init`, and every producing core zeroes its FIFOs before its
+   `post_init` can spawn;
 3. the distribution guarantees its peers are up before IPC or the router
-   interrupts are relied on. Spawning before the consumer's router IRQ is
-   enabled is safe while the doorbell latches (the H7 HSEM status does) and the
-   FIFO lives in shared memory; otherwise the distribution must order the boot
-   itself. Handling a reset is likewise a distribution responsibility, not a
-   framework one
-   ([architecture: boot sequencing and reset](architecture.md#8-boot-sequencing-distribution-owned-and-reset)).
+   interrupts are relied on.
 
-### 7.4 Cache and MPU checklist
+See [boot sequencing and reset](architecture.md#11-boot-sequencing-distribution-owned-and-reset).
 
-The shared pool memory is special memory; getting these wrong is the most common
-source of runtime-only failures:
+### Cache and MPU checklist
 
-- **Attributes:** An IPC pool must be usable from every core that touches it as
-  **effectively non-cacheable and shared**, by whatever mechanism the platform
-  provides: a core with no data cache, an MPU/MMU region attribute, a
-  cache-attribute/PMA register, an uncached address alias, or a design-time
-  non-cacheable region. This covers the overwhelming majority of multicore
-  embedded MCUs: all heterogeneous Cortex-M parts in the M7+M4 class, all
-  homogeneous multicore M-class parts whose cores have no data cache, and most
-  multicore RISC-V MCUs. A cacheable shared region without the cache maintenance
-  the transport would have to perform is unsupported in v1. Cores that also
-  lack cross-core atomic primitives (for example ARMv6-M, which has no
-  `LDREX`/`STREX`) additionally require a distribution-provided cross-core lock;
-  `portable-atomic`'s `critical-section` fallback is local-core only and is not
-  sufficient.
-- **Timing:** the distribution's `XbinPassBackend::configure_shared_memory`
-  tokens run at the start of each entry, before the user `init` and before any
-  generated code touches a pool, so configure it there.
+The shared pools are special memory; getting this wrong is the most common
+source of runtime-only failures. When bringing up a new target, check:
+
+- **Attributes:** every core that touches a pool must see it as **effectively
+  non-cacheable and shared** — an MPU/MMU region attribute, a cache-attribute
+  register, an uncached alias, or a design-time non-cacheable region. A
+  cacheable mapping without cache maintenance is unsupported in v1.
 - **Linker/MPU consistency:** reserve each pool outside every binary's
-  `.data`/`.bss` (section 7.5); keep the capability binding's per-core pool
-  views consistent with the MPU region (base and limit alignment/size follow
-  your device's MPU rules, e.g. power-of-two regions on Cortex-M).
-- **Aliases:** a dual's two endpoints may see its pool at different addresses
-  (aliases, e.g. the D2/M4 window of SRAM3). The distribution reports each
-  endpoint's own view as `base_local` and the peer's as `base_peer`; the
-  generated code uses the view of the core that runs it. When both cores see
-  the same absolute address, report the same value for both.
-- **Cacheable mapping (unsupported v1):** a cacheable mapping without
-  transport-owned maintenance is unsupported in v1: the pass offers no
-  cache-hook binding, so the generated transport body cannot clean/invalidate
-  around every shared access. Prefer an effectively non-cacheable region (the
-  [architecture platform rule](architecture.md#cache-policy-and-supported-platforms)
-  spells this out).
-- **IRQs:** every `dispatchers` entry and every pair doorbell IRQ must be
-  enabled and assigned a priority at least as urgent as the tasks they wake;
-  the core pass's used-IRQ machinery does this from the generated
-  `#[task(binds = …)]` items, but the distribution must map the IRQ numbers.
+  `.data`/`.bss`, with a base and size that satisfy the platform's alignment
+  rules.
+- **Aliases:** the two endpoints of a pool may see it at different addresses
+  (aliases, e.g. the D2 window of SRAM3); each core must use its own view.
+- **IRQs:** every `dispatchers` entry and every doorbell IRQ must be enabled and
+  assigned a priority at least as urgent as the tasks it wakes.
 
-### 7.5 For distribution authors: pools, linker reservations and ELF verification
+The distribution owns the pools, so these are usually a distribution concern;
+see [memory and layout](architecture.md#9-memory-and-layout) for the details.
 
-Everything in this section is the **distribution author's** responsibility.
-The project (`rticx.toml`) declares no IPC memory: the distribution
-owns the pools, their addresses and aliases, the shared budget, and the linker
-reservations that keep them out of every binary's allocated data. 
+### Verifying your setup
 
-**1. Report the capability binding and the hardware codegen.** A
-distribution's `#[app]` macro binds `rticx-xbin-pass` with an `XbinPassBackend`
-implementing the two capability queries
-
-```rust
-fn physical_core(&self, local_core: u32) -> PhysicalCore; // e.g. "cm7" -> 0
-fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool>;
-```
-
-plus the hardware-codegen bindings the pass inlines: `current_global_core_id`
-(the `cross_spawn` core guard, required), `configure_shared_memory(local_core)`
-(the per-core pool mapping, injected before the user `init`) and the optional
-`ipc_base_override(view_core, source, target)` that only heap-backed host/mock
-backends need (a fixed-address distribution leaves it `None`, and the pass
-emits the literal `system.json` address). `rt_path` points the generated code
-at the distribution's runtime `Fifo` re-export.
-
-Each `IpcPool` describes one **unordered** core pair (a *dual*) from this
-core's side: a symbolic `id`, the `peer` physical core, this core's view
-(`base_local`) and the peer's view (`base_peer`), and the `budget` (bytes
-reserved for IPC, shared by **both** directions of the dual). The two endpoints
-of a dual must report the same `id` and budget with the physical cores and base
-views swapped; the driver matches them and rejects a one-sided or inconsistent
-entry, or a used direction with no pool at all. Both directions of a dual
-allocate inside the one shared budget.
-
-**2. Reserve the pools in the linker scripts.** Pool addresses are accessed
-through raw fixed-address pointers (`Fifo::view_at(base + offset)`); a pool is
-**not** a Rust `static`, so the linker will not avoid it. If `.data`/`.bss`
-lands on a pool, the application and the FIFOs silently share bytes. For each
-application, take the pool views its core can see (`base_local` on the endpoint
-that owns that local core) and keep allocated data out of those ranges:
-
-1. *Preferred:* put the pools in a dedicated shared SRAM block the firmware
-   uses for nothing else, and keep that block out of the `RAM` `MEMORY` regions
-   that back `.data`/`.bss`.
-2. If a pool sits inside a RAM block, split the `MEMORY` declaration around it
-   and give the pool range its own region.
-
-A dual's two endpoints may see the same physical bytes at different addresses
-(aliases, e.g. the H7's SRAM3 at `0x3004_0000` for the CM7 and `0x1004_0000`
-through the D2 alias for the CM4). Each core reserves **its own view**, on that
-core only: the two linker scripts are independent, and reserving different
-SRAM blocks on the two cores is a silent aliasing bug.
-
-Give each pool a `NOLOAD` output section so an overflow is a link error rather
-than a silent wrap, and export bounds the driver can audit:
-
-```ld
-SECTIONS {
-  .rticx_xbin_ipc (NOLOAD) : {
-    KEEP(*(.rticx_xbin_ipc))
-    . = ORIGIN(IPC) + LENGTH(IPC);   /* force the reservation extent */
-  } > IPC
-
-  __rticx_xbin_pool_mock_0_1_start = ORIGIN(IPC);
-  __rticx_xbin_pool_mock_0_1_end   = ORIGIN(IPC) + LENGTH(IPC);
-}
-```
-
-`LENGTH(IPC)` must be **>=** the pool's declared `budget`, and the pool must be
-mapped effectively non-cacheable and shared (section 7.4) with a base
-and size that satisfy the platform's alignment rules. Choose addresses that satisfy
-the linker and the MPU at once, and re-check whenever the memory map, the MPU
-configuration or the capability binding changes.
-
-**3. Verify the linked images.** `cargo xbin build --verify-elf` runs `sync`,
-links every application and then parses each linked ELF with the `object`
-crate. It fails (naming the application, section/symbol, range and pool) when
-
-- any `SHF_ALLOC` section (`[address, address + size)`) intersects a pool view
-  of the application's own cores — the silent-corruption class above;
-- the stack bound symbol (`_stack_start` / `__rticx_xbin_stack_start`, when
-  defined) is outside every pool view; or
-- a distro-exported `__rticx_xbin_pool_<id>_start`/`_end` does not match the
-  pool base and shared budget in `system.json`.
-
-`cargo xbin verify` runs the same checks against the output of a plain
-`cargo build` (after an explicit `sync`), and `--release` selects the release
-profile; neither relinks. The check is **detection, not prevention**: it sees
-static `SHF_ALLOC` sections only, not runtime stack/heap growth, and its symbol
-checks need the unstripped link output (a stripped binary loses `.symtab`; the
-section check still works). Run it in CI so a drifted linker script fails the
-build instead of corrupting IPC at runtime.
-
-### 7.6 Verifying your setup
-
-- `cargo xbin sync` alone validates the whole topology (cores, visibility,
-  priorities, types, pool budget fit) and re-renders
-  `target/rticx-xbin/ipc_types.rs`.
+- `cargo xbin sync` validates the whole topology (cores, visibility, priorities,
+  types, pool budget fit).
 - `cargo xbin build --verify-elf` additionally checks every linked binary
-  against the distro pools; `cargo xbin verify` does the same for a plain
-  `cargo build` output (section 7.5).
-- The in-tree fixtures are the executable specification of the documented
-  behaviour; from `experiments/multibinary/`:
+  against the distribution's pools; `cargo xbin verify` does the same for a
+  plain `cargo build` output.
+- Compile-time checks catch type and topology drift: the layout constants and
+  `LAYOUT_HASH` in the injected `ipc_types` module, and the freshness anchor in
+  every application.
+- The in-tree fixtures are the executable specification; from
+  `experiments/multibinary/`:
 
   ```bash
   cargo test -p rticx-xbin-pass --test e2e_runtime    # two-app spawn/dispatch
-  cargo test -p rticx-xbin-pass --test priority_lines # build-phase priority-line errors
-  cargo test -p rticx-xbin-driver --test e2e          # `cargo xbin build` over crates/mock/fixtures/e2e
+  cargo test -p rticx-xbin-driver --test e2e          # `cargo xbin build` over fixtures/e2e
   cargo test -p rticx-xbin-driver --test three_app    # multi-source fixture
   cargo test -p rticx-xbin-driver --test verify       # linked-ELF verification
-  cargo test -p rticx-xbin-driver --test negative     # documented error messages
   ```
 
-- Compile-time checks catch type and topology drift: the layout consts and
-  `LAYOUT_HASH` in the injected `ipc_types` module,
-  `__RTICX_XBIN_TOPOLOGY_HASH` and the `include_str!` freshness anchor in every
-  application.
+## 9. Common errors
 
-## 8. Common errors
+Most errors name the fix. The frequent ones:
 
-*Parser errors:*
+*Configuration and validation (`sync`):*
 
 | Message (excerpt) | Fix |
 |---|---|
-| ``unsupported rticx.toml schema version N; this tool supports schema = 1`` | set `schema = 1` or upgrade the driver |
-| ``missing required top-level key `schema` `` | add `schema = 1` |
+| ``missing required top-level key `schema` `` / ``unsupported rticx.toml schema version N`` | set `schema = 1` |
 | ``package `x` is declared by more than one `[[application]]` `` | give each binary a unique `package` |
-| ``global core id N is declared by both ...`` | core ids must be unique across applications |
-| ```application[0].external_cores` lists core id N more than once`` | list each foreign core once |
-| ```application[0].external_cores` lists core id N, which this application owns via `core_ids` `` | `external_cores` must be disjoint from the application's own `core_ids` |
-| ```[ipc.regions]` was removed: IPC memory is owned by the distribution's capability binding `` | delete the table; the distribution owns the IPC pools (section 7.5) |
+| ``global core id N is declared by both …`` | core ids must be unique across applications |
+| ```external_cores` lists core id N, which this application owns via `core_ids` ``` | keep `external_cores` disjoint from the application's own `core_ids` |
 | ``references unknown type `T` `` | declare `[message.T]` or `[enum.T]` in `ipc-types.toml` |
 | ``cyclic message reference: A -> B -> A`` | break the cycle; messages are stored inline |
-| ``message `FooBar` and message `Foo_Bar` would both generate the constant `SIZE_FOO_BAR` `` | rename one IDL type so the generated constants stay unique |
-| ``failed to write the generated `ipc_types` module at `…` `` | fix the permissions or the conflicting path under `target/rticx-xbin/` |
-
-*Metadata collection errors:*
-
-| Message (excerpt) | Fix |
-|---|---|
-| `` `cargo clean --package x` failed `` | the package name in `[[application]]` must exist in the Cargo workspace |
-| `` `cargo check --package x --bin b` failed `` | fix the application's compile errors; `cargo check` diagnostics follow |
-| `` `cargo check` for package `x` did not write `.../<b>.xbin.json` `` | bind the cross-binary pass in the application's `#[app]` macro |
-
-*Merge/validation errors:*
-
-| Message (excerpt) | Fix |
-|---|---|
-| ``application `x` has no manifest`` | the `#[app]` macro of `x` must bind the cross-binary pass |
-| ``manifest for package `x` has no matching `[[application]]` `` | remove the stale manifest and re-run `cargo xbin sync` |
-| ```core_ids` moved to `rticx.toml`…`` | remove `core_ids` from `#[app]`; declare the local→global mapping in the application's `[[application]]` entry |
-| ```external_cores` moved to `rticx.toml`…`` | remove `external_cores` from `#[app]`; declare the visible foreign cores in `[[application]]` |
-| ```{package}` declares `cores = {n}`, but rticx.toml maps {m} core(s) via `core_ids`…`` | remove the `#[app(cores)]` argument, or reconcile it with the project's `core_ids` |
-| ```the application `{package}` is not listed in the nearest `rticx.toml`…`` | add an `[[application]]` entry for the package |
-| ``references global core id N … but no application declares it`` | fix the id or declare the owning application |
-| ``receiver `T` in `x` is spawned by global core N, but the application does not list it in `external_cores` `` | add the producer core to the receiver application's `external_cores` |
-| ``task `T` runs on global core N, but its producer application `x` does not list that core in `external_cores` `` | add the receiver's core to the producer application's `external_cores` |
+| ``receiver `T` in `x` is spawned by global core N, but the application does not list it in `external_cores` `` | add the producer core to the receiver's `external_cores` (and vice versa) |
 | ``receiver `T` is declared by both `x` and `y` `` | task names must be unique across the project |
-| ``task `T` … uses type `Y`, which is not declared in `ipc-types.toml` `` | declare `[message.Y]`/`[enum.Y]` or fix the path |
-| ``tasks `A` … and `B` … share priority P on core N`` | give tasks from different source cores disjoint priority lines |
-| ``task `T` needs a `S->T` IPC pool`` | the distribution must report a pool between the producer and receiver physical cores |
-| ``the FIFOs of the `A<->B` pool `P` need N bytes, but the distribution reserves M`` | enlarge the pool budget or lower task `capacity` (both directions share the budget) |
-| ``IPC pool `P` between cores A and B is not reported consistently by both endpoints`` | make the two applications' capability entries symmetric (same id, budget, swapped bases) |
-| ``the `P` and `Q` pool views overlap on core N`` | give the core's pool views disjoint address ranges |
-
-*Build-phase priority-line errors:*
-
-| Message (excerpt) | Fix |
-|---|---|
-| ``cross-binary receiver `T` is scheduled at priority P on global core N, but the software task `L` (spawned by global core N) already owns that priority line`` | give the receiver a priority no core-local `#[sw_task]`/`#[async_task]` (or in-app `spawn_by` task) of that core uses |
-| ``cross-binary receiver `T` is scheduled at priority P on global core N, but the cross-binary receiver `U` (spawned by global core M) already owns that priority line`` | producers of one target core must declare disjoint priorities; `sync` normally catches this already |
+| ``tasks `A` and `B` share priority P on core N`` | give tasks from different source cores disjoint priority lines |
+| ``the FIFOs of the `A<->B` pool `P` need N bytes, but the distribution reserves M`` | enlarge the pool budget or lower task `capacity` (both directions share it) |
+| ``[ipc.regions]` was removed: IPC memory is owned by the distribution`` | delete the table; the distribution owns the IPC pools |
 
 *Build-phase dispatcher errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
-| ``local core N has the cross line `(source S, priority P)`, but `dispatchers` declares only M entries for that core; declare one interrupt per cross line at the front of `dispatchers` `` | put one interrupt per cross line at the front of `dispatchers`, in ascending `(source, priority)` order, before the local task dispatchers |
-| `` `dispatchers` lists `IRQ` more than once for local core N; each cross line needs its own interrupt line `` | two cross lines of one core cannot share an interrupt; give each its own entry in the front of `dispatchers` |
-| ``Expected N dispatchers, but found M.`` (raised by the software/async pass) | the remainder the xbin pass left for the local tasks is too short: append one interrupt per remaining local priority group. **Known confusing:** the pass only sees that remainder, so `found` counts the leftover entries, not the combined cross + local demand — compare `expected` against your local priority groups, not the full `dispatchers` length |
+| ``local core N has the cross line `(source S, priority P)`, but `dispatchers` declares only M entries`` | put one interrupt per cross line at the front of `dispatchers`, in ascending `(source, priority)` order, before the local task dispatchers |
+| ```dispatchers` lists `IRQ` more than once for local core N`` | two cross lines of one core cannot share an interrupt |
+| ``cross-binary receiver `T` … but the software task `L` … already owns that priority line`` | give the receiver a priority no core-local task of that core uses |
 
-*Freshness/staleness errors:*
+*Freshness / staleness:*
 
 | Message (excerpt) | Fix |
 |---|---|
-| ``failed to read the system view `…/system.json`: …`` | no view was synced (for example after `cargo clean`); run `cargo xbin sync` (or `cargo xbin build`) |
-| ``the system view `…/system.json` is stale: its `topology_hash` (…) does not match its contents (…)`` | the view was edited without a full sync; run `cargo xbin sync` (or `cargo xbin build`) |
-| ``application `x` interface changed since the last `cargo xbin sync` (the system view records interface hash …, the source's interface hashes to …)`` | the application's cross-binary interface changed after the last `sync` (a receiver was added/removed, the topology changed, or the stolen cross-dispatcher front changed); run `cargo xbin sync` before a plain `cargo build` |
-| ``receiver `T` declares priority …, but the synced system view has …`` (also `capacity`, `core`, `input type`, `spawn_by`) | a per-field receiver edit is reported by the field-level `resolve_receiver` check before the interface fingerprint; run `cargo xbin sync` |
-| ``the IDL `ipc-types.toml` changed since the last `cargo xbin sync` (the system view records layout hash …, the current IDL hashes to …)`` | `ipc-types.toml` was edited after the last `sync`; run `cargo xbin sync` before a plain `cargo build` |
+| ``failed to read the system view `…/system.json` `` | run `cargo xbin sync` (or `cargo xbin build`); common after `cargo clean` |
+| ``the system view `…/system.json` is stale `` | the view was edited by hand; run `cargo xbin sync` |
+| ``application `x` interface changed since the last `cargo xbin sync` `` | run `cargo xbin sync` before a plain `cargo build` |
+| ``the IDL `ipc-types.toml` changed since the last `cargo xbin sync` `` | run `cargo xbin sync` before a plain `cargo build` |
 
-*Runtime, cache and IRQ symptoms:* these appear only on hardware; the
-host fixtures in section 7.6 cannot reproduce them.
+*Runtime symptoms (hardware only):*
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| inputs arrive corrupted, or a receiver sees a stale/zeroed value | pool not cache-coherent: cacheable mapping without maintenance, or wrong base alias | map the pool effectively non-cacheable and shared; reconcile the capability binding's `base_local`/`base_peer` with the memory-attribute view; see section 7.4 |
-| a hard fault or bus error on the first spawn | the pool mapping is not atomic-capable (for example Device/Strongly-ordered memory, where the exclusive atomics are invalid), or the platform denies access to one core | give both cores an effectively non-cacheable, shared, atomic-capable mapping and grant them access to the region |
-| `Ok(())` but the receiver's `exec` never runs | router or dispatcher IRQ not enabled/mapped, or the `dispatchers` cross-line front does not match the view's ascending `(source, priority)` lines | map every pool entry and pair IRQ in the distribution; re-run `cargo xbin sync` and compare `doorbells`/`line` with the front of `dispatchers` |
-| FIFO stays full while the receiver is idle | dispatcher bound to a line whose IRQ never fires; router read the id but the pend is lost | same IRQ mapping check as above; duplicate notifications are harmless (the dispatcher drains until empty) |
-| `Err(None)` repeatedly | the input is enqueued but the doorbell notification fails (IRQ masked, doorbell word not shareable) | fix the pair IRQ/word mapping; the enqueued input is drained by the next successful notification |
+| inputs arrive corrupted, or a receiver sees a stale value | pool not cache-coherent, or a wrong base alias | map the pool effectively non-cacheable and shared; reconcile the endpoints' views |
+| a hard fault / bus error on the first spawn | pool mapping is not atomic-capable, or one core has no access | give both cores a shared, non-cacheable, atomic-capable mapping |
+| `Ok(())` but the receiver's `exec` never runs | a doorbell/dispatcher IRQ is not enabled or mapped | map every doorbell IRQ in the distribution, then re-run `cargo xbin sync` |
+| `Err(None)` repeatedly | the input is enqueued but the doorbell notification fails | fix the doorbell IRQ/word mapping; the enqueued input drains on the next successful notification |
 
-Every generated application embeds the `__RTICX_XBIN_TOPOLOGY_HASH` it was
-built from and `include_str!`s the system view (plus `rticx.toml` and
-`ipc-types.toml` when present), so rustc's dep-info rebuilds the application
-when `target/rticx-xbin/system.json` or one of those project files changes.
-
-Runtime semantics are covered above: a full FIFO or a caller on the wrong core
-returns `Err(Some(input))` without enqueueing, and a failed doorbell ring
-returns `Err(None)` with the input already enqueued.
+The full lists are in [failure modes](architecture.md#13-failure-modes).
