@@ -1,9 +1,8 @@
 # User guide
 
 This guide shows how to build a **multi-binary / heterogeneous multicore**
-RTICX application: one Cargo binary per core (or core group), where a task in
-one binary can spawn a software task in another binary through a typed,
-cross-core message.
+RTICX application: one Cargo binary per core, where a task in one binary can
+spawn a software task in another binary through a typed, cross-core message.
 
 The extension is **experimental** and lives in its own workspace
 (`experiments/multibinary/`), deliberately outside the root workspace and its
@@ -30,7 +29,7 @@ are documented in [architecture.md](architecture.md).
 - **One binary per core.** A project is a Cargo workspace whose members are the
   per-core applications. Each application is a normal RTICX `#[app]`; tasks,
   priorities, resources and `#[init]`/`#[idle]` work exactly as in a
-  single-binary application.
+  single-binary application, and each owns exactly one global core id.
 - **Cross-binary spawn.** A producer calls `Task::cross_spawn(input)`. The input
   travels through a driver-allocated FIFO and is delivered to the
   `exec(input)` of a software task declared in the receiving binary.
@@ -64,7 +63,7 @@ directory until it sees `rticx.toml`, and runs Cargo from there.
 ```text
 my-project/
 ├── Cargo.toml            # (optional) Cargo workspace
-├── rticx.toml            # topology: which binary runs on which core(s)
+├── rticx.toml            # topology: which core each binary runs on
 ├── ipc-types.toml        # shared data types (the type-only IDL)
 ├── .cargo/config.toml    # target triple, linker, runner (as usual)
 └── app-m7/, app-m4/      # one Cargo package per binary
@@ -87,19 +86,21 @@ Complete examples ship under `experiments/multibinary/crates/mock/fixtures/`:
 ## 4. Project topology: `rticx.toml`
 
 `rticx.toml` is the only place the project's cores are declared. `schema` must
-be `1`, and each `[[application]]` describes one binary:
+be `1`, and each `[[application]]` describes one binary running on exactly one
+core:
 
 | Key | Required | Meaning |
 |---|---|---|
 | `package` | yes | Cargo package name |
 | `target` | yes | `{ kind = "bin", name = "<bin>", triple = "<triple>"? }`; `kind` is `"bin"` in v1, `triple` overrides `.cargo/config.toml` |
-| `core_ids` | yes | local core index `i` maps to globally unique id `core_ids[i]` |
-| `external_cores` | no | global core ids in other binaries this application can see; must be disjoint from its own `core_ids` |
+| `core_id` | yes | this binary's globally unique core id |
 
-The project declares **no IPC memory**. The distribution owns the IPC pools
-(their addresses, aliases and shared budgets) and exposes which core pairs it
-can reach; the project author only maps applications to cores and declares
-their visibility. A leftover `[ipc.regions]` table is rejected by `sync`.
+`core_id` must be unique across applications. 
+
+The project declares **no IPC memory** and **no cross-binary edges**. The
+distribution owns the IPC pools (their addresses, aliases and shared budgets)
+and exposes which core pairs it can reach; each cross-binary edge is instead
+inferred from the receiving task's `spawn_by` (section 6).
 
 ```toml
 schema = 1
@@ -107,19 +108,16 @@ schema = 1
 [[application]]
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
-core_ids = [0]
-external_cores = [1]
+core_id = 0
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
-core_ids = [1]
-external_cores = [0]
+core_id = 1
 ```
 
-These global core ids are what `spawn_by` and `external_cores` refer to, and what
-the generated code uses in its runtime core checks. `#[app]` no longer accepts
-`core_ids` or `external_cores` — they are read from here.
+These global core ids are what `spawn_by` refers to, and what the generated code
+uses in its runtime core checks. `#[app]` may not declare `cores` argument.
 
 ## 5. Shared types: `ipc-types.toml`
 
@@ -211,12 +209,13 @@ mod app {
 inside `#[app]` by the software pass the distribution binds through its
 `swtasks` feature — do not import it from the distribution.
 
-`dispatchers` is one shared pool of interrupt lines per local core. **The
+`dispatchers` is one shared pool of interrupt lines per application. **The
 cross-binary lines come first**: one entry per distinct `(producer core,
 priority)` pair, in ascending order, followed by the local task dispatchers the
-software/async pass assigns (one per local priority group, ascending). The shape
-is a flat array for one core, or one inner array per core otherwise. Within the
-cross-line front every entry must be unique.
+software/async pass assigns (one per local priority group, ascending). The list
+is **flat** — an application owns exactly one core, so the nested
+one-array-per-core shape is a hard error — and within the cross-line front every
+entry must be unique.
 
 A `#[sw_task]` at one target core may be fed by only one origin core per
 priority: receivers fed by different producer cores need disjoint priorities
@@ -256,29 +255,30 @@ build error.
 
 ### `#[app]` arguments
 
-Topology is no longer declared in `#[app]`: `cores`, `core_ids` and
-`external_cores` come from `rticx.toml`, and a leftover `core_ids` /
-`external_cores` key is a hard error naming the migration.
+Topology is declared only in `rticx.toml`: the pass injects the application's
+single `core_id` (as the scalar `core_ids = [core_id]`) for the core pass, while
+`cores` keeps its default of `1`. A cross-binary `#[app]` may **not** declare
+`cores`.
 
 | Key | Meaning |
 |---|---|
-| `cores = N` | optional; derived from `rticx.toml` `core_ids`. Declare it only for a single-binary multicore application, and it must equal `core_ids.len()` |
-| `dispatchers = [IRQ…]` | per-core pool of interrupt lines: the cross-binary line dispatchers first (one entry per `(source, priority)` cross line of the core, ascending), then the local task dispatchers. Required when the application has cross-binary receivers or local `#[sw_task]`/`#[async_task]` priority groups |
+| `dispatchers = [IRQ…]` | flat pool of interrupt lines: the cross-binary line dispatchers first (one entry per `(source, priority)` cross line of the application, ascending), then the local task dispatchers. Required when the application has cross-binary receivers or local `#[sw_task]`/`#[async_task]` priority groups |
 
 ### `spawn_by` resolution
 
-`spawn_by` names the producer core. In an application whose entry declares
-`external_cores`, it is resolved in the **global** namespace:
+`spawn_by` **always** names a global producer core id (as declared in
+`rticx.toml`), so a `#[sw_task]` carrying one is a cross-binary receiver:
 
 | `spawn_by` | Classification |
 |---|---|
 | absent | plain native `#[sw_task]`, left untouched |
-| ∈ `core_ids` | in-app cross-core task; rewritten to the local index for the software pass |
-| ∈ `external_cores` | cross-binary receiver |
-| anything else | hard error naming the unknown core |
+| another application's `core_id` | cross-binary receiver |
+| this application's own `core_id` | hard error: it is a core-local task, so drop `spawn_by` |
+| not declared by any application | hard error naming the unknown core |
 
-Without `external_cores` the native local-index reading applies. `core` always
-stays a **local** index (`0..cores`, default `0`).
+A `#[sw_task]` with no `spawn_by` is a plain local software task. A cross
+receiver always runs on the application's single core (local index `0`), so the
+pass injects `core = 0` on the generated `#[task]`.
 
 ### Cross-receiver arguments
 
@@ -286,15 +286,16 @@ stays a **local** index (`0..cores`, default `0`).
 |---|---|---|
 | `priority` | no (default `1`) | priority line on the receiver core; cross receivers require `>= 1` |
 | `capacity` | no (default `1`, `>= 1`) | pending inputs the FIFO holds |
-| `core` | no (default `0`) | **local** core index running the task |
 | `spawn_by` | yes | the single **global** producer core id |
 | `init` | no (default `generated`) | must be `generated`; the build generates the receiver's init |
 | `shared` | no | passed to the core pass, which computes the SRP ceilings |
 
-Invalid arguments (unknown or duplicate keys, non-integer values,
-`capacity = 0`, `priority = 0` on a cross receiver, a `spawn_by` array, a
-receiver with no `impl RticSwTask`, an out-of-range `core`, or a malformed
-`dispatchers` list) are reported with a precise error.
+A cross receiver may **not** declare `core`: it always runs on the application's
+single core, and the pass injects `core = 0` on the generated `#[task]`. Invalid
+arguments (unknown or duplicate keys, non-integer values, `capacity = 0`,
+`priority = 0` on a cross receiver, a `spawn_by` array or a `core` key, a
+receiver with no `impl RticSwTask`, or a malformed `dispatchers` list) are
+reported with a precise error.
 
 Cross-binary code requires the distribution's `swtasks` feature; without it
 `RticSwTask` is undefined and the receiver fails to compile.
@@ -438,9 +439,10 @@ cargo xbin verify               # verify a plain `cargo build` output (--release
 ```
 
 `sync` parses `rticx.toml` and `ipc-types.toml`, collects each application's
-receiver declarations, then merges and validates the whole project: visibility
-of every `spawn_by`, type existence, disjoint priority lines, and whether the
-per-task FIFOs fit their pool budget. It writes `target/rticx-xbin/system.json`
+receiver declarations, then merges and validates the whole project: that every
+receiver's `spawn_by` names a declared core of another application, type
+existence, disjoint priority lines, and whether the per-task FIFOs fit their
+pool budget. It writes `target/rticx-xbin/system.json`
 and (re)generates `ipc_types.rs` when the IDL changed. Without `rticx.toml`,
 `sync` and `build` are no-ops.
 
@@ -515,8 +517,8 @@ see [memory and layout](architecture.md#9-memory-and-layout) for the details.
 
 ### Verifying your setup
 
-- `cargo xbin sync` validates the whole topology (cores, visibility, priorities,
-  types, pool budget fit).
+- `cargo xbin sync` validates the whole topology (cores, `spawn_by` edges,
+  priorities, types, pool budget fit).
 - `cargo xbin build --verify-elf` additionally checks every linked binary
   against the distribution's pools; `cargo xbin verify` does the same for a
   plain `cargo build` output.
@@ -544,21 +546,20 @@ Most errors name the fix. The frequent ones:
 | ``missing required top-level key `schema` `` / ``unsupported rticx.toml schema version N`` | set `schema = 1` |
 | ``package `x` is declared by more than one `[[application]]` `` | give each binary a unique `package` |
 | ``global core id N is declared by both …`` | core ids must be unique across applications |
-| ```external_cores` lists core id N, which this application owns via `core_ids` ``` | keep `external_cores` disjoint from the application's own `core_ids` |
 | ``references unknown type `T` `` | declare `[message.T]` or `[enum.T]` in `ipc-types.toml` |
 | ``cyclic message reference: A -> B -> A`` | break the cycle; messages are stored inline |
-| ``receiver `T` in `x` is spawned by global core N, but the application does not list it in `external_cores` `` | add the producer core to the receiver's `external_cores` (and vice versa) |
+| ```x` references global core id N in `spawn_by` of receiver `T`, but no application declares it `` | fix the id or add the missing `[[application]]` entry |
+| ``receiver `T` declares `spawn_by = N`, which is its own core id`` | drop `spawn_by`; the task is a core-local software task |
 | ``receiver `T` is declared by both `x` and `y` `` | task names must be unique across the project |
 | ``tasks `A` and `B` share priority P on core N`` | give tasks from different source cores disjoint priority lines |
-| ``the FIFOs of the `A<->B` pool `P` need N bytes, but the distribution reserves M`` | enlarge the pool budget or lower task `capacity` (both directions share it) |
-| ``[ipc.regions]` was removed: IPC memory is owned by the distribution`` | delete the table; the distribution owns the IPC pools |
+| ``the FIFOs of the `A<->B` pool `P` need N bytes, but the distribution reserves M`` | you must lower that task's `capacity` or use lighter IPC types |
 
 *Build-phase dispatcher errors:*
 
 | Message (excerpt) | Fix |
 |---|---|
-| ``local core N has the cross line `(source S, priority P)`, but `dispatchers` declares only M entries`` | put one interrupt per cross line at the front of `dispatchers`, in ascending `(source, priority)` order, before the local task dispatchers |
-| ```dispatchers` lists `IRQ` more than once for local core N`` | two cross lines of one core cannot share an interrupt |
+| ``this application has the cross line `(source S, priority P)`, but `dispatchers` declares only M entries`` | put one interrupt per cross line at the front of `dispatchers`, in ascending `(source, priority)` order, before the local task dispatchers |
+| ```dispatchers` lists `IRQ` more than once`` | two cross lines cannot share one interrupt |
 | ``cross-binary receiver `T` … but the software task `L` … already owns that priority line`` | give the receiver a priority no core-local task of that core uses |
 
 *Freshness / staleness:*

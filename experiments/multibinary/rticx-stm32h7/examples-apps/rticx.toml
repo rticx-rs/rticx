@@ -11,11 +11,9 @@ schema = 1
 [[application]]
 package = "app-cm7"
 target = { kind = "bin", name = "cm7", triple = "thumbv7em-none-eabihf" }
-core_ids = [0]
-external_cores = [1]
+core_id = 0
 
 [[application]]
 package = "app-cm4"
 target = { kind = "bin", name = "cm4", triple = "thumbv7em-none-eabi" }
-core_ids = [1]
-external_cores = [0]
+core_id = 1

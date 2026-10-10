@@ -107,7 +107,7 @@
 
     var head = make("div", "core-head");
     head.appendChild(make("span", "core-title", "Core " + core.id));
-    head.appendChild(make("span", "core-sub", core.app + " · local " + core.local_index));
+    head.appendChild(make("span", "core-sub", core.app));
     card.appendChild(head);
 
     card.appendChild(taskGroup("Executes", core.executes, false));

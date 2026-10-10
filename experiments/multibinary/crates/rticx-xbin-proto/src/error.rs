@@ -216,37 +216,25 @@ pub enum MergeError {
         package: String,
         /// The unknown global core id.
         core: u32,
-        /// Where the id appeared, for example `` `external_cores` ``.
+        /// Where the id appeared, for example `` `spawn_by` of receiver `T` ``.
         context: String,
     },
 
-    /// A receiver's local `core` index is outside `0..cores`.
+    /// A receiver's `spawn_by` names its own core.
+    ///
+    /// `spawn_by` always names a global core id of another binary, so a
+    /// receiver that names its own core is a core-local task and must drop the
+    /// key.
     #[error(
-        "receiver `{task}` in `{package}` declares local `core = {core}`, but the \
-         application has only {cores} core(s)"
-    )]
-    ReceiverCoreOutOfRange {
-        /// The package.
-        package: String,
-        /// The task name.
-        task: String,
-        /// The local core index.
-        core: u32,
-        /// The application's local core count.
-        cores: u32,
-    },
-
-    /// A receiver's `spawn_by` names a core owned by its own application.
-    #[error(
-        "receiver `{task}` in `{package}` declares `spawn_by = {core}`, but the application \
-         owns that core; cross-binary spawners must belong to another binary"
+        "receiver `{task}` in `{package}` declares `spawn_by = {core}`, which is its own core id; \
+         a core-local task must not set `spawn_by`, so drop it"
     )]
     OwnSpawnerCore {
         /// The package.
         package: String,
         /// The task name.
         task: String,
-        /// The locally owned core id.
+        /// The receiver's own core id.
         core: u32,
     },
 
@@ -262,35 +250,6 @@ pub enum MergeError {
         first: String,
         /// Package of the second declaration.
         second: String,
-    },
-
-    /// The producer application does not list the receiver's core in its own
-    /// `external_cores`.
-    #[error(
-        "task `{task}` runs on global core {core}, but its producer application `{package}` \
-         does not list that core in `external_cores`"
-    )]
-    TargetCoreNotVisible {
-        /// The producer package.
-        package: String,
-        /// The task name.
-        task: String,
-        /// The receiver core id.
-        core: u32,
-    },
-
-    /// A receiver's application does not list its producer core.
-    #[error(
-        "receiver `{task}` in `{package}` is spawned by global core {core}, but the \
-         application does not list it in `external_cores`"
-    )]
-    SpawnerCoreNotVisible {
-        /// The receiving package.
-        package: String,
-        /// The task name.
-        task: String,
-        /// The producer core id.
-        core: u32,
     },
 
     /// A declared input type does not exist in the IDL.

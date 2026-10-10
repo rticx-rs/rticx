@@ -29,7 +29,7 @@ use support::{cargo, runtime_and_mock_paths};
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 3,
+  "schema_version": 1,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -38,20 +38,18 @@ const SYSTEM_JSON: &str = r#"{
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
       "interface_hash": "0x26a74c0569235dd7",
-      "core_ids": [0],
-      "external_cores": [1]
+      "core_id": 0
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
       "interface_hash": "0x70b1fa36c7b61323",
-      "core_ids": [1],
-      "external_cores": [0]
+      "core_id": 1
     }
   ],
   "cores": [
-    { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 },
-    { "global_id": 1, "physical_core": 1, "app": "app-m4", "local_index": 0 }
+    { "global_id": 0, "physical_core": 0, "app": "app-m7" },
+    { "global_id": 1, "physical_core": 1, "app": "app-m4" }
   ],
   "types": [
     {
@@ -328,10 +326,10 @@ fn receiver_args() -> TokenStream {
     quote!(device = pac, dispatchers = [IRQ0])
 }
 
-/// The receiver application's topology: local core 0 -> global 1, global core 0
-/// visible.
+/// The receiver application's topology: the binary owns global core 1, so
+/// `spawn_by = 0` names the producer in another binary.
 fn receiver_topology() -> AppTopology {
-    AppTopology::new(vec![1], vec![0])
+    AppTopology::new(1)
 }
 
 /// The fixture view with the receiver application's interface fingerprint
@@ -346,7 +344,7 @@ fn receiver_system() -> String {
     application.interface_hash = rticx_xbin_pass::app_interface_hash(
         &receiver_args(),
         &receiver_app(),
-        Some(&receiver_topology()),
+        Some(receiver_topology()),
     )
     .expect("the receiver fingerprint parses");
     view.seal();

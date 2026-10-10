@@ -26,45 +26,39 @@ fields = { id = "u16" }
 variants = ["Idle", "Busy"]
 "#;
 
-/// The two-application fixture: m7 sends, m4 receives.
+/// The two-application fixture: m7 (core 0) sends, m4 (core 1) receives.
 const TWO_APPS: &str = r#"
 schema = 1
 
 [[application]]
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
-core_ids = [0]
-external_cores = [1]
+core_id = 0
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
-core_ids = [1]
-external_cores = [0]
+core_id = 1
 "#;
 
-/// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2), each able to
-/// see the other two.
+/// Three applications: m7 (core 0), m4 (core 1) and m5 (core 2).
 const THREE_APPS: &str = r#"
 schema = 1
 
 [[application]]
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
-core_ids = [0]
-external_cores = [1, 2]
+core_id = 0
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4" }
-core_ids = [1]
-external_cores = [0, 2]
+core_id = 1
 
 [[application]]
 package = "app-m5"
 target = { kind = "bin", name = "m5" }
-core_ids = [2]
-external_cores = [0, 1]
+core_id = 2
 "#;
 
 /// The mock fixture's pool bases (see `xbin-mock-distro::fixture_pools`).
@@ -89,7 +83,7 @@ fn manifest(package: &str, target: &str) -> AppManifest {
         interface_hash: Hash64::of(package.as_bytes()),
         types: Vec::new(),
         receivers: Vec::new(),
-        capabilities: Vec::new(),
+        capability: None,
     }
 }
 
@@ -97,7 +91,6 @@ fn receiver(
     name: &str,
     priority: u16,
     capacity: usize,
-    core: u32,
     spawn_by: u32,
     input: &str,
 ) -> ReceiverDecl {
@@ -105,7 +98,6 @@ fn receiver(
         name: name.to_string(),
         priority,
         capacity,
-        core,
         spawn_by,
         input_type: input.to_string(),
     }
@@ -121,9 +113,8 @@ fn pool(id: &str, peer: u32, base: u32) -> PoolDecl {
     }
 }
 
-fn capability(local_core: u32, physical_core: u32, pools: Vec<PoolDecl>) -> CoreCapability {
+fn capability(physical_core: u32, pools: Vec<PoolDecl>) -> CoreCapability {
     CoreCapability {
-        local_core,
         physical_core,
         pools,
     }
@@ -132,34 +123,31 @@ fn capability(local_core: u32, physical_core: u32, pools: Vec<PoolDecl>) -> Core
 /// `app-m7`: the producer of global core 0 (physical 0), no declarations.
 fn m7_manifest() -> AppManifest {
     let mut manifest = manifest("app-m7", "m7");
-    manifest.capabilities = vec![capability(
-        0,
+    manifest.capability = Some(capability(
         0,
         vec![pool("p01", 1, BASE_01), pool("p02", 2, BASE_02)],
-    )];
+    ));
     manifest
 }
 
 /// `app-m4`: executes `EncryptTask` for global core 0 (physical 1).
 fn m4_manifest() -> AppManifest {
     let mut manifest = manifest("app-m4", "m4");
-    manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, 0, "ipc_types::EncryptReq")];
-    manifest.capabilities = vec![capability(
-        0,
+    manifest.receivers = vec![receiver("EncryptTask", 3, 2, 0, "ipc_types::EncryptReq")];
+    manifest.capability = Some(capability(
         1,
         vec![pool("p01", 0, BASE_01), pool("p12", 2, BASE_12)],
-    )];
+    ));
     manifest
 }
 
 /// `app-m5`: no declarations of its own (global core 2, physical 2).
 fn m5_manifest() -> AppManifest {
     let mut manifest = manifest("app-m5", "m5");
-    manifest.capabilities = vec![capability(
-        0,
+    manifest.capability = Some(capability(
         2,
         vec![pool("p02", 0, BASE_02), pool("p12", 1, BASE_12)],
-    )];
+    ));
     manifest
 }
 
@@ -296,9 +284,9 @@ fn allocates_offsets_in_name_order_within_a_direction() {
     // Declared Zeta first, but allocation (and ids) follow name order.
     let mut m4 = m4_manifest();
     m4.receivers = vec![
-        receiver("Zeta", 4, 2, 0, 0, "ipc_types::EncryptReq"),
-        receiver("Alpha", 3, 2, 0, 0, "ipc_types::EncryptReq"),
-        receiver("Beta", 5, 2, 0, 0, "ipc_types::EncryptReq"),
+        receiver("Zeta", 4, 2, 0, "ipc_types::EncryptReq"),
+        receiver("Alpha", 3, 2, 0, "ipc_types::EncryptReq"),
+        receiver("Beta", 5, 2, 0, "ipc_types::EncryptReq"),
     ];
 
     let view = view(TWO_APPS, &[m7_manifest(), m4]);
@@ -322,7 +310,7 @@ fn offsets_are_shared_within_a_pool() {
     // are the two directions of the one `p01` pool: they share its budget and
     // are allocated in name order.
     let mut m7 = m7_manifest();
-    m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
+    m7.receivers = vec![receiver("BackTask", 2, 1, 1, "ipc_types::OtherReq")];
     let m4 = m4_manifest();
 
     let view = view(TWO_APPS, &[m7, m4]);
@@ -354,10 +342,10 @@ fn doorbell_lines_are_unique_per_target_and_shared_within_a_line() {
     let m5 = m5_manifest();
     let mut m4 = m4_manifest();
     m4.receivers = vec![
-        receiver("Alpha", 3, 1, 0, 0, "ipc_types::EncryptReq"),
-        receiver("Beta", 3, 1, 0, 0, "ipc_types::EncryptReq"),
-        receiver("Gamma", 5, 1, 0, 0, "ipc_types::EncryptReq"),
-        receiver("Delta", 4, 1, 0, 2, "ipc_types::EncryptReq"),
+        receiver("Alpha", 3, 1, 0, "ipc_types::EncryptReq"),
+        receiver("Beta", 3, 1, 0, "ipc_types::EncryptReq"),
+        receiver("Gamma", 5, 1, 0, "ipc_types::EncryptReq"),
+        receiver("Delta", 4, 1, 2, "ipc_types::EncryptReq"),
     ];
 
     let view = view(THREE_APPS, &[m7_manifest(), m4, m5]);
@@ -392,7 +380,7 @@ fn doorbell_lines_are_unique_per_target_and_shared_within_a_line() {
 #[test]
 fn doorbell_lines_are_independent_between_targets() {
     let mut m7 = m7_manifest();
-    m7.receivers = vec![receiver("BackTask", 2, 1, 0, 1, "ipc_types::OtherReq")];
+    m7.receivers = vec![receiver("BackTask", 2, 1, 1, "ipc_types::OtherReq")];
     let m4 = m4_manifest();
 
     let view = view(TWO_APPS, &[m7, m4]);

@@ -2,12 +2,13 @@
 //!
 //! The xbin pass no longer owns a separate `ipc_dispatchers` argument: it
 //! **steals the front** of the software pass's `dispatchers` argument — one
-//! entry per cross line of each local core, in ascending `(source, priority)`
+//! entry per cross line of the application, in ascending `(source, priority)`
 //! order — and leaves the remainder in the arguments for
-//! `rticx-sw-pass`/`rticx-async-pass`. Covers the flat (one core) and nested
-//! (multi-core) shapes, the error when the list is too short, duplicate
-//! rejection inside the stolen prefix, surplus entries (local dispatchers),
-//! the removed `ipc_dispatchers` key staying untouched, and that
+//! `rticx-sw-pass`/`rticx-async-pass`. The list is **flat** (an application
+//! owns exactly one core; the nested one-array-per-core shape was removed).
+//! Covers the flat shape, the error when the list is too short, duplicate
+//! rejection inside the stolen prefix, surplus entries (local dispatchers), the
+//! removed `ipc_dispatchers` key staying untouched, and that
 //! `rticx-sw-pass`'s `assign_dispatchers` only ever sees the leftovers.
 
 use proc_macro2::TokenStream;
@@ -19,7 +20,7 @@ use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 use rticx_xbin_pass::{AppTopology, RticPass, XbinPass};
 
 /// A single-core application with one native cross receiver: one cross line
-/// `(source 7, priority 3)` on local core 0.
+/// `(source 7, priority 3)`.
 fn cross_receiver_app() -> syn::ItemMod {
     syn::parse_quote! {
         mod app {
@@ -59,7 +60,7 @@ fn two_line_cross_receiver_app() -> syn::ItemMod {
 }
 
 /// The `#[app]` arguments of a single-core application with
-/// `dispatchers = <dispatchers>` (the core mapping comes from `rticx.toml`).
+/// `dispatchers = <dispatchers>`.
 fn receiver_args(dispatchers: TokenStream) -> TokenStream {
     quote!(
         device = mypac,
@@ -67,9 +68,10 @@ fn receiver_args(dispatchers: TokenStream) -> TokenStream {
     )
 }
 
-/// The receiver's topology: local core 0 -> global 1, global core 7 visible.
+/// The receiver's topology: the application owns global core `1`, so
+/// `spawn_by = 7` names another binary's core.
 fn receiver_topology() -> AppTopology {
-    AppTopology::new(vec![1], vec![7])
+    AppTopology::new(1)
 }
 
 /// Runs the syntax-only pass over the receiver fixture.
@@ -99,39 +101,24 @@ fn remaining_dispatchers(args: TokenStream) -> String {
 #[test]
 fn flat_dispatchers_steal_the_cross_prefix_and_keep_the_remainder() {
     // One cross line: the first entry is stolen, the rest stay for the
-    // software pass (a flat array is the single-core shape).
+    // software pass.
     let (args, _) = run(quote!([XBIN_IRQ, SW_IRQ])).expect("one cross line steals one entry");
     assert_eq!(remaining_dispatchers(args), "[SW_IRQ]");
 }
 
 #[test]
-fn nested_dispatchers_steal_per_core_and_keep_the_remainder() {
-    let app_mod: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            #[sw_task(priority = 3, spawn_by = 7)]
-            struct OnCore0;
-
-            impl RticSwTask for OnCore0 {
-                type SpawnInput = ipc_types::Msg;
-            }
-
-            #[sw_task(core = 1, priority = 1, spawn_by = 7)]
-            struct OnCore1;
-
-            impl RticSwTask for OnCore1 {
-                type SpawnInput = ipc_types::Msg;
-            }
-        }
-    };
-    let args = quote!(
-        device = mypac,
-        dispatchers = [[XBIN_0, SW_0], [XBIN_1, SW_1A, SW_1B]]
+fn nested_dispatchers_are_rejected() {
+    // An application owns exactly one core: the nested one-array-per-core shape
+    // was removed.
+    let error = rejected(quote!([[IRQ_0], [IRQ_1]]));
+    assert!(
+        error.contains("must be a flat list of interrupt paths"),
+        "{error}"
     );
-    let (args, _) = XbinPass::disabled()
-        .with_topology(AppTopology::new(vec![4, 5], vec![7]))
-        .run_pass(args, app_mod)
-        .expect("one stolen entry per core");
-    assert_eq!(remaining_dispatchers(args), "[[SW_0],[SW_1A,SW_1B]]");
+    assert!(
+        error.contains("the nested one-array-per-core shape was removed"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -186,10 +173,7 @@ fn duplicate_stolen_entries_are_rejected() {
         .run_pass(args, two_line_cross_receiver_app())
         .expect_err("two lines cannot share one interrupt")
         .to_string();
-    assert!(
-        error.contains("lists `IRQ_A` more than once for local core 0"),
-        "{error}"
-    );
+    assert!(error.contains("lists `IRQ_A` more than once"), "{error}");
     assert!(
         error.contains("each cross line needs its own interrupt line"),
         "{error}"
@@ -200,15 +184,8 @@ fn duplicate_stolen_entries_are_rejected() {
 fn dispatchers_shape_errors_are_rejected() {
     let cases: Vec<(TokenStream, &str)> = vec![
         (quote!(IRQ_A), "must be an array of interrupt paths"),
-        (
-            quote!([IRQ_A, IRQ_B]),
-            "list of one interrupt array per core when `cores > 1`",
-        ),
-        (
-            quote!([[IRQ_A], 3]),
-            "must be interrupt paths or arrays of interrupt paths",
-        ),
-        (quote!([[IRQ_A, 3]]), "must be interrupt paths"),
+        (quote!([IRQ_A, 3]), "must be interrupt paths"),
+        (quote!([[IRQ_A], 3]), "must be interrupt paths"),
     ];
 
     for (dispatchers, expected) in cases {
@@ -217,7 +194,7 @@ fn dispatchers_shape_errors_are_rejected() {
             mod app {}
         );
         let error = XbinPass::disabled()
-            .with_topology(AppTopology::new(vec![4, 5], vec![7]))
+            .with_topology(receiver_topology())
             .run_pass(args, app_mod)
             .expect_err("malformed dispatchers")
             .to_string();
@@ -226,23 +203,6 @@ fn dispatchers_shape_errors_are_rejected() {
             "expected `{expected}` in `{error}`"
         );
     }
-
-    // The nested shape must have exactly one list per core.
-    let args = quote!(device = mypac, dispatchers = [[IRQ_A], [IRQ_B]]);
-    let error = XbinPass::disabled()
-        .with_topology(AppTopology::new(vec![4, 5, 6], vec![7]))
-        .run_pass(
-            args,
-            syn::parse_quote!(
-                mod app {}
-            ),
-        )
-        .expect_err("one list per core")
-        .to_string();
-    assert!(
-        error.contains("number of cores `3` does not match the number of dispatchers `2`"),
-        "{error}"
-    );
 }
 
 /// Software-task backend of the pipeline test (mirrors the `core_ids`
@@ -286,12 +246,12 @@ fn software_pass_only_sees_the_leftover_dispatchers() {
     // codegen snapshot tests in `codegen.rs`.
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[init(core = 0)]
-            fn init0() -> TaskInitsCore0 {
-                TaskInitsCore0 {}
+            #[init]
+            fn init() -> TaskInits {
+                TaskInits {}
             }
 
-            #[sw_task(priority = 2, core = 0)]
+            #[sw_task(priority = 2)]
             struct Local;
 
             impl RticSwTask for Local {

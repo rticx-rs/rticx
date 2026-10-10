@@ -1,8 +1,9 @@
 //! `rticx.toml` parsing and validation.
 //!
-//! The project manifest is the single source of project topology: which binaries (applications) exist
-//! and how each application maps its *local* core indices to *globally unique*
-//! core ids, plus the foreign cores it can see.
+//! The project manifest is the single source of project topology: which binaries
+//! (applications) exist and the one *globally unique* core id each owns. Cross-
+//! binary edges are not declared here at all: they are inferred from each
+//! receiver's `spawn_by` when the driver merges the manifests.
 //!
 //! ```toml
 //! schema = 1
@@ -10,27 +11,16 @@
 //! [[application]]
 //! package = "app-m7"
 //! target = { kind = "bin", name = "m7" }
-//! core_ids = [0]
-//! external_cores = [1]
+//! core_id = 0
 //!
 //! [[application]]
 //! package = "app-m4"
 //! target = { kind = "bin", name = "m4" }
-//! core_ids = [1]
-//! external_cores = [0]
+//! core_id = 1
 //! ```
 //!
-//! `core_ids` is required and maps each local core index to its global core id;
-//! `external_cores` is optional and lists the global core ids this application
-//! can see in other binaries (a cross-binary spawn resolves in the global
-//! namespace only when it is non-empty). The ids of one application's
-//! `external_cores` must be disjoint from its own `core_ids`; whether they are
-//! declared by another application is checked by the merge step.
-//!
-//! The manifest carries **no** IPC memory: the distribution owns the IPC pools
-//! and reports them through its capability binding (recorded per application in
-//! the metadata manifest). A leftover `[ipc.regions]` table is rejected with an
-//! error naming the removal.
+//! `core_id` is required and must be globally unique across applications. Each
+//! application owns exactly one core.
 //!
 //! Values can only be produced by [`parse_project_str`] /
 //! [`parse_project_file`], so the invariants checked while parsing (unique
@@ -84,7 +74,7 @@ impl ProjectConfig {
     pub fn core_ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.applications
             .iter()
-            .flat_map(|application| application.core_ids.iter().copied())
+            .map(|application| application.core_id)
     }
 
     /// Renders the canonical `rticx.toml` form of this configuration.
@@ -116,16 +106,7 @@ impl ProjectConfig {
                     );
                 }
             }
-            let ids: Vec<String> = application.core_ids.iter().map(u32::to_string).collect();
-            let _ = writeln!(out, "core_ids = [{}]", ids.join(", "));
-            if !application.external_cores.is_empty() {
-                let ids: Vec<String> = application
-                    .external_cores
-                    .iter()
-                    .map(u32::to_string)
-                    .collect();
-                let _ = writeln!(out, "external_cores = [{}]", ids.join(", "));
-            }
+            let _ = writeln!(out, "core_id = {}", application.core_id);
         }
 
         out
@@ -142,16 +123,14 @@ impl ProjectConfig {
                     application.package
                 )));
             }
-            for &core_id in &application.core_ids {
-                if let Some(first) = core_ids.get(&core_id) {
-                    return Err(ProjectError::invalid(format!(
-                        "global core id {core_id} is declared by both `{first}` and `{}`; \
-                         core ids must be unique across applications",
-                        application.package
-                    )));
-                }
-                core_ids.insert(core_id, application.package.as_str());
+            if let Some(first) = core_ids.get(&application.core_id) {
+                return Err(ProjectError::invalid(format!(
+                    "global core id {} is declared by both `{first}` and `{}`; \
+                     core ids must be unique across applications",
+                    application.core_id, application.package
+                )));
             }
+            core_ids.insert(application.core_id, application.package.as_str());
         }
 
         Ok(())
@@ -169,8 +148,7 @@ impl fmt::Display for ProjectConfig {
 pub struct Application {
     package: String,
     target: Target,
-    core_ids: Vec<u32>,
-    external_cores: Vec<u32>,
+    core_id: u32,
 }
 
 impl Application {
@@ -184,16 +162,9 @@ impl Application {
         &self.target
     }
 
-    /// Returns the global core ids of the application, indexed by local core
-    /// index (`core_ids()[i]` is the global id of local core `i`).
-    pub fn core_ids(&self) -> &[u32] {
-        &self.core_ids
-    }
-
-    /// Returns the foreign global core ids this application can see, in
-    /// declaration order (empty when `external_cores` is absent).
-    pub fn external_cores(&self) -> &[u32] {
-        &self.external_cores
+    /// Returns the application's single, globally unique core id.
+    pub fn core_id(&self) -> u32 {
+        self.core_id
     }
 }
 
@@ -270,13 +241,6 @@ pub fn parse_project_str(source: &str) -> Result<ProjectConfig, ProjectError> {
                     applications.push(parse_application(index, item)?);
                 }
             }
-            "ipc" => {
-                return Err(ProjectError::invalid(
-                    "`[ipc.regions]` was removed: IPC memory is owned by the distribution's \
-                     capability binding, not declared in rticx.toml. \
-                     Remove the `[ipc.regions]` table",
-                ));
-            }
             other => {
                 return Err(ProjectError::invalid(format!(
                     "unknown top-level key `{other}`; expected `schema` or `application`"
@@ -324,8 +288,7 @@ fn parse_application(index: usize, value: &toml::Value) -> Result<Application, P
 
     let mut package = None;
     let mut target = None;
-    let mut core_ids = None;
-    let mut external_cores = None;
+    let mut core_id = None;
 
     for (key, value) in table {
         match key.as_str() {
@@ -336,16 +299,10 @@ fn parse_application(index: usize, value: &toml::Value) -> Result<Application, P
                 package = Some(name.to_string());
             }
             "target" => target = Some(parse_target(&format!("{path}.target"), value)?),
-            "core_ids" => core_ids = Some(parse_core_ids(&format!("{path}.core_ids"), value)?),
-            "external_cores" => {
-                external_cores = Some(parse_external_cores(
-                    &format!("{path}.external_cores"),
-                    value,
-                )?);
-            }
+            "core_id" => core_id = Some(parse_core_id(&format!("{path}.core_id"), value)?),
             other => {
                 return Err(ProjectError::invalid(format!(
-                    "`{path}` has unknown key `{other}`; expected `package`, `target`, `core_ids` or `external_cores`"
+                    "`{path}` has unknown key `{other}`; expected `package`, `target` or `core_id`"
                 )));
             }
         }
@@ -357,22 +314,14 @@ fn parse_application(index: usize, value: &toml::Value) -> Result<Application, P
     let target = target.ok_or_else(|| {
         ProjectError::invalid(format!("`{path}` is missing the required `target` key"))
     })?;
-    let core_ids = core_ids.ok_or_else(|| {
-        ProjectError::invalid(format!("`{path}` is missing the required `core_ids` key"))
+    let core_id = core_id.ok_or_else(|| {
+        ProjectError::invalid(format!("`{path}` is missing the required `core_id` key"))
     })?;
-    let external_cores = external_cores.unwrap_or_default();
-
-    if let Some(owned) = external_cores.iter().find(|id| core_ids.contains(id)) {
-        return Err(ProjectError::invalid(format!(
-            "`{path}.external_cores` lists core id {owned}, which this application owns via `core_ids`"
-        )));
-    }
 
     Ok(Application {
         package,
         target,
-        core_ids,
-        external_cores,
+        core_id,
     })
 }
 
@@ -427,56 +376,20 @@ fn parse_target(path: &str, value: &toml::Value) -> Result<Target, ProjectError>
     Ok(Target { kind, name, triple })
 }
 
-fn parse_core_ids(path: &str, value: &toml::Value) -> Result<Vec<u32>, ProjectError> {
-    let core_ids = parse_core_id_array(path, value)?;
-    if core_ids.is_empty() {
+/// Parses a required scalar `u32` core id, naming `path` in errors.
+fn parse_core_id(path: &str, value: &toml::Value) -> Result<u32, ProjectError> {
+    let Some(integer) = value.as_integer() else {
         return Err(ProjectError::invalid(format!(
-            "`{path}` must not be empty; it maps each local core index to a global core id"
-        )));
-    }
-    Ok(core_ids)
-}
-
-/// Parses the optional `external_cores` array.
-///
-/// Unlike `core_ids`, an explicitly empty array is accepted (it means the same
-/// as omitting the key); the canonical rendering drops it again.
-fn parse_external_cores(path: &str, value: &toml::Value) -> Result<Vec<u32>, ProjectError> {
-    parse_core_id_array(path, value)
-}
-
-/// Parses an array of unique `u32` core ids, naming `path[i]` in item errors.
-fn parse_core_id_array(path: &str, value: &toml::Value) -> Result<Vec<u32>, ProjectError> {
-    let items = value.as_array().ok_or_else(|| {
-        ProjectError::invalid(format!(
-            "`{path}` must be an array of integers, found {}",
+            "`{path}` must be an integer, found {}",
             kind_of(value)
+        )));
+    };
+    u32::try_from(integer).map_err(|_| {
+        ProjectError::invalid(format!(
+            "`{path}` = {integer} is out of range 0..={}",
+            u32::MAX
         ))
-    })?;
-
-    let mut core_ids = Vec::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        let item_path = format!("{path}[{index}]");
-        let Some(integer) = item.as_integer() else {
-            return Err(ProjectError::invalid(format!(
-                "`{item_path}` must be an integer, found {}",
-                kind_of(item)
-            )));
-        };
-        let core_id = u32::try_from(integer).map_err(|_| {
-            ProjectError::invalid(format!(
-                "`{item_path}` = {integer} is out of range 0..={}",
-                u32::MAX
-            ))
-        })?;
-        if core_ids.contains(&core_id) {
-            return Err(ProjectError::invalid(format!(
-                "`{path}` lists core id {core_id} more than once"
-            )));
-        }
-        core_ids.push(core_id);
-    }
-    Ok(core_ids)
+    })
 }
 
 fn expect_table<'a>(value: &'a toml::Value, path: &str) -> Result<&'a toml::Table, ProjectError> {

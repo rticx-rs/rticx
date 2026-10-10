@@ -45,12 +45,15 @@ fn cargo_xbin_build_builds_the_three_applications() {
 
     // Phase 2 really ran in every producer: each binary carries the generated
     // FIFO initializer symbol (which exists nowhere in the fixture sources).
-    // The per-direction coverage is asserted through the receiver router and
-    // dispatcher symbols below, one per `(source, target)` pair.
-    for bin in ["m7", "m5", "m4"] {
+    // Its name embeds the application's global core id.
+    for (bin, hook) in [
+        ("m7", "__rticx_xbin_init_fifos_core0"),
+        ("m5", "__rticx_xbin_init_fifos_core2"),
+        ("m4", "__rticx_xbin_init_fifos_core1"),
+    ] {
         assert!(
-            binary_contains(&binaries.join(bin), "__rticx_xbin_init_fifos_core0"),
-            "the {bin} binary does not contain the generated FIFO initializer"
+            binary_contains(&binaries.join(bin), hook),
+            "the {bin} binary does not contain the generated FIFO initializer `{hook}`"
         );
     }
 

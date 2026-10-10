@@ -10,13 +10,13 @@
 //! Validation rules (each with a focused [`MergeError`]):
 //!
 //! - **core-id consistency**: every `[[application]]` has exactly one
-//!   manifest; every referenced external core exists and is owned by another
-//!   binary (the `rticx.toml` parser already rejects duplicates and
-//!   self-references);
-//! - **receiver topology**: task names are unique, each receiver's local
-//!   `core` is in range, its single `spawn_by` names an existing producer in
-//!   another application, both applications list the peer's core in
-//!   `external_cores`, and the input type exists in `ipc-types.toml`;
+//!   manifest, and the `rticx.toml` parser already guarantees every `core_id`
+//!   is unique;
+//! - **receiver topology**: task names are unique, a receiver runs on its own
+//!   binary's `core_id`, its single `spawn_by` names an existing producer core
+//!   in another application (the edge is *inferred* from `spawn_by`, nothing is
+//!   declared on the producer side), and the input type exists in
+//!   `ipc-types.toml`;
 //! - **priority disjointness**: on one target core, tasks from different
 //!   source cores never share a priority line (local tasks are checked by the
 //!   core pass in phase 2);
@@ -42,7 +42,7 @@
 //! offsets. The `system.json` emit ([`crate::system_view`]) then copies the
 //! pools and the per-task pool ids.
 //!
-//! A project whose manifests carry no capability table at all (a fixture
+//! A project whose manifests bind no distribution capability at all (a fixture
 //! without a bound distribution backend) has no pool graph: its FIFOs are
 //! allocated sequentially per direction and no pool is emitted. Real projects
 //! always bind a distribution, so this path only affects such a stand-in.
@@ -126,7 +126,7 @@ pub struct MergedTask {
     elem_align: u32,
     offset: u32,
     /// Id of the pool the FIFO was allocated in, if the project bound a
-    /// capability table.
+    /// capability binding.
     pool: Option<String>,
 }
 
@@ -256,48 +256,33 @@ pub fn merge_project(
     }
 
     // -- distro pool graph ---------------------------------------------------
-    // The distribution owns IPC memory: each application manifest reports, per
-    // local core, its physical core and the pools that physical core can reach.
-    // Matching the two endpoints of a dual yields one shared pool per core
-    // pair. The graph also carries each global core's physical id, which the
-    // global core table below records.
+    // The distribution owns IPC memory: each application manifest reports the
+    // physical core the binary runs on and the pools that physical core can
+    // reach. Matching the two endpoints of a dual yields one shared pool per
+    // core pair. The graph also carries each global core's physical id, which
+    // the global core table below records.
     let mut graph = match_pools(applications, &manifest_of)?;
 
     // -- global core table ---------------------------------------------------
+    // One core per binary: the table maps every application's single `core_id`
+    // and doubles as the owner map used to infer each receiver's producer.
     let mut cores = Vec::new();
-    let mut owner: BTreeMap<u32, (&str, u32)> = BTreeMap::new();
+    let mut owner: BTreeMap<u32, &str> = BTreeMap::new();
     for application in applications {
-        for (local, &global) in application.core_ids().iter().enumerate() {
-            cores.push(CoreEntry {
-                global_id: global,
-                physical_core: graph.physical_of.get(&global).copied().unwrap_or(global),
-                app: application.package().to_string(),
-                local_index: local as u32,
-            });
-            owner.insert(global, (application.package(), local as u32));
-        }
-    }
-
-    // -- external cores ------------------------------------------------------
-    // Duplicates and self-references are rejected by the `rticx.toml` parser;
-    // only cross-application existence is left to check here.
-    for application in applications {
-        for &global in application.external_cores() {
-            if !owner.contains_key(&global) {
-                return Err(MergeError::UnknownCore {
-                    package: application.package().to_string(),
-                    core: global,
-                    context: "`external_cores`".to_string(),
-                });
-            }
-        }
+        let global = application.core_id();
+        cores.push(CoreEntry {
+            global_id: global,
+            physical_core: graph.physical_of.get(&global).copied().unwrap_or(global),
+            app: application.package().to_string(),
+        });
+        owner.insert(global, application.package());
     }
 
     // -- receivers -----------------------------------------------------------
     struct Receiver<'a> {
         manifest: &'a AppManifest,
         decl: &'a ReceiverDecl,
-        /// Global id of the core that executes the task.
+        /// Global id of the core that executes the task (its own `core_id`).
         core: u32,
         /// Global id of the single producer core (`spawn_by`).
         spawner: u32,
@@ -315,21 +300,13 @@ pub fn merge_project(
                     second: manifest.package.clone(),
                 });
             }
-            let core = application
-                .core_ids()
-                .get(decl.core as usize)
-                .copied()
-                .ok_or_else(|| MergeError::ReceiverCoreOutOfRange {
-                    package: manifest.package.clone(),
-                    task: decl.name.clone(),
-                    core: decl.core,
-                    cores: application.core_ids().len() as u32,
-                })?;
+            let core = application.core_id();
             check_input_type(&manifest.package, &decl.name, &decl.input_type, idl)?;
 
-            // The pass resolves `spawn_by` in the global namespace, so the
-            // manifest always carries a global core id of another binary.
-            let Some((producer_app, _)) = owner.get(&decl.spawn_by) else {
+            // The edge is inferred from `spawn_by` alone: the pass resolves it
+            // in the global namespace, so the manifest always carries the core
+            // id of another binary.
+            let Some(producer_app) = owner.get(&decl.spawn_by) else {
                 return Err(MergeError::UnknownCore {
                     package: manifest.package.clone(),
                     core: decl.spawn_by,
@@ -341,23 +318,6 @@ pub fn merge_project(
                     package: manifest.package.clone(),
                     task: decl.name.clone(),
                     core: decl.spawn_by,
-                });
-            }
-            if !application.external_cores().contains(&decl.spawn_by) {
-                return Err(MergeError::SpawnerCoreNotVisible {
-                    package: manifest.package.clone(),
-                    task: decl.name.clone(),
-                    core: decl.spawn_by,
-                });
-            }
-            let producer = config
-                .application(producer_app)
-                .expect("the producer application is declared in rticx.toml");
-            if !producer.external_cores().contains(&core) {
-                return Err(MergeError::TargetCoreNotVisible {
-                    package: producer.package().to_string(),
-                    task: decl.name.clone(),
-                    core,
                 });
             }
 
@@ -517,8 +477,7 @@ pub fn merge_project(
                 package: application.package().to_string(),
                 target: manifest.target.clone(),
                 interface_hash: manifest.interface_hash,
-                core_ids: application.core_ids().to_vec(),
-                external_cores: application.external_cores().to_vec(),
+                core_id: application.core_id(),
             }
         })
         .collect();
@@ -554,7 +513,7 @@ struct PoolGraph {
     /// Global core id -> distro physical core id, for every core that bound a
     /// capability entry.
     physical_of: BTreeMap<u32, u32>,
-    /// Whether any application bound a distribution capability table.
+    /// Whether any application bound a distribution capability binding.
     present: bool,
 }
 
@@ -582,7 +541,7 @@ fn ordered_core_pair(left: u32, right: u32) -> (u32, u32) {
 /// Pools whose peer is not a core of the project are ignored.
 ///
 /// The [`PoolGraph::present`] flag reports whether any application bound a
-/// distribution capability table at all. Without one (a fixture without a
+/// distribution capability binding at all. Without one (a fixture without a
 /// bound distribution backend) the graph is empty and the caller allocates
 /// without a budget.
 fn match_pools(
@@ -595,17 +554,13 @@ fn match_pools(
     let mut present = false;
     for application in applications {
         let manifest = manifest_of[application.package()];
-        if manifest.capabilities.is_empty() {
+        let Some(capability) = manifest.capability.as_ref() else {
             continue;
-        }
+        };
         present = true;
-        for capability in &manifest.capabilities {
-            let Some(&global) = application.core_ids().get(capability.local_core as usize) else {
-                continue;
-            };
-            physical_of.insert(global, capability.physical_core);
-            pools_of.insert(global, capability.pools.as_slice());
-        }
+        let global = application.core_id();
+        physical_of.insert(global, capability.physical_core);
+        pools_of.insert(global, capability.pools.as_slice());
     }
 
     // Physical core id -> global core id, so a pool's `peer` resolves to the
@@ -620,62 +575,61 @@ fn match_pools(
     let mut matched: BTreeMap<(u32, u32), MatchedPool> = BTreeMap::new();
     for application in applications {
         let manifest = manifest_of[application.package()];
-        for capability in &manifest.capabilities {
-            let Some(&source) = application.core_ids().get(capability.local_core as usize) else {
-                continue;
+        let Some(capability) = manifest.capability.as_ref() else {
+            continue;
+        };
+        let source = application.core_id();
+        let Some(&source_physical) = physical_of.get(&source) else {
+            continue;
+        };
+        for pool in &capability.pools {
+            let Some(&target) = global_of_physical.get(&pool.peer) else {
+                continue; // a pool to a core outside the project
             };
-            let Some(&source_physical) = physical_of.get(&source) else {
+            if target == source {
                 continue;
+            }
+            let (core_a, core_b) = ordered_core_pair(source, target);
+            let mismatch = || MergeError::IpcPoolMismatch {
+                id: pool.id.clone(),
+                core_a,
+                core_b,
             };
-            for pool in &capability.pools {
-                let Some(&target) = global_of_physical.get(&pool.peer) else {
-                    continue; // a pool to a core outside the project
-                };
-                if target == source {
-                    continue;
-                }
-                let (core_a, core_b) = ordered_core_pair(source, target);
-                let mismatch = || MergeError::IpcPoolMismatch {
-                    id: pool.id.clone(),
-                    core_a,
-                    core_b,
-                };
 
-                // The peer must report the same pool id back to this core.
-                let reverse = pools_of.get(&target).and_then(|pools| {
-                    pools.iter().find(|candidate| {
-                        candidate.id == pool.id && candidate.peer == source_physical
-                    })
-                });
-                let Some(reverse) = reverse else {
-                    return Err(mismatch());
-                };
-                if reverse.budget != pool.budget
-                    || reverse.base_local != pool.base_peer
-                    || reverse.base_peer != pool.base_local
-                {
-                    return Err(mismatch());
-                }
+            // The peer must report the same pool id back to this core.
+            let reverse = pools_of.get(&target).and_then(|pools| {
+                pools
+                    .iter()
+                    .find(|candidate| candidate.id == pool.id && candidate.peer == source_physical)
+            });
+            let Some(reverse) = reverse else {
+                return Err(mismatch());
+            };
+            if reverse.budget != pool.budget
+                || reverse.base_local != pool.base_peer
+                || reverse.base_peer != pool.base_local
+            {
+                return Err(mismatch());
+            }
 
-                let (base_from_a, base_from_b) = if source == core_a {
-                    (pool.base_local, pool.base_peer)
-                } else {
-                    (pool.base_peer, pool.base_local)
-                };
-                let candidate = MatchedPool {
-                    id: pool.id.clone(),
-                    core_a,
-                    core_b,
-                    base_from_a,
-                    base_from_b,
-                    budget: pool.budget,
-                };
-                match matched.get(&(core_a, core_b)) {
-                    Some(existing) if existing != &candidate => return Err(mismatch()),
-                    Some(_) => {}
-                    None => {
-                        matched.insert((core_a, core_b), candidate);
-                    }
+            let (base_from_a, base_from_b) = if source == core_a {
+                (pool.base_local, pool.base_peer)
+            } else {
+                (pool.base_peer, pool.base_local)
+            };
+            let candidate = MatchedPool {
+                id: pool.id.clone(),
+                core_a,
+                core_b,
+                base_from_a,
+                base_from_b,
+                budget: pool.budget,
+            };
+            match matched.get(&(core_a, core_b)) {
+                Some(existing) if existing != &candidate => return Err(mismatch()),
+                Some(_) => {}
+                None => {
+                    matched.insert((core_a, core_b), candidate);
                 }
             }
         }

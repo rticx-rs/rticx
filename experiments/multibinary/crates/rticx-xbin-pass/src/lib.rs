@@ -23,7 +23,7 @@
 //! - **codegen mode** (phase 2): it reads the driver-generated `system.json`
 //!   (from `RTICX_XBIN_SYSTEM`, or the default
 //!   `<project root>/target/rticx-xbin/system.json`), filters it by this
-//!   application's cores, and emits the cross-binary code:
+//!   application's core, and emits the cross-binary code:
 //!
 //!   - sender side: a generated sender stub (`pub struct <Task>;`), FIFO views and `Task::cross_spawn` for
 //!     every task whose `spawner_core` belongs to this application.
@@ -80,14 +80,13 @@
 //!   The pass steals one entry per cross line from the front of each local
 //!   core's list and rewrites the remainder into the `#[app]` arguments for
 //!   `rticx-sw-pass`/`rticx-async-pass`; the convention is **cross-binary
-//!   lines first, then the local task dispatchers**. `cores`/`core_ids` are
-//!   injected from `rticx.toml` and left for the core pass, which owns them —
+//!   lines first, then the local task dispatchers**. The scalar `core_ids` is
+//!   injected from `rticx.toml` and left for the core pass, which owns it —
 //!   see `crate::parse`;
 //! - native `#[sw_task(..)]` cross-binary receivers (always consumed, in both
 //!   modes), with their input type taken from the matching `impl RticSwTask {
-//!   type SpawnInput = …; }` block. In an application whose topology declares
-//!   external cores, `spawn_by` is resolved in the global namespace (see
-//!   `crate::parse`); there are no sender declarations.
+//!   type SpawnInput = …; }` block. `spawn_by` always names a global producer
+//!   core id (see `crate::parse`); there are no sender declarations.
 //!
 //! Detection of the metadata environment happens when the pass is
 //! constructed (`XbinPass::from_env`), i.e. at the macro entry point, so a
@@ -134,8 +133,8 @@ pub use crate::codegen::XbinPassBackend;
 pub use crate::binding::{IpcPool, PhysicalCore, PoolId};
 
 /// Topology resolution from the nearest `rticx.toml`: the
-/// distribution macros and the pass read the application's core mapping and
-/// visible foreign cores from the project file instead of `#[app]`.
+/// distribution macros and the pass read the application's global `core_id`
+/// from the project file instead of `#[app]`.
 pub use crate::topology::{AppTopology, ResolvedTopology, resolve_app_topology};
 
 /// Environment variable that switches the pass into metadata mode.
@@ -155,12 +154,19 @@ pub(crate) const PROJECT_MANIFEST: &str = "rticx.toml";
 /// Default system view path below the project root.
 const SYSTEM_FILE: &str = "system.json";
 
+/// The single local core index of a cross-binary binary.
+///
+/// A binary owns exactly one core, so every local-core-indexed API (the core
+/// pass's `main_injection`, the injected `#[task(core = ..)]`, the PAC array)
+/// uses `0`.
+pub(crate) const LOCAL_CORE: u32 = 0;
+
 /// The cross-binary compilation pass.
 pub struct XbinPass {
     meta: Option<MetaMode>,
     system: Option<SystemMode>,
     backend: Option<Box<dyn XbinPassBackend>>,
-    /// Where the application's `cores`/`core_ids`/`external_cores` come from.
+    /// Where the application's single global `core_id` comes from.
     topology: TopologySource,
     /// Init-hook wiring stashed by `run_pass` and read back by
     /// `main_injection` (both take `&self`).
@@ -172,7 +178,7 @@ pub struct XbinPass {
 /// `rticx.toml` is the single user-facing source of project topology; the
 /// pass picks its source at construction so a real distribution resolves the
 /// nearest project file while the pass's own tests can drive an explicit
-/// mapping without one.
+/// core id without one.
 #[derive(Debug, Clone)]
 enum TopologySource {
     /// Resolve the nearest `rticx.toml` at `run_pass` time (real
@@ -184,12 +190,12 @@ enum TopologySource {
         target: Option<String>,
     },
     /// A topology fixed at construction, used by the pass's tests to drive a
-    /// non-identity mapping without writing a `rticx.toml`.
+    /// non-zero core id without writing a `rticx.toml`.
     Fixed(AppTopology),
-    /// Identity over the `#[app(cores)]` argument (default 1); the
+    /// The standalone single-core topology (`core_id = 0`), used by the
     /// [`XbinPass::disabled`]/[`XbinPass::with_manifest`]/[`XbinPass::with_system`]
-    /// constructors.
-    FromArgs,
+    /// constructors when no `rticx.toml` governs the application.
+    Standalone,
 }
 
 /// Metadata-mode configuration resolved at pass construction.
@@ -288,7 +294,7 @@ impl XbinPass {
             meta: None,
             system: None,
             backend: None,
-            topology: TopologySource::FromArgs,
+            topology: TopologySource::Standalone,
             hooks: RefCell::new(None),
         }
     }
@@ -315,7 +321,7 @@ impl XbinPass {
             }),
             system: None,
             backend: None,
-            topology: TopologySource::FromArgs,
+            topology: TopologySource::Standalone,
             hooks: RefCell::new(None),
         }
     }
@@ -338,7 +344,7 @@ impl XbinPass {
                 target: Some(target.into()),
             }),
             backend: None,
-            topology: TopologySource::FromArgs,
+            topology: TopologySource::Standalone,
             hooks: RefCell::new(None),
         }
     }
@@ -355,31 +361,11 @@ impl XbinPass {
 
     /// Fixes the application's topology, overriding the constructor default.
     ///
-    /// Used by the pass's own tests to drive a non-identity mapping without
-    /// writing a `rticx.toml` into the crate directory. A `#[app(cores)]`
-    /// argument must agree with the fixed topology.
+    /// Used by the pass's own tests to drive a non-zero `core_id` without
+    /// writing a `rticx.toml` into the crate directory.
     pub fn with_topology(mut self, topology: AppTopology) -> Self {
         self.topology = TopologySource::Fixed(topology);
         self
-    }
-
-    /// The application's package name, when the constructor knows it.
-    ///
-    /// `None` for [`XbinPass::disabled`] without an explicit topology; it only
-    /// names the application in the `cores` mismatch error.
-    fn package(&self) -> Option<&str> {
-        self.meta
-            .as_ref()
-            .and_then(|meta| meta.package.as_deref())
-            .or_else(|| {
-                self.system
-                    .as_ref()
-                    .and_then(|system| system.package.as_deref())
-            })
-            .or(match &self.topology {
-                TopologySource::Project { package, .. } => package.as_deref(),
-                _ => None,
-            })
     }
 
     /// Returns whether this pass was constructed in metadata mode.
@@ -408,9 +394,9 @@ impl RticPass for XbinPass {
         mut app_mod: ItemMod,
     ) -> syn::Result<(TokenStream, ItemMod)> {
         // `rticx.toml` is the single user-facing source of topology:
-        // resolve the application's `cores`/`core_ids`/`external_cores` from
-        // the nearest project file (a `Fixed` topology overrides it; no
-        // project falls back to the identity mapping over `#[app(cores)]`).
+        // resolve the application's `core_id` from the nearest project file (a
+        // `Fixed` topology overrides it; no project falls back to the
+        // standalone single core).
         let resolved = match &self.topology {
             TopologySource::Project { package, target } => match package.as_deref() {
                 Some(package) => resolve_app_topology(package, target.as_deref())?,
@@ -419,8 +405,9 @@ impl RticPass for XbinPass {
             _ => None,
         };
         let topology = match &self.topology {
-            TopologySource::Fixed(topology) => Some(topology.clone()),
-            _ => resolved.as_ref().map(|resolved| resolved.topology.clone()),
+            TopologySource::Fixed(topology) => Some(*topology),
+            TopologySource::Standalone => None,
+            TopologySource::Project { .. } => resolved.as_ref().map(|resolved| resolved.topology),
         };
         // The `include_str!` freshness anchor is only emitted when the
         // topology came from a project file.
@@ -430,13 +417,11 @@ impl RticPass for XbinPass {
         // The project root the topology resolver found; the IDL freshness
         // check and anchor live next to the `rticx.toml`.
         let project_root = project_manifest.and_then(Path::parent);
-        let package = self.package().unwrap_or_default().to_string();
 
         // Parse the pass-owned syntax (the `#[app]` extensions, the
         // cross-binary declarations and the stolen dispatcher front) once; the
         // interface fingerprint is built from the same parsed data.
-        let (extensions, attr, decls) =
-            parse_interface(args, &mut app_mod, &package, topology.as_ref())?;
+        let (extensions, attr, decls) = parse_interface(args, &mut app_mod, topology)?;
 
         // The fingerprint describes only the cross-binary-sensitive parts of
         // the application (see [`interface_hash`]): the resolved topology, the
@@ -447,7 +432,6 @@ impl RticPass for XbinPass {
             let manifest = build_manifest(
                 meta,
                 interface_hash(&extensions, &decls),
-                extensions.clone(),
                 decls.clone(),
                 self.backend.as_deref(),
             )?;
@@ -584,10 +568,9 @@ fn append_items(app_mod: &mut ItemMod, items: Vec<syn::Item>) {
 fn parse_interface(
     args: TokenStream,
     app_mod: &mut ItemMod,
-    package: &str,
-    topology: Option<&AppTopology>,
+    topology: Option<AppTopology>,
 ) -> syn::Result<(AppExtensions, RticAttr, ModuleDecls)> {
-    let (mut extensions, mut attr) = parse_app_args(args, package, topology)?;
+    let (mut extensions, mut attr) = parse_app_args(args, topology)?;
     let decls = parse_module(app_mod, &extensions)?;
 
     // The shared `dispatchers` list carries the cross-binary line interrupts
@@ -703,7 +686,6 @@ fn live_idl_layout_hash(idl_path: &Path) -> syn::Result<u64> {
 fn build_manifest(
     meta: &MetaMode,
     interface_hash: Hash64,
-    extensions: AppExtensions,
     decls: ModuleDecls,
     backend: Option<&dyn XbinPassBackend>,
 ) -> syn::Result<AppManifest> {
@@ -727,7 +709,7 @@ fn build_manifest(
     types.sort();
     types.dedup();
 
-    let capabilities = capability_binding(&extensions, backend);
+    let capability = capability_binding(backend);
 
     Ok(AppManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
@@ -736,47 +718,36 @@ fn build_manifest(
         interface_hash,
         types,
         receivers: decls.receivers,
-        capabilities,
+        capability,
     })
 }
 
-/// Extracts the distro capability binding into the manifest schema: one
-/// [`CoreCapability`] per local core, carrying its physical core id and the
-/// IPC pools that physical core can reach.
+/// Extracts the distro capability binding into the manifest schema: the
+/// single [`CoreCapability`] of the binary's physical core and the IPC pools
+/// that physical core can reach.
 ///
 /// The two binding queries are pure, so they run in metadata mode too. Without
-/// a bound backend there is no distro vocabulary to report and the list stays
-/// empty; real distributions bind their backend unconditionally, so their
+/// a bound backend there is no distro vocabulary to report and the field stays
+/// `None`; real distributions bind their backend unconditionally, so their
 /// manifests always carry the binding.
 ///
-/// Each core's pools are sorted by `(peer, id)`, so a distribution that
-/// returns them in any order still produces a deterministic manifest.
-fn capability_binding(
-    extensions: &AppExtensions,
-    backend: Option<&dyn XbinPassBackend>,
-) -> Vec<CoreCapability> {
-    let Some(backend) = backend else {
-        return Vec::new();
-    };
+/// The pools are sorted by `(peer, id)`, so a distribution that returns them in
+/// any order still produces a deterministic manifest.
+fn capability_binding(backend: Option<&dyn XbinPassBackend>) -> Option<CoreCapability> {
+    let backend = backend?;
 
-    (0..extensions.cores)
-        .map(|local_core| {
-            let physical_core = backend.physical_core(local_core);
-            let mut pools: Vec<PoolDecl> = backend
-                .ipc_pools(local_core)
-                .into_iter()
-                .map(pool_decl)
-                .collect();
-            pools.sort_by(|left, right| {
-                (left.peer, left.id.as_str()).cmp(&(right.peer, right.id.as_str()))
-            });
-            CoreCapability {
-                local_core,
-                physical_core: physical_core.get(),
-                pools,
-            }
-        })
-        .collect()
+    let mut pools: Vec<PoolDecl> = backend
+        .ipc_pools(LOCAL_CORE)
+        .into_iter()
+        .map(pool_decl)
+        .collect();
+    pools
+        .sort_by(|left, right| (left.peer, left.id.as_str()).cmp(&(right.peer, right.id.as_str())));
+
+    Some(CoreCapability {
+        physical_core: backend.physical_core(LOCAL_CORE).get(),
+        pools,
+    })
 }
 
 /// Converts one distro pool binding into its manifest representation.
@@ -833,59 +804,38 @@ fn halt_compilation() -> ! {
 /// Only the parts of an application the driver merges into the project
 /// topology are covered:
 ///
-/// - the resolved topology (`cores`, `core_ids`, `external_cores`);
+/// - the resolved topology (the binary's single `core_id`);
 /// - the **stolen** cross-binary dispatcher front, in the order the pass bound
-///   it (ascending `(source, priority)` per local core, cores in order), with
-///   each interrupt [`Path`](syn::Path) rendered by [`write_canonical`] so
+///   it (ascending `(source, priority)`), with each
+///   interrupt [`Path`](syn::Path) rendered by [`write_canonical`] so
 ///   punctuation `Spacing` cannot change the hash;
 /// - the cross-binary receiver declarations (`name`, `priority`, `capacity`,
-///   `core`, `spawn_by`, `input_type`), already sorted by name.
+///   `spawn_by`, `input_type`), already sorted by name.
 ///
 /// Task bodies, doc/`//` comments, local `#[sw_task]`/`#[async_task]`
-/// declarations, `shared`, `device`/`pacs` and surplus (local) dispatcher
+/// declarations, `shared`, `device`/`pac` and surplus (local) dispatcher
 /// entries are deliberately excluded, so editing them cannot make a synced
-/// application look stale. The leading `v1` tag lets a future format change be
-/// detected explicitly.
+/// application look stale. The leading format tag lets a future layout change
+/// be detected explicitly.
 pub(crate) fn interface_hash(extensions: &AppExtensions, decls: &ModuleDecls) -> Hash64 {
     use std::fmt::Write as _;
 
-    let mut text = String::from("xbin-interface v1\n");
-    let _ = writeln!(text, "cores={}", extensions.cores);
+    let mut text = String::from("xbin-interface v2\n");
+    let _ = writeln!(text, "core_id={}", extensions.core_id);
 
-    let _ = write!(text, "core_ids=[");
-    for (index, id) in extensions.core_ids.iter().enumerate() {
-        if index > 0 {
-            text.push_str(", ");
-        }
-        let _ = write!(text, "{id}");
-    }
-    text.push_str("]\n");
-
-    let _ = write!(text, "external_cores=[");
-    for (index, id) in extensions.external_cores.iter().enumerate() {
-        if index > 0 {
-            text.push_str(", ");
-        }
-        let _ = write!(text, "{id}");
-    }
-    text.push_str("]\n");
-
-    for (core, entries) in extensions.cross_dispatchers.iter().enumerate() {
-        for entry in entries {
-            let mut rendered = String::new();
-            write_canonical(entry.to_token_stream(), &mut rendered);
-            let _ = writeln!(text, "dispatcher core={core} entry={rendered}");
-        }
+    for entry in &extensions.cross_dispatchers {
+        let mut rendered = String::new();
+        write_canonical(entry.to_token_stream(), &mut rendered);
+        let _ = writeln!(text, "dispatcher entry={rendered}");
     }
 
     for receiver in &decls.receivers {
         let _ = writeln!(
             text,
-            "receiver name={} priority={} capacity={} core={} spawn_by={} input={}",
+            "receiver name={} priority={} capacity={} spawn_by={} input={}",
             receiver.name,
             receiver.priority,
             receiver.capacity,
-            receiver.core,
             receiver.spawn_by,
             receiver.input_type,
         );
@@ -904,10 +854,10 @@ pub(crate) fn interface_hash(extensions: &AppExtensions, decls: &ModuleDecls) ->
 pub fn app_interface_hash(
     args: &TokenStream,
     app_mod: &ItemMod,
-    topology: Option<&AppTopology>,
+    topology: Option<AppTopology>,
 ) -> syn::Result<Hash64> {
     let mut app_mod = app_mod.clone();
-    let (extensions, _attr, decls) = parse_interface(args.clone(), &mut app_mod, "", topology)?;
+    let (extensions, _attr, decls) = parse_interface(args.clone(), &mut app_mod, topology)?;
     Ok(interface_hash(&extensions, &decls))
 }
 
@@ -973,7 +923,7 @@ mod tests {
 
     #[test]
     fn disabled_pass_strips_its_syntax() {
-        let pass = XbinPass::disabled().with_topology(AppTopology::new(vec![0], vec![1]));
+        let pass = XbinPass::disabled().with_topology(AppTopology::new(0));
         assert!(!pass.is_metadata_mode());
 
         let app_mod: syn::ItemMod = syn::parse_quote! {
@@ -1004,16 +954,12 @@ mod tests {
             .expect("stripped args stay parseable");
         assert!(parsed.get_expr("device").is_some(), "core args are kept");
         assert!(
-            parsed.get_expr("cores").is_some(),
-            "the resolved `cores` is injected for the core pass"
+            parsed.get_expr("cores").is_none(),
+            "`cores` is not injected: a cross-binary application owns exactly one core"
         );
         assert!(
             parsed.get_expr("core_ids").is_some(),
-            "the resolved `core_ids` is injected for the core pass"
-        );
-        assert!(
-            parsed.get_expr("external_cores").is_none(),
-            "`external_cores` is resolved from `rticx.toml`, never handed on"
+            "the scalar `core_ids` is injected for the core pass"
         );
         assert!(
             parsed.get_expr("ipc_dispatchers").is_some(),
@@ -1030,9 +976,10 @@ mod tests {
 
         let app_args = AppArgs::parse(args).expect("the core pass parses the injected `core_ids`");
         assert_eq!(app_args.core_ids, [0]);
+        assert_eq!(app_args.cores, 1, "`cores` stays at its default of 1");
 
         // The native cross receiver keeps its `#[sw_task]` attribute (minus
-        // the external `spawn_by`) and its `impl RticSwTask` block.
+        // the global `spawn_by`) and its `impl RticSwTask` block.
         let tokens = out.to_token_stream().to_string();
         assert!(!tokens.contains("spawn_by"), "{tokens}");
         assert!(
@@ -1050,7 +997,7 @@ mod tests {
             }
         };
         let error = XbinPass::disabled()
-            .with_topology(AppTopology::new(vec![0], vec![1]))
+            .with_topology(AppTopology::new(0))
             .run_pass(quote!(device = mypac), app_mod)
             .expect_err("receiver needs `type SpawnInput`")
             .to_string();
@@ -1072,48 +1019,12 @@ mod tests {
             }
         };
         let error = XbinPass::disabled()
-            .with_topology(AppTopology::new(vec![0], vec![1]))
+            .with_topology(AppTopology::new(0))
             .run_pass(quote!(device = mypac), app_mod)
             .expect_err("unknown key")
             .to_string();
         assert!(error.contains("unknown argument `bogus`"), "{error}");
     }
 
-    #[test]
-    fn core_ids_and_external_cores_are_rejected_as_moved() {
-        let app_mod: syn::ItemMod = syn::parse_quote! {
-            mod app {}
-        };
-        let error = XbinPass::disabled()
-            .run_pass(quote!(device = mypac, core_ids = [0]), app_mod.clone())
-            .expect_err("`core_ids` moved to `rticx.toml`")
-            .to_string();
-        assert_eq!(error, crate::parse::CORE_IDS_MOVED);
-
-        let error = XbinPass::disabled()
-            .run_pass(quote!(device = mypac, external_cores = [1]), app_mod)
-            .expect_err("`external_cores` moved to `rticx.toml`")
-            .to_string();
-        assert_eq!(error, crate::parse::EXTERNAL_CORES_MOVED);
-    }
-
-    #[test]
-    fn declared_cores_must_agree_with_the_project_mapping() {
-        let app_mod: syn::ItemMod = syn::parse_quote! {
-            mod app {}
-        };
-        let error = XbinPass::with_system("/nonexistent/system.json", "app-m4", "m4")
-            .with_topology(AppTopology::new(vec![1, 2], vec![0]))
-            .run_pass(quote!(device = mypac, cores = 1), app_mod)
-            .expect_err("`cores` must equal `core_ids.len()`")
-            .to_string();
-        assert_eq!(
-            error,
-            "`app-m4` declares `cores = 1`, but rticx.toml maps 2 core(s) via `core_ids`. In a \
-             multi-binary project `cores` is derived from `core_ids`; declare `cores` only when \
-             this application itself runs on more than one core at once (single-binary multicore, \
-             uncommon in a multi-binary project). Remove the argument or reconcile it with \
-             rticx.toml"
-        );
-    }
+    
 }

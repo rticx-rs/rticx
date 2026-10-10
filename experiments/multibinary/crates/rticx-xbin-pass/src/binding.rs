@@ -15,7 +15,8 @@
 //!
 //! ```ignore
 //! fn physical_core(&self, local_core: u32) -> PhysicalCore {
-//!     PhysicalCore(self.core_ids[local_core as usize])
+//!     // A binary owns exactly one core, so `local_core` is always 0.
+//!     PhysicalCore(self.core_id)
 //! }
 //!
 //! fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool> {

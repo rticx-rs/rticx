@@ -10,9 +10,8 @@
 //!   proc-macro path (project discovery and environment-based mode selection),
 //!   not the pass in isolation;
 //! - **merge/validation** through `cargo xbin sync` over generated metadata
-//!   projects: the moved `#[app(core_ids)]`/`#[app(external_cores)]` keys, a
-//!   priority line shared by two source cores, an input type missing from the
-//!   IDL and a leftover `[ipc.regions]` table (removed).
+//!   projects: a core-local `spawn_by`, a priority line shared by two source cores,
+//!   an input type missing from the IDL.
 //!
 //! Every assertion checks the exact documented message, so a wording change
 //! in the user guide or the error enum fails here.
@@ -105,7 +104,7 @@ fn plain_build_rejects_a_topology_edited_after_sync() {
     // sync leaves the resolved mapping out of step with the synced view.
     let config_path = root.join("rticx.toml");
     let config = std::fs::read_to_string(&config_path).expect("rticx.toml");
-    let edited = config.replacen("core_ids = [0]", "core_ids = [5]", 1);
+    let edited = config.replacen("core_id = 0", "core_id = 5", 1);
     assert_ne!(edited, config, "the fixture maps app-m7 to global core 0");
     std::fs::write(&config_path, edited).expect("edit rticx.toml");
 
@@ -264,38 +263,53 @@ fn write_metadata_project(root: &Path, config: &str, idl: &str, apps: &[(&str, &
 /// `rticx.toml` for a single metadata application.
 const SINGLE_APP: &str = "schema = 1\n\n\
      [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-     core_ids = [0]\n";
+     core_id = 0\n";
 
 #[test]
-fn sync_rejects_the_moved_topology_arguments() {
-    // The topology lives in `rticx.toml`; the old `#[app]` keys are hard
-    // errors that name the migration.
-    for (arg, expected) in [
-        ("core_ids = [0]", "`core_ids` moved to `rticx.toml`"),
-        (
-            "external_cores = [1]",
-            "`external_cores` moved to `rticx.toml`",
-        ),
-    ] {
-        let dir = tempdir().expect("tempdir");
-        let source = format!(
-            "use metadata_macro::app;\n\n#[app(device = fixture, {arg})]\nmod app {{}}\n\nfn main() {{}}\n"
-        );
-        write_metadata_project(
-            dir.path(),
-            SINGLE_APP,
-            ENCRYPT_IDL,
-            &[("app-m7", "m7", source.as_str())],
-        );
+fn sync_rejects_a_spawn_by_naming_the_own_core() {
+    // `spawn_by` always names a producer core in another binary: naming the
+    // application's own `core_id` is a core-local task.
+    let dir = tempdir().expect("tempdir");
+    let source = r#"
+use metadata_macro::app;
 
-        let error = sync(dir.path())
-            .expect_err("a moved topology argument must be rejected at sync")
-            .to_string();
-        assert!(
-            error.contains(expected),
-            "expected `{expected}` in `{error}`"
-        );
+#[app(device = fixture)]
+mod app {
+    trait RticSwTask {
+        type SpawnInput;
+        fn exec(&mut self, input: Self::SpawnInput);
     }
+
+    struct EncryptReq;
+
+    #[sw_task(priority = 3, capacity = 1, spawn_by = 0)]
+    struct EncryptTask;
+
+    impl RticSwTask for EncryptTask {
+        type SpawnInput = EncryptReq;
+        fn exec(&mut self, _input: Self::SpawnInput) {}
+    }
+}
+
+fn main() {}
+"#;
+    write_metadata_project(
+        dir.path(),
+        SINGLE_APP,
+        ENCRYPT_IDL,
+        &[("app-m7", "m7", source)],
+    );
+
+    let error = sync(dir.path())
+        .expect_err("a `spawn_by` naming the own core is a core-local task")
+        .to_string();
+    assert!(
+        error.contains(
+            "`EncryptTask` declares `spawn_by = 0`, which is this application's own core id; \
+             it is a core-local task, so drop `spawn_by`"
+        ),
+        "{error}"
+    );
 }
 
 #[test]
@@ -303,11 +317,11 @@ fn sync_rejects_a_priority_conflict_between_sources() {
     let dir = tempdir().expect("tempdir");
     let config = "schema = 1\n\n\
          [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\nexternal_cores = [1]\n\n\
+         core_id = 0\n\n\
          [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
-         core_ids = [1]\nexternal_cores = [0, 2]\n\n\
+         core_id = 1\n\n\
          [[application]]\npackage = \"app-m5\"\ntarget = { kind = \"bin\", name = \"m5\" }\n\
-         core_ids = [2]\nexternal_cores = [1]\n";
+         core_id = 2\n";
     write_metadata_project(
         dir.path(),
         config,
@@ -334,9 +348,9 @@ fn sync_rejects_an_unknown_input_type() {
     let dir = tempdir().expect("tempdir");
     let config = "schema = 1\n\n\
          [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\nexternal_cores = [1]\n\n\
+         core_id = 0\n\n\
          [[application]]\npackage = \"app-m4\"\ntarget = { kind = \"bin\", name = \"m4\" }\n\
-         core_ids = [1]\nexternal_cores = [0]\n";
+         core_id = 1\n";
     write_metadata_project(
         dir.path(),
         config,
@@ -357,25 +371,3 @@ fn sync_rejects_an_unknown_input_type() {
     );
 }
 
-#[test]
-fn sync_rejects_the_removed_ipc_regions_table() {
-    let dir = tempdir().expect("tempdir");
-    std::fs::write(
-        dir.path().join("rticx.toml"),
-        "schema = 1\n\n\
-         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\n\n\
-         [ipc.regions]\n\
-         \"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }\n",
-    )
-    .expect("rticx.toml");
-
-    let error = sync(dir.path())
-        .expect_err("the removed `[ipc.regions]` table must be rejected")
-        .to_string();
-    assert_eq!(
-        error,
-        "`[ipc.regions]` was removed: IPC memory is owned by the distribution's capability \
-         binding, not declared in rticx.toml. Remove the `[ipc.regions]` table"
-    );
-}

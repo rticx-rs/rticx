@@ -81,7 +81,6 @@ struct Stats {
 struct CoreCard {
     id: u32,
     app: String,
-    local_index: u32,
     /// Cross-binary receivers executing on this core.
     executes: Vec<TaskCard>,
     /// Generated `cross_spawn` stubs this core originates.
@@ -177,9 +176,9 @@ impl ViewModel {
     fn from_view(view: &SystemView) -> Self {
         // Core identity, and every core id referenced anywhere (so a reference
         // to a core missing from `cores` still gets a box).
-        let mut meta: BTreeMap<u32, (String, u32)> = BTreeMap::new();
+        let mut meta: BTreeMap<u32, String> = BTreeMap::new();
         for core in &view.cores {
-            meta.insert(core.global_id, (core.app.clone(), core.local_index));
+            meta.insert(core.global_id, core.app.clone());
         }
 
         let mut ids: BTreeSet<u32> = view.cores.iter().map(|core| core.global_id).collect();
@@ -221,10 +220,7 @@ impl ViewModel {
 
         let mut cores = Vec::with_capacity(ids.len());
         for id in &ids {
-            let (app, local_index) = meta
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| (String::from("?"), 0));
+            let app = meta.get(id).cloned().unwrap_or_else(|| String::from("?"));
 
             let mut executes: Vec<TaskCard> = view
                 .tasks
@@ -247,7 +243,6 @@ impl ViewModel {
             cores.push(CoreCard {
                 id: *id,
                 app,
-                local_index,
                 executes,
                 spawns,
             });
@@ -491,27 +486,23 @@ mod tests {
                 package: "app-m7".to_string(),
                 target: target("m7"),
                 interface_hash: Hash64::new(0xaaaa),
-                core_ids: vec![0],
-                external_cores: vec![1],
+                core_id: 0,
             }],
             cores: vec![
                 CoreEntry {
                     global_id: 0,
                     physical_core: 0,
                     app: "app-m7".to_string(),
-                    local_index: 0,
                 },
                 CoreEntry {
                     global_id: 2,
                     physical_core: 2,
                     app: "app-m5".to_string(),
-                    local_index: 0,
                 },
                 CoreEntry {
                     global_id: 1,
                     physical_core: 1,
                     app: "app-m4".to_string(),
-                    local_index: 0,
                 },
             ],
             types: Vec::new(),

@@ -16,15 +16,13 @@ fn sample_view() -> SystemView {
             package: "app-m7".to_string(),
             target: TargetRef::bin("m7"),
             interface_hash: Hash64::of(b"app-m7 source"),
-            core_ids: vec![0],
-            external_cores: vec![1],
+            core_id: 0,
         },
         AppEntry {
             package: "app-m4".to_string(),
             target: TargetRef::bin("m4"),
             interface_hash: Hash64::of(b"app-m4 source"),
-            core_ids: vec![1],
-            external_cores: vec![0],
+            core_id: 1,
         },
     ];
     view.cores = vec![
@@ -32,13 +30,11 @@ fn sample_view() -> SystemView {
             global_id: 0,
             physical_core: 0,
             app: "app-m7".to_string(),
-            local_index: 0,
         },
         CoreEntry {
             global_id: 1,
             physical_core: 1,
             app: "app-m4".to_string(),
-            local_index: 0,
         },
     ];
     view.types = vec![
@@ -121,19 +117,6 @@ fn sample_view() -> SystemView {
 }
 
 #[test]
-fn schema_three_names_the_freshness_hash_interface_hash() {
-    assert_eq!(SYSTEM_SCHEMA_VERSION, 3);
-
-    let json = sample_view().to_json();
-    assert!(json.contains("\"schema_version\": 3"), "{json}");
-    assert!(json.contains("\"interface_hash\": \"0x"), "{json}");
-    assert!(
-        !json.contains("source_hash"),
-        "the freshness hash is the interface hash: {json}"
-    );
-}
-
-#[test]
 fn serialization_round_trips() {
     let view = sample_view();
     let json = view.to_json();
@@ -206,6 +189,7 @@ fn addresses_and_hashes_are_hex_strings_in_json() {
     assert_eq!(value["pools"][0]["base_from_a"], "0x30040000");
     assert_eq!(value["pools"][0]["base_from_b"], "0x30040000");
     assert_eq!(value["cores"][0]["physical_core"], 0);
+    assert_eq!(value["apps"][0]["core_id"], 0);
     assert_eq!(value["tasks"][0]["fifo"]["pool"], "p01");
     assert_eq!(value["tasks"][0]["fifo"]["offset"], 0);
 
@@ -224,21 +208,21 @@ fn addresses_and_hashes_are_hex_strings_in_json() {
 fn unknown_schema_version_is_rejected() {
     let mut value: serde_json::Value =
         serde_json::from_str(&sample_view().to_json()).expect("valid JSON");
-    value["schema_version"] = serde_json::Value::from(4u32);
+    value["schema_version"] = serde_json::Value::from(5u32);
 
-    let error = SystemView::from_json(&value.to_string()).expect_err("schema 4 is rejected");
+    let error = SystemView::from_json(&value.to_string()).expect_err("schema 5 is rejected");
     assert!(
         matches!(
             error,
             SystemError::Schema {
-                found: 4,
-                expected: 3
+                found: 5,
+                expected: 4
             }
         ),
         "unexpected error: {error}"
     );
     assert_eq!(
         error.to_string(),
-        "unsupported system.json schema version 4; this tool supports schema = 3"
+        "unsupported system.json schema version 5; this tool supports schema = 4"
     );
 }

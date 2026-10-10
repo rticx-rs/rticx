@@ -357,12 +357,10 @@ mod tests {
         let mut view = SystemView::empty("0.2");
         view.cores = cores
             .iter()
-            .enumerate()
-            .map(|(index, (app, global_id))| CoreEntry {
+            .map(|(app, global_id)| CoreEntry {
                 global_id: *global_id,
                 physical_core: *global_id,
                 app: (*app).to_string(),
-                local_index: index as u32,
             })
             .collect();
         view.pools = pools;

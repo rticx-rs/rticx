@@ -44,7 +44,7 @@
 //!     priority of the pair, whose `exec` loops reading task ids from the
 //!     pair's doorbell, enqueues each task in its line's ready queue and
 //!     pends that line's dispatcher through the software pass's
-//!     `__rticx_local_irq_pend[_core{N}]`; unknown ids are ignored;
+//!     `__rticx_local_irq_pend`; unknown ids are ignored;
 //!   - the target-side read function
 //!     `__rticx_xbin_read_{source}_{target}()`, whose body is the
 //!     distribution's transport, filled through
@@ -64,9 +64,9 @@
 //!     the start of its entry (`MainInjectionPoint::BeforeInit`, before the
 //!     user `init`): memory attributes are per-core, so each core makes its own
 //!     view of the IPC pools effectively non-cacheable and shared;
-//!   - `__rticx_xbin_init_fifos_core<N>` is generated for every local core
-//!     that produces cross-binary tasks and runs at `BeforePostInit`: it
-//!     zeroes the ring indices of the core's own FIFOs, so a topology whose
+//!   - `__rticx_xbin_init_fifos_core<N>` is generated for the application's
+//!     core when it produces cross-binary tasks and runs at `BeforePostInit`:
+//!     it zeroes the ring indices of the core's own FIFOs, so a topology whose
 //!     owner core is not an endpoint of a pool initializes correctly. The
 //!     producer is always an endpoint of its pool.
 //!
@@ -99,6 +99,7 @@ use rticx_xbin_proto::{
 };
 use syn::{Item, ItemMod, LitInt, LitStr, Type};
 
+use crate::LOCAL_CORE;
 use crate::binding::{IpcPool, PhysicalCore};
 use crate::error;
 use crate::parse::AppExtensions;
@@ -237,7 +238,7 @@ pub trait XbinPassBackend {
     /// `#pend_fn(#interrupt_type::#dispatchers_entry)`, so the returned
     /// path must name a **type** whose variants or associated constants match
     /// the stolen `dispatchers` entries. Return `None` to use the application's
-    /// PAC path `pacs[core]::Interrupt`.
+    /// PAC path `pac::Interrupt`.
     ///
     /// A distribution must return the same path from this method and from
     /// `SwPassBackend::custom_interrupt_path`, so the router and the software
@@ -283,18 +284,19 @@ pub trait XbinPassBackend {
 pub(crate) struct InitHooks {
     /// Hook functions appended to the `#[app]` module.
     pub(crate) items: Vec<Item>,
-    /// Per-core wiring consumed by [`crate::XbinPass`]'s `main_injection`.
+    /// Init wiring consumed by [`crate::XbinPass`]'s `main_injection`.
     pub(crate) plan: HookPlan,
 }
 
-/// Per-core init plan of one application.
+/// Init plan of one application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HookPlan {
-    /// Global core id of each local core index (`core_ids[local]`).
-    global_ids: Vec<u32>,
-    /// Local cores that produce at least one view task, running
-    /// `__rticx_xbin_init_fifos_core<N>` before their `post_init`.
-    fifo_locals: Vec<u32>,
+    /// The application's single, globally unique core id. The generated FIFO
+    /// initializer is named after it.
+    core_id: u32,
+    /// Whether the application's core produces at least one view task, running
+    /// `__rticx_xbin_init_fifos_core<core_id>` before its `post_init`.
+    initializes_fifos: bool,
 }
 
 impl HookPlan {
@@ -306,33 +308,40 @@ impl HookPlan {
         core: u32,
         backend: &dyn XbinPassBackend,
     ) -> Option<TokenStream> {
+        // A cross-binary application owns exactly one core: local index 0.
+        if core != LOCAL_CORE {
+            return None;
+        }
         match point {
             rticx_core::MainInjectionPoint::BeforeInit => {
-                self.global_ids.get(core as usize)?;
                 // The distribution's configuration tokens are inlined: there
                 // is no generated wrapper function anymore.
                 backend.configure_shared_memory(core)
             }
             rticx_core::MainInjectionPoint::BeforePostInit => {
-                self.global_ids.get(core as usize)?;
-                if self.fifo_locals.contains(&core) {
-                    // Each FIFO's indices are zeroed by its producer core,
-                    // before its `post_init` can spawn.
-                    let init_fn = format_ident!("__rticx_xbin_init_fifos_core{core}");
-                    Some(quote! {
-                        #init_fn();
-                    })
-                } else {
-                    None
+                if !self.initializes_fifos {
+                    return None;
                 }
+                // Each FIFO's indices are zeroed by its producer core, before
+                // its `post_init` can spawn.
+                let init_fn = init_fifos_ident(self.core_id);
+                Some(quote! {
+                    #init_fn();
+                })
             }
             _ => None,
         }
     }
 }
 
+/// Name of the generated FIFO initializer of the application owning the global
+/// core `core_id`.
+fn init_fifos_ident(core_id: u32) -> Ident {
+    format_ident!("__rticx_xbin_init_fifos_core{core_id}")
+}
+
 /// Generates the producer-side items of an application: for
-/// every view task whose `spawner_core` is one of its cores, the generated
+/// every view task whose `spawner_core` is its core, the generated
 /// `pub struct <Task>;` sender stub, its hidden FIFO view and its
 /// `cross_spawn` impl — plus one ring function per `(source -> target)` pair
 /// the application produces into, which delivers task ids to the target's
@@ -351,7 +360,7 @@ pub(crate) fn generate_sender_items(
     let stubs: Vec<&TaskEntry> = view
         .tasks
         .iter()
-        .filter(|task| application.core_ids.contains(&task.spawner_core))
+        .filter(|task| task.spawner_core == application.core_id)
         .collect();
     if stubs.is_empty() {
         return Ok(Vec::new());
@@ -481,11 +490,9 @@ pub(crate) fn generate_receiver_items(
     // would otherwise be silently undrained after a `sync` removed the task
     // from the source.
     for task in &view.tasks {
-        let owned = view
-            .cores
-            .iter()
-            .any(|core| core.global_id == task.receiver_core && core.app == application.package);
-        if owned && !receivers.iter().any(|receiver| receiver.name == task.name) {
+        if task.receiver_core == application.core_id
+            && !receivers.iter().any(|receiver| receiver.name == task.name)
+        {
             return Err(error(format!(
                 "the synced system view has task `{}` for application `{package}`, but the source \
                  declares no cross-binary receiver for it; run `cargo xbin sync`",
@@ -496,8 +503,8 @@ pub(crate) fn generate_receiver_items(
 
     // ~ The stolen front of the shared `dispatchers` list assigns one interrupt
     // per line in ascending `(source, priority)` order (`steal_dispatchers`
-    // checked the count in `run_pass`), so the line's index in its core's list
-    // names the dispatcher's interrupt line.
+    // checked the count in `run_pass`), so the line's index names the
+    // dispatcher's interrupt line.
     let irq_indices = line_irq_indices(receivers);
 
     // ~ One line dispatcher per `(source, target, priority)`: the key of the
@@ -507,15 +514,14 @@ pub(crate) fn generate_receiver_items(
         let resolved = resolve_receiver(view, application, receiver)?;
         let task = resolved.task;
         let key = (task.fifo.source, task.fifo.target, task.priority);
-        let index = irq_indices[&(resolved.local_core, task.fifo.source, task.priority)];
-        let irq = extensions.cross_dispatchers[resolved.local_core as usize][index].clone();
+        let index = irq_indices[&(task.fifo.source, task.priority)];
+        let irq = extensions.cross_dispatchers[index].clone();
         groups
             .entry(key)
             .or_insert_with(|| LineGroup {
                 source: task.fifo.source,
                 target: task.fifo.target,
                 priority: task.priority,
-                local_core: resolved.local_core,
                 irq,
                 receivers: Vec::new(),
             })
@@ -582,8 +588,6 @@ struct LineGroup<'a> {
     target: u32,
     /// Line priority.
     priority: u16,
-    /// Local core index running the line's dispatcher (`0..cores`).
-    local_core: u32,
     /// Interrupt line of the line's dispatcher, from the stolen front of the
     /// application's `dispatchers`.
     irq: syn::Path,
@@ -637,29 +641,24 @@ impl LineGroup<'_> {
     }
 }
 
-/// Index of every cross line in the stolen front of its local core's
+/// Index of every cross line in the stolen front of the application's
 /// `dispatchers` list.
 ///
-/// Mirrors [`crate::parse::steal_dispatchers`]: the stolen prefix lists each
-/// core's distinct `(source, priority)` lines in ascending order,
+/// Mirrors [`crate::parse::steal_dispatchers`]: the stolen prefix lists the
+/// application's distinct `(source, priority)` lines in ascending order,
 /// and a task's line is the `(spawn_by, priority)` pair of its declaration.
-fn line_irq_indices(receivers: &[ReceiverDecl]) -> BTreeMap<(u32, u32, u16), usize> {
-    let mut per_core: BTreeMap<u32, Vec<(u32, u16)>> = BTreeMap::new();
-    for receiver in receivers {
-        per_core
-            .entry(receiver.core)
-            .or_default()
-            .push((receiver.spawn_by, receiver.priority));
-    }
-    let mut indices = BTreeMap::new();
-    for (core, mut lines) in per_core {
-        lines.sort_unstable();
-        lines.dedup();
-        for (index, (source, priority)) in lines.into_iter().enumerate() {
-            indices.insert((core, source, priority), index);
-        }
-    }
-    indices
+fn line_irq_indices(receivers: &[ReceiverDecl]) -> BTreeMap<(u32, u16), usize> {
+    let mut lines: Vec<(u32, u16)> = receivers
+        .iter()
+        .map(|receiver| (receiver.spawn_by, receiver.priority))
+        .collect();
+    lines.sort_unstable();
+    lines.dedup();
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| (line, index))
+        .collect()
 }
 
 /// Generates the items of one `(source -> target, priority)` line:
@@ -682,7 +681,7 @@ fn generate_line_items(
     let queue_depth = line.queue_depth();
     let irq = &line.irq;
     let priority_lit = LitInt::new(&line.priority.to_string(), Span::call_site());
-    let core_lit = LitInt::new(&line.local_core.to_string(), Span::call_site());
+    let core_lit = LitInt::new(&LOCAL_CORE.to_string(), Span::call_site());
 
     let mut items = Vec::with_capacity(line.receivers.len() * 2 + 3);
     let mut variants = Vec::with_capacity(line.receivers.len());
@@ -773,7 +772,7 @@ fn generate_line_items(
 /// The router is a hardware task bound to the pair's doorbell at the highest
 /// line priority of the pair: it loops reading task ids from the pair's
 /// doorbell, enqueues the task in its line's ready queue and pends that line's
-/// dispatcher through the software pass's `__rticx_local_irq_pend[_core{N}]`.
+/// dispatcher through the software pass's `__rticx_local_irq_pend`.
 /// Unknown ids are ignored.
 fn generate_router_items(
     source: u32,
@@ -782,8 +781,6 @@ fn generate_router_items(
     extensions: &AppExtensions,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<Vec<Item>> {
-    let first = lines.first().expect("a router pair is never empty");
-    let local_core = first.local_core;
     let max_priority = lines
         .iter()
         .map(|line| line.priority)
@@ -792,11 +789,11 @@ fn generate_router_items(
     let router_ty = format_ident!("__RticxXbinRouter{source}To{target}");
     let router_irq = backend.doorbell_interrupt(target, source);
     let read_fn = format_ident!("__rticx_xbin_read_{source}_{target}");
-    let interrupt_ty = interrupt_path(backend, extensions, local_core);
-    let pend_fn = local_pend_fn_ident(local_core, extensions.cores);
+    let interrupt_ty = interrupt_path(backend, extensions);
+    let pend_fn = local_pend_fn_ident();
     let task_trait = format_ident!("{HWT_TRAIT_TY}");
     let max_priority_lit = LitInt::new(&max_priority.to_string(), Span::call_site());
-    let core_lit = LitInt::new(&local_core.to_string(), Span::call_site());
+    let core_lit = LitInt::new(&LOCAL_CORE.to_string(), Span::call_site());
 
     let mut arms = Vec::with_capacity(lines.iter().map(|line| line.receivers.len()).sum());
     for line in lines {
@@ -876,34 +873,28 @@ fn generate_read_function(source: u32, target: u32, backend: &dyn XbinPassBacken
     Item::Fn(backend.read_doorbell_msg_fn(target, source, template))
 }
 
-/// Computes the interrupt type path of the dispatchers on `core`.
+/// Computes the interrupt type path of the dispatchers.
 ///
 /// Uses the backend's [`XbinPassBackend::custom_interrupt_path`] if provided,
-/// otherwise falls back to the application's PAC path `pacs[core]::Interrupt`,
-/// exactly like the software pass.
+/// otherwise falls back to the application's PAC path `pac::Interrupt`, exactly
+/// like the software pass.
 // TODO(extract): mirrors `rticx_sw_pass`'s `get_interrupt_path`.
-fn interrupt_path(
-    backend: &dyn XbinPassBackend,
-    extensions: &AppExtensions,
-    core: u32,
-) -> syn::Path {
-    backend.custom_interrupt_path(core).unwrap_or_else(|| {
-        let pac = &extensions.pacs[core as usize];
-        syn::parse_quote!(#pac::Interrupt)
-    })
+fn interrupt_path(backend: &dyn XbinPassBackend, extensions: &AppExtensions) -> syn::Path {
+    backend
+        .custom_interrupt_path(LOCAL_CORE)
+        .unwrap_or_else(|| {
+            let pac = &extensions.pac;
+            syn::parse_quote!(#pac::Interrupt)
+        })
 }
 
 /// Name of the software pass's core-local interrupt-pending function.
 ///
-/// Single-core applications keep the plain name; multi-core applications
-/// append the local core index.
+/// A cross-binary application owns exactly one core, so the plain name is used
+/// (there is no per-core variant).
 // TODO(extract): mirrors `rticx_sw_pass`'s `local_pend_fn_ident`.
-fn local_pend_fn_ident(core: u32, cores: u32) -> Ident {
-    if cores == 1 {
-        format_ident!("__rticx_local_irq_pend")
-    } else {
-        format_ident!("__rticx_local_irq_pend_core{core}")
-    }
+fn local_pend_fn_ident() -> Ident {
+    format_ident!("__rticx_local_irq_pend")
 }
 
 /// Generates the init hooks of one application: one
@@ -922,23 +913,21 @@ pub(crate) fn generate_init_hooks(
     application: &AppEntry,
     backend: &dyn XbinPassBackend,
 ) -> syn::Result<InitHooks> {
-    // Every core zeroes the FIFOs it produces, before its `post_init` can
-    // spawn. The producer is always an endpoint of its region, so a topology
-    // whose owner core is not an endpoint still initializes correctly.
-    let mut items = Vec::with_capacity(application.core_ids.len());
-    let mut fifo_locals = Vec::new();
-    for (local, &global) in application.core_ids.iter().enumerate() {
-        let zero_fifos = generate_fifo_inits(view, global, backend)?;
-        if zero_fifos.is_empty() {
-            continue;
-        }
-        let local = local as u32;
-        fifo_locals.push(local);
+    // The application's one core zeroes the FIFOs it produces, before its
+    // `post_init` can spawn. The producer is always an endpoint of its region,
+    // so a topology whose owner core is not an endpoint still initializes
+    // correctly.
+    let core_id = application.core_id;
+    let zero_fifos = generate_fifo_inits(view, core_id, backend)?;
+    let initializes_fifos = !zero_fifos.is_empty();
+
+    let mut items = Vec::new();
+    if initializes_fifos {
         let init_doc = format!(
             "Zeroes the ring indices of every task FIFO produced by this core (global core \
-             {global}) before its `post_init` can spawn."
+             {core_id}) before its `post_init` can spawn."
         );
-        let init_fn = format_ident!("__rticx_xbin_init_fifos_core{local}");
+        let init_fn = init_fifos_ident(core_id);
         items.push(syn::parse_quote! {
             #[doc = #init_doc]
             #[doc(hidden)]
@@ -952,8 +941,8 @@ pub(crate) fn generate_init_hooks(
     Ok(InitHooks {
         items,
         plan: HookPlan {
-            global_ids: application.core_ids.clone(),
-            fifo_locals,
+            core_id,
+            initializes_fifos,
         },
     })
 }
@@ -1150,8 +1139,6 @@ fn generate_fifo_inits(
 struct ResolvedReceiver<'a> {
     /// The synced task the receiver executes.
     task: &'a TaskEntry,
-    /// Local core index the task runs on (`0..cores`).
-    local_core: u32,
     /// Rust type of the spawn input, as declared by the user.
     input: Type,
     /// Canonical alignment of the input type (`system.json`).
@@ -1179,37 +1166,12 @@ fn resolve_receiver<'a>(
             ))
         })?;
 
-    let owned = view
-        .cores
-        .iter()
-        .any(|core| core.global_id == task.receiver_core && core.app == application.package);
-    if !owned {
+    if task.receiver_core != application.core_id {
         return Err(error(format!(
-            "task `{}` runs on global core {}, which is not part of application `{}`; \
+            "task `{}` runs on global core {}, but application `{}` owns global core {}; \
              run `cargo xbin sync`",
-            task.name, task.receiver_core, application.package
+            task.name, task.receiver_core, application.package, application.core_id
         )));
-    }
-
-    match application.core_ids.get(receiver.core as usize) {
-        Some(&global) if global == task.receiver_core => {}
-        Some(&global) => {
-            return Err(error(format!(
-                "receiver `{}` declares local core {}, which maps to global core {global}, but the \
-                 synced system view runs it on global core {}; run `cargo xbin sync`",
-                receiver.name, receiver.core, task.receiver_core
-            )));
-        }
-        None => {
-            return Err(error(format!(
-                "receiver `{}` declares local core {}, but the synced system view maps {} core(s) \
-                 for application `{}`; run `cargo xbin sync`",
-                receiver.name,
-                receiver.core,
-                application.core_ids.len(),
-                application.package
-            )));
-        }
     }
 
     if receiver.priority != task.priority {
@@ -1267,7 +1229,6 @@ fn resolve_receiver<'a>(
 
     Ok(ResolvedReceiver {
         task,
-        local_core: receiver.core,
         input,
         elem_align: input_align(view, task)?,
         pool: pool_of(view, task)?,
@@ -1389,22 +1350,11 @@ pub(crate) fn check_application<'a>(
             ))
         })?;
 
-    if application.core_ids.len() != extensions.cores as usize {
+    if application.core_id != extensions.core_id {
         return Err(error(format!(
-            "application `{package}` declares `cores = {}`, but the synced system view has {}; \
+            "application `{package}` owns global core {}, but the synced system view has {}; \
              run `cargo xbin sync`",
-            extensions.cores,
-            application.core_ids.len()
-        )));
-    }
-    // The mapping the core pass resolves (identity when not declared) is what
-    // the generated runtime core checks compare against, so it must match the
-    // synced view.
-    if extensions.core_ids != application.core_ids {
-        return Err(error(format!(
-            "application `{package}` maps its local cores to {:?}, but the synced system view \
-             has {:?}; run `cargo xbin sync`",
-            extensions.core_ids, application.core_ids
+            extensions.core_id, application.core_id
         )));
     }
     Ok(application)
@@ -1851,41 +1801,33 @@ fn ident(name: &str) -> syn::Result<Ident> {
 mod tests {
     use super::*;
 
-    /// Mirrors `rticx-sw-pass`'s `local_pend_fn_ident`: single-core
-    /// applications keep the plain name, multi-core ones append the core.
+    /// A cross-binary application owns exactly one core, so the pend function
+    /// keeps the plain name (no per-core suffix).
     #[test]
     fn local_pend_fn_name_mirrors_the_software_pass() {
-        assert_eq!(
-            local_pend_fn_ident(0, 1).to_string(),
-            "__rticx_local_irq_pend"
-        );
-        assert_eq!(
-            local_pend_fn_ident(1, 2).to_string(),
-            "__rticx_local_irq_pend_core1"
-        );
+        assert_eq!(local_pend_fn_ident().to_string(), "__rticx_local_irq_pend");
     }
 
-    /// The pool lists each core's lines in ascending `(source, priority)`
-    /// order, independent of the declaration order.
+    /// The stolen front lists the application's lines in ascending
+    /// `(source, priority)` order, independent of the declaration order.
     #[test]
     fn line_irq_indices_follow_the_pool_order() {
-        let receiver = |name: &str, core: u32, spawn_by: u32, priority: u16| ReceiverDecl {
+        let receiver = |name: &str, spawn_by: u32, priority: u16| ReceiverDecl {
             name: name.to_string(),
             priority,
             capacity: 1,
-            core,
             spawn_by,
             input_type: "Msg".to_string(),
         };
         let receivers = vec![
-            receiver("B", 0, 0, 4),
-            receiver("A", 0, 0, 3),
-            receiver("C", 1, 2, 1),
+            receiver("B", 0, 4),
+            receiver("A", 0, 3),
+            receiver("C", 2, 1),
         ];
         let indices = line_irq_indices(&receivers);
-        assert_eq!(indices[&(0, 0, 3)], 0);
-        assert_eq!(indices[&(0, 0, 4)], 1);
-        assert_eq!(indices[&(1, 2, 1)], 0);
+        assert_eq!(indices[&(0, 3)], 0);
+        assert_eq!(indices[&(0, 4)], 1);
+        assert_eq!(indices[&(2, 1)], 2);
     }
 
     /// A backend that does not adopt the capability binding keeps the identity

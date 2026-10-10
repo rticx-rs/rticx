@@ -39,15 +39,15 @@ Cortex-M0+; several ESP32 parts run RISC-V cores.
 RTICX already supports multicore **within a single binary** (`cores = N`): one
 `#[app]`, one linker image, one build, all cores homogeneous. That model does
 not fit heterogeneous cores, which need different target triples, linker
-scripts, startup code and memory maps. Each core group naturally wants its own
+scripts, startup code and memory maps. Each core naturally wants its own
 Cargo binary and its own distribution.
 
 Real workloads want that split: an M7 might run a control loop while an M4
 handles sensor I/O, and the two need to exchange **typed** messages at runtime.
 
-The multi-binary extension explores exactly that: **one binary per homogeneous
-core group**, where a task in one binary can spawn a software task in another
-binary through a typed, cross-core message.
+The multi-binary extension explores exactly that: **one binary per core**,
+where a task in one binary can spawn a software task in another binary through
+a typed, cross-core message.
 
 ## 2. Problems and constraints
 
@@ -77,8 +77,8 @@ binary does not have:
 
 ## 3. Goals and non-goals
 
-**Goal.** One binary per homogeneous core group, with cross-binary spawn of
-software tasks carrying input values between cores in different binaries.
+**Goal.** One binary per core, with cross-binary spawn of software tasks
+carrying input values between cores in different binaries.
 
 Three single-source-of-truth rules keep the system consistent:
 
@@ -122,7 +122,8 @@ architecture.
 5. **`rticx.toml` declares no IPC memory; the distribution owns the pools.**
    Pools, their addresses and aliases, the shared per-dual budget, the
    cache/MPU policy and the linker reservations are distribution vocabulary. The
-   project only maps applications to cores and declares visibility.
+   project only maps each application to its single global `core_id`;
+   cross-binary edges are inferred from each receiver's `spawn_by`.
 
 6. **The transport is generated code; the runtime is a pure data structure.**
    The pool base, the executing core id and the doorbell bodies are resolved at
@@ -170,10 +171,9 @@ structures.
 - IDL parse/validate and the canonical layout engine.
 - The `ipc_types.rs` module generator with change-detecting write
   (`write_if_changed`).
-- `rticx.toml` parse/validate (`[[application]]` `core_ids` plus optional
-  `external_cores`; no IPC memory).
+- `rticx.toml` parse/validate (`[[application]]` required, globally unique scalar `core_id`;).
 - `Hash64`.
-- `system.json` (schema 3) and manifest (schema 5) schemas.
+- `system.json` (schema 4) and manifest (schema 6) schemas.
 - Merge + validation + FIFO allocation over the distro capability graph (pool
   matching, shared per-dual budget).
 - `system_view` emission and the canonical FIFO image (`fifo`).
@@ -194,14 +194,12 @@ structures.
 
 **Metadata mode (phase 1):**
 
-- `#[app]` additions: `device`, optional `cores`, the shared `dispatchers`;
-  `core_ids`/`external_cores` rejected as moved to `rticx.toml`.
-- Resolves the application's topology from the nearest `rticx.toml`
-  (`topology.rs`).
+- `#[app]` additions: `device` and the shared, flat `dispatchers`; and the resolved scalar `core_ids = [core_id]` injected for the core pass.
+- Resolves the application's topology from the nearest `rticx.toml` (`topology.rs`).
 - Parses native `#[sw_task]` cross receivers and the shared `dispatchers` pool;
   steals the cross-line front and re-emits the remainder for the
   software/async pass.
-- Emits the per-core distro capability binding (physical core id + reachable
+- Emits the core's distro capability binding (physical core id + reachable
   pools) and `<target>.xbin.json`.
 - Then terminates the compiler, so the application is never parsed, analyzed,
   code-generated or type-checked in phase 1. (A producer may call a
@@ -211,7 +209,8 @@ structures.
 **Codegen mode (phase 2):**
 
 - Loads `system.json` (`RTICX_XBIN_SYSTEM` or the default project path) for
-  every application listed in it, and filters it by the application's cores.
+  every application listed in it, and filters it by the application's single
+  core.
 - Emits the generated sender stubs (`pub struct <Task>;` + pool-relative FIFO
   views + `Task::cross_spawn` for every view task it produces).
 - Emits the per-pair `__rticx_xbin_ring_{s}_{t}` /
@@ -223,9 +222,10 @@ structures.
   stolen from the front of `dispatchers`, and one **doorbell router** per
   `(source → target)` pair.
 - Emits the init hooks (the distribution's
-  `XbinPassBackend::configure_shared_memory` tokens inlined on every core, and
-  `__rticx_xbin_init_fifos_core<N>()` per producer core; no per-line arming)
-  wired into the entry functions via `RticPass::main_injection`.
+  `XbinPassBackend::configure_shared_memory` tokens inlined on the core, and
+  `__rticx_xbin_init_fifos_core<core_id>()`, named after the binary's global core
+  id, when it produces cross-binary tasks; no per-line arming) wired into the
+  entry functions via `RticPass::main_injection`.
 - Runs the build-phase priority-line validation over the application's raw
   sw/async declarations plus the view's cross receivers.
 - Emits the freshness anchors (`__RTICX_XBIN_TOPOLOGY_HASH`, `include_str!` of
@@ -301,17 +301,17 @@ is up to date` (or `created`/`updated` with the path). The
    to Cargo fingerprints), then `cargo check` with
    `RTICX_XBIN_META_OUT=<dir>`. The pass writes `<app>.xbin.json`: package/
    target, interface fingerprint, cross receivers with their `SpawnInput` type
-   paths, priorities, capacities, and the per-local-core distro capability
-   binding (physical core id and reachable pools). The manifest (schema 5)
-   carries no topology echo — the application's `core_ids` and `external_cores`
-   are read from `rticx.toml` by the pass. There are no sender declarations: the
+   paths, priorities, capacities, and the core's distro capability
+   binding (physical core id and reachable pools). The manifest (schema 6)
+   carries no topology echo — the application's single `core_id` is read from
+   `rticx.toml` by the pass. There are no sender declarations: the
    driver infers each task's single producer application from the receivers'
    `spawn_by`.
 3. Parse `ipc-types.toml`, compute canonical layout, validate the subset.
 4. Merge and validate:
-   - every receiver's `spawn_by` names a single core in another application, is
-     listed in the receiver's `external_cores`, and the producer application
-     lists the receiver's core in its `external_cores`;
+   - every receiver's `spawn_by` names a declared core of another application
+     (the edge is inferred from `spawn_by` alone) and differs from the
+     receiver's own `core_id`;
    - per-target priority lines disjoint across producer cores (collisions with
      the target application's own tasks are checked by the pass at `build`);
    - referenced types exist and are cross-core safe;
@@ -331,12 +331,14 @@ is up to date` (or `created`/`updated` with the path). The
    seals `topology_hash`).
 7. Generate/update `target/rticx-xbin/ipc_types.rs` and report changes.
 
-### `system.json` shape (schema 3)
+### `system.json` shape (schema 4)
 
 Fields: `schema_version`, `rticx_generation`, `topology_hash`, `layout_hash`,
-`apps`, `cores` (each with its distro `physical_core`), `types`, `tasks` (with
-a pool-relative `fifo`), `pools` (one entry per dual, with both base views, the
-shared `budget` and the bytes `used`), `doorbells`.
+`apps` (each with its single `core_id` and `interface_hash`;),
+`cores` (global id → owning application and distro `physical_core`; no
+`local_index`), `types`, `tasks` (with a pool-relative `fifo`), `pools` (one
+entry per dual, with both base views, the shared `budget` and the bytes `used`),
+`doorbells`.
 
 The canonical serde types are `rticx_xbin_proto::system::SystemView` (with
 `canonical_topology_text`, `seal` and `verify_topology_hash`); the
@@ -360,7 +362,7 @@ binaries compile and link on the host.
 The pass reads `system.json` (`RTICX_XBIN_SYSTEM` or the default path), loads
 the distribution backend configured with `XbinPass::with_backend` (code
 generation needs it; see `rticx_xbin_pass::XbinPassBackend`), filters to its own
-cores and emits, per app:
+core and emits, per app:
 
 - a generated sender stub (`pub struct <Task>;`) plus the sender-side FIFO view
   at the task's pool view (`base_local`) + pool-relative offset for every view
@@ -369,15 +371,15 @@ cores and emits, per app:
   colliding with a user item is a dedicated compile error;
 - receiver-side FIFO views plus, per `(source → target, priority)` line, one
   generated **line dispatcher**: a
-  `#[task(binds = <dispatchers entry>, priority, core, init = generated)]`
+  `#[task(binds = <dispatchers entry>, priority, core = 0, init = generated)]`
   hardware task whose `exec` drains the line's ready queue and, per popped task,
   drains its FIFO until empty and calls the receiver task's `exec(input)`. One
   **doorbell router** per `(source → target)` pair runs at the pair's highest
   line priority, reads task ids from the pair doorbell word and pends the line
   dispatcher through the software pass's
-  `__rticx_local_irq_pend[_core{N}]`; unknown ids are ignored. The native
+  `__rticx_local_irq_pend`; unknown ids are ignored. The native
   `#[sw_task]` receiver structs themselves are rewritten into
-  `#[task(priority, core, task_trait = RticSwTask, init = generated)]`
+  `#[task(priority, core = 0, task_trait = RticSwTask, init = generated)]`
   (preserving `shared`), the same external-`task_trait` shape the single-binary
   software-task pass uses, so the core pass generates the task static and
   enforces the user's `impl RticSwTask`;
@@ -386,8 +388,9 @@ cores and emits, per app:
   `__rticx_xbin_ring_{source}_{target}(task_id)`; `Ok(())` / `Err(None)`
   (enqueued, notification failed) / `Err(Some(input))` (not enqueued: full FIFO
   or wrong core);
-- init hooks: `configure_shared_memory` on every core before its user `init`
-  and `init_fifos_core<N>` on every producer core before its `post_init`. No
+- init hooks: `configure_shared_memory` on the core before its user `init` and
+  `__rticx_xbin_init_fifos_core<core_id>` on a producing core before its
+  `post_init`. No
   per-line arming: the router IRQs are enabled and prioritized by the core
   pass's used-IRQ machinery;
 - IDL types: the injected `pub unsafe trait CrossCoreMessage: Copy + 'static`
@@ -406,7 +409,7 @@ cores and emits, per app:
   `SpawnInput: CrossCoreMessage` const assertion per receiver.
 
 Every application listed in the view is processed, including ones that declare
-no cross task (their stubs are still generated and every core still runs the
+no cross task (their stubs are still generated and the core still runs the
 shared-memory configure hook). The generated `#[task]` items use the core pass's
 external `task_trait` paths, and the receivers require the distribution's
 `swtasks` feature (see section 5), so the root workspace is untouched. Async
@@ -436,10 +439,10 @@ Each mismatch is a hard error naming `cargo xbin sync`.
 The fingerprint covers only the parts the driver merges into the project
 topology:
 
-- the resolved topology (`cores`, `core_ids`, `external_cores`);
+- the resolved topology (the binary's single `core_id`);
 - the stolen cross-dispatcher front (each interrupt path rendered
   host-independently by `write_canonical`);
-- the receiver declarations (`name`, `priority`, `capacity`, `core`, `spawn_by`,
+- the receiver declarations (`name`, `priority`, `capacity`, `spawn_by`,
   `input_type`).
 
 Deliberately excluded: task bodies, doc/`//` comments, local
@@ -447,7 +450,7 @@ Deliberately excluded: task bodies, doc/`//` comments, local
 (local) dispatcher entries — so editing them cannot make a synced application
 look stale under rust-analyzer.
 
-A per-field receiver edit (priority/capacity/core/spawn_by/input_type) is
+A per-field receiver edit (priority/capacity/spawn_by/input_type) is
 normally reported by the targeted `resolve_receiver` check with a more specific
 message before the fingerprint is compared; both name `cargo xbin sync`.
 
@@ -515,7 +518,7 @@ v1.
 
 `cargo xbin build --verify-elf` / `cargo xbin verify` parse each linked ELF with
 `object` and reject an `SHF_ALLOC` section or the stack bound symbol
-intersecting a pool view of the application's cores, and a distro
+intersecting a pool view of the application's core, and a distro
 `__rticx_xbin_pool_<id>_start/_end` that disagrees with `system.json`.
 
 ### Worked example: layout of `EncryptReq`
@@ -735,7 +738,7 @@ independently check the linked images against the pools.
 
 | Failure | Detection | Behaviour |
 |---|---|---|
-| topologies disagree (receiver `spawn_by` visibility, priorities, FIFO overflow) | `sync` merge | hard error naming the offending task/pool |
+| topologies disagree (an undeclared or own-core receiver `spawn_by`, priorities, FIFO overflow) | `sync` merge | hard error naming the offending task/pool |
 | the two endpoints of a dual report inconsistent capabilities | `sync` merge | `IpcPoolMismatch` naming the pool and dual |
 | a used `(source -> target)` direction has no distro pool | `sync` merge | `NoIpcPath` naming the task and cores |
 | the FIFOs of a dual do not fit its shared budget | `sync` allocation | `PoolBudgetExceeded` with needed vs. reserved bytes |
@@ -756,8 +759,8 @@ exercise.
 - **Proto units:** IDL/layout goldens, allocator determinism, every validation
   error, and JSON round-trip.
 - **Syntax/extraction:** native-syntax extraction and `spawn_by` resolution
-  (identity default, in-app global→local mapping, external classification,
-  unknown-core error).
+  (absent ⇒ local task, another application's `core_id` ⇒ cross receiver,
+  own `core_id` ⇒ core-local-task error, undeclared core ⇒ unknown-core error).
 - **Codegen snapshots:** a receiver expansion run through the full core pass and
   compiled on the host; a receiver with `shared` passed through to the core pass;
   an application declaring no cross task receiving its generated stubs; a missing
@@ -769,7 +772,7 @@ exercise.
 - **Capability-graph units** (`proto/tests/merge.rs`): symmetric and mismatched
   entries, impossible links, the shared per-dual budget fitting two directions
   together but not separately, and overflow.
-- **Schema units** (`proto/tests/{alloc,system}.rs`): the schema-2 `pools[]` and
+- **Schema units** (`proto/tests/{alloc,system}.rs`): the `pools[]` shape and
   pool-relative FIFO offsets.
 - **Pass units:** the pool-pinned sender snapshot and the unknown-pool
   rejection.

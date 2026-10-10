@@ -26,37 +26,29 @@ use rticx_sw_pass::{SoftwarePass, SwPassBackend};
 use rticx_xbin_pass::{
     AppTopology, IpcPool, PhysicalCore, XbinPass, XbinPassBackend, resolve_app_topology,
 };
-use syn::{Expr, ItemMod, Lit, parse_macro_input};
+use syn::{Expr, ItemMod, parse_macro_input};
 use xbin_mock_capability::fixture_pools;
 
 /// Code-generation backend of the mock distribution.
 ///
 /// The generated code reaches the runtime through `xbin-mock-runtime` and
 /// calls the injected `__rticx_xbin_backend()` helper for its backend value.
-/// The backend also carries the application's `core_ids`, so its capability
-/// binding ([`XbinPassBackend::physical_core`],
-/// [`XbinPassBackend::ipc_pools`]) can map a local core index to the
-/// fixture's physical core.
+/// The backend also carries the application's single global `core_id`, so its
+/// capability binding ([`XbinPassBackend::physical_core`],
+/// [`XbinPassBackend::ipc_pools`]) maps it to the fixture's physical core.
 struct MockDistroBackend {
-    /// Local core index -> global core id, resolved from `rticx.toml`;
-    /// empty when the application leaves the identity default.
-    core_ids: Vec<u32>,
+    /// The application's single global core id, resolved from `rticx.toml`
+    /// (`0` for the standalone identity fallback).
+    core_id: u32,
 }
 
 impl MockDistroBackend {
-    /// Physical core of local core `local_core`.
+    /// Physical core of this application.
     ///
     /// The mock's physical-core vocabulary is the global core id, so the two
-    /// applications running on the endpoints of a dual agree on it. A local
-    /// index outside the declared mapping falls back to the identity, matching
-    /// the trait default.
-    fn physical(&self, local_core: u32) -> PhysicalCore {
-        PhysicalCore(
-            self.core_ids
-                .get(local_core as usize)
-                .copied()
-                .unwrap_or(local_core),
-        )
+    /// applications running on the endpoints of a dual agree on it.
+    fn physical(&self) -> PhysicalCore {
+        PhysicalCore(self.core_id)
     }
 }
 
@@ -107,12 +99,12 @@ impl XbinPassBackend for MockDistroBackend {
         Some(syn::parse_quote!(__XbinInterrupt))
     }
 
-    fn physical_core(&self, local_core: u32) -> PhysicalCore {
-        self.physical(local_core)
+    fn physical_core(&self, _local_core: u32) -> PhysicalCore {
+        self.physical()
     }
 
-    fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool> {
-        fixture_pools(self.physical(local_core))
+    fn ipc_pools(&self, _local_core: u32) -> Vec<IpcPool> {
+        fixture_pools(self.physical())
     }
 }
 
@@ -160,19 +152,16 @@ impl SwPassBackend for MockSwBackend {
 pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
     let parsed_args = TokenStream2::from(args.clone());
     let mut app_mod = parse_macro_input!(input as ItemMod);
-    let topology = match app_topology(&parsed_args) {
+    let topology = match app_topology() {
         Ok(topology) => topology,
         Err(error) => return error.to_compile_error().into(),
     };
-    inject_backend_helper(
-        &mut app_mod,
-        topology.core_ids().first().copied().unwrap_or(0),
-    );
+    inject_backend_helper(&mut app_mod, topology.core_id());
     inject_interrupt_support(&mut app_mod, &parsed_args);
 
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(XbinPass::from_env().with_backend(MockDistroBackend {
-        core_ids: topology.core_ids().to_vec(),
+        core_id: topology.core_id(),
     }));
     builder.bind_pre_core_pass(SoftwarePass::new(MockSwBackend));
     builder.build_rtic_macro(args, quote!(#app_mod).into())
@@ -181,9 +170,9 @@ pub fn app(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Resolves the application's topology from the nearest `rticx.toml`.
 ///
 /// A standalone mock distribution with no project above the crate falls back
-/// to the identity mapping over the declared `cores` (default 1), exactly like
-/// the cross-binary pass.
-fn app_topology(args: &TokenStream2) -> syn::Result<AppTopology> {
+/// to [`AppTopology::identity`] (`core_id = 0`), exactly like the cross-binary
+/// pass.
+fn app_topology() -> syn::Result<AppTopology> {
     let package = std::env::var("CARGO_PKG_NAME").ok();
     let target = std::env::var("CARGO_BIN_NAME").ok();
     let resolved = match package.as_deref() {
@@ -192,23 +181,8 @@ fn app_topology(args: &TokenStream2) -> syn::Result<AppTopology> {
     };
     Ok(match resolved {
         Some(resolved) => resolved.topology,
-        None => AppTopology::identity(declared_cores(args)),
+        None => AppTopology::identity(),
     })
-}
-
-/// Reads the declared `cores` argument (default 1) for the no-project
-/// fallback.
-fn declared_cores(args: &TokenStream2) -> u32 {
-    let Ok(attr) = RticAttr::parse_from_tokens(args.clone(), format_ident!("app")) else {
-        return 1;
-    };
-    match attr.get_expr("cores") {
-        Some(Expr::Lit(lit)) => match &lit.lit {
-            Lit::Int(int) => int.base10_parse().unwrap_or(1),
-            _ => 1,
-        },
-        _ => 1,
-    }
 }
 
 /// Injects the fixture interrupt enum.
@@ -245,8 +219,7 @@ fn dispatcher_variants(args: &TokenStream2) -> Vec<syn::Ident> {
     variants
 }
 
-/// Recursively collects interrupt path idents from a `dispatchers` expression
-/// (flat or per-core nested arrays).
+/// Recursively collects interrupt path idents from a `dispatchers` expression.
 fn collect_dispatcher_idents(expr: &Expr, out: &mut Vec<syn::Ident>) {
     match expr {
         Expr::Array(array) => {
@@ -288,24 +261,19 @@ fn inject_backend_helper(app_mod: &mut ItemMod, core: u32) {
 mod tests {
     use super::*;
 
-    /// A mock distribution backend for an application whose `core_ids` are
-    /// `core_ids`.
-    fn backend(core_ids: &[u32]) -> MockDistroBackend {
-        MockDistroBackend {
-            core_ids: core_ids.to_vec(),
-        }
+    /// A mock distribution backend for an application owning global core
+    /// `core_id`.
+    fn backend(core_id: u32) -> MockDistroBackend {
+        MockDistroBackend { core_id }
     }
 
     /// The mock's physical-core vocabulary is the global core id: the
-    /// capability binding maps the local index through `core_ids`.
+    /// capability binding reports the application's single core.
     #[test]
-    fn physical_core_maps_the_local_index_through_core_ids() {
-        let backend = backend(&[7, 9]);
-        assert_eq!(backend.physical_core(0), PhysicalCore(7));
-        assert_eq!(backend.physical_core(1), PhysicalCore(9));
-        // Outside the declared mapping the local index is the identity,
-        // matching the trait default.
-        assert_eq!(backend.physical_core(5), PhysicalCore(5));
+    fn physical_core_is_the_applications_core_id() {
+        assert_eq!(backend(7).physical_core(0), PhysicalCore(7));
+        assert_eq!(backend(7).physical_core(5), PhysicalCore(7));
+        assert_eq!(backend(0).physical_core(0), PhysicalCore(0));
     }
 
     /// The fixture topology is fully connected: each of the physical cores
@@ -313,7 +281,7 @@ mod tests {
     #[test]
     fn fixture_topology_exposes_three_duals() {
         for core in 0..3u32 {
-            let pools = backend(&[core]).ipc_pools(0);
+            let pools = backend(core).ipc_pools(0);
             assert_eq!(
                 pools.len(),
                 2,
@@ -331,7 +299,7 @@ mod tests {
     #[test]
     fn pools_are_ordered_by_peer() {
         for core in 0..3u32 {
-            let pools = backend(&[core]).ipc_pools(0);
+            let pools = backend(core).ipc_pools(0);
             let peers: Vec<u32> = pools.iter().map(|pool| pool.peer.0).collect();
             let mut sorted = peers.clone();
             sorted.sort_unstable();
@@ -347,7 +315,7 @@ mod tests {
         // The fixture applications each run on one physical core, with ids 0,
         // 1 and 2.
         let endpoints: Vec<(u32, Vec<IpcPool>)> = (0..3u32)
-            .map(|core| (core, backend(&[core]).ipc_pools(0)))
+            .map(|core| (core, backend(core).ipc_pools(0)))
             .collect();
 
         for (core, pools) in &endpoints {

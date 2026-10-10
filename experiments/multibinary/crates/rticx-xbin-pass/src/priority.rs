@@ -71,7 +71,7 @@ pub(crate) fn validate_priority_lines(
     }
 
     for task in &view.tasks {
-        if !application.core_ids.contains(&task.receiver_core) {
+        if task.receiver_core != application.core_id {
             continue;
         }
         lines
@@ -141,13 +141,12 @@ mod tests {
     use super::*;
     use rticx_xbin_proto::{AppEntry, Hash64, SystemView, TargetRef, TaskEntry};
 
-    fn application(core_ids: &[u32]) -> AppEntry {
+    fn application(core_id: u32) -> AppEntry {
         AppEntry {
             package: "app".to_string(),
             target: TargetRef::bin("app"),
             interface_hash: Hash64::ZERO,
-            core_ids: core_ids.to_vec(),
-            external_cores: Vec::new(),
+            core_id,
         }
     }
 
@@ -198,7 +197,7 @@ mod tests {
     #[test]
     fn a_lone_receiver_line_passes() {
         let view = view_with(vec![(1, 0, 3)]);
-        validate_priority_lines(&view, &application(&[1]), &decls(Vec::new()))
+        validate_priority_lines(&view, &application(1), &decls(Vec::new()))
             .expect("a single origin per line");
     }
 
@@ -207,7 +206,7 @@ mod tests {
         let view = view_with(vec![(1, 0, 3)]);
         let error = validate_priority_lines(
             &view,
-            &application(&[1]),
+            &application(1),
             &decls(vec![local("Local", 3, 1, 1)]),
         )
         .expect_err("a core-local task owns the line")
@@ -224,7 +223,7 @@ mod tests {
         let view = view_with(vec![(1, 0, 3)]);
         validate_priority_lines(
             &view,
-            &application(&[1]),
+            &application(1),
             &decls(vec![local("Local", 3, 0, 0)]),
         )
         .expect("different target cores are independent");
@@ -233,7 +232,7 @@ mod tests {
     #[test]
     fn receivers_from_different_producers_conflict() {
         let view = view_with(vec![(1, 0, 3), (1, 2, 3)]);
-        let error = validate_priority_lines(&view, &application(&[1]), &decls(Vec::new()))
+        let error = validate_priority_lines(&view, &application(1), &decls(Vec::new()))
             .expect_err("two producer cores must not share a line")
             .to_string();
         assert!(

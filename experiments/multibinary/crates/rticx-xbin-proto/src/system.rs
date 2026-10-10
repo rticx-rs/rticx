@@ -25,14 +25,7 @@ use crate::hash::Hash64;
 use crate::manifest::TargetRef;
 
 /// Schema version of `system.json` understood by this crate.
-///
-/// Schema 2 gives every core its `physical_core`, replaces the per-direction
-/// `regions[]` with the distro `pools[]` and adds the pool id to every task
-/// FIFO. Schema 3 renames the per-application freshness hash to
-/// `interface_hash` and narrows it from the whole source to a fingerprint of
-/// the cross-binary interface (resolved topology, the stolen cross-dispatcher
-/// front and the receiver declarations).
-pub const SYSTEM_SCHEMA_VERSION: u32 = 3;
+pub const SYSTEM_SCHEMA_VERSION: u32 = 1;
 
 /// RTICX generation (major.minor) recorded in every emitted `system.json`.
 ///
@@ -146,20 +139,15 @@ impl SystemView {
         for app in &self.apps {
             let _ = writeln!(
                 out,
-                "app package={} target={:?}:{} interface_hash={} core_ids={:?} external_cores={:?}",
-                app.package,
-                app.target.kind,
-                app.target.name,
-                app.interface_hash,
-                app.core_ids,
-                app.external_cores
+                "app package={} target={:?}:{} interface_hash={} core_id={}",
+                app.package, app.target.kind, app.target.name, app.interface_hash, app.core_id
             );
         }
         for core in &self.cores {
             let _ = writeln!(
                 out,
-                "core global_id={} physical_core={} app={} local_index={}",
-                core.global_id, core.physical_core, core.app, core.local_index
+                "core global_id={} physical_core={} app={}",
+                core.global_id, core.physical_core, core.app
             );
         }
         for ty in &self.types {
@@ -240,16 +228,11 @@ pub struct AppEntry {
     /// manifest: resolved topology, the stolen cross-dispatcher front and the
     /// receiver declarations (not the whole source).
     pub interface_hash: Hash64,
-    /// Local core index -> global core id. Empty when the application did not
-    /// declare one and the driver used the identity mapping.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub core_ids: Vec<u32>,
-    /// Global ids of cores in other binaries visible to this application.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub external_cores: Vec<u32>,
+    /// The application's single, globally unique core id.
+    pub core_id: u32,
 }
 
-/// A global core id resolved to its application and local index.
+/// A global core id resolved to its application and physical core.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreEntry {
     /// Globally unique core id.
@@ -261,8 +244,6 @@ pub struct CoreEntry {
     pub physical_core: u32,
     /// Package owning the core.
     pub app: String,
-    /// Local core index inside the application (`core_ids[local_index]`).
-    pub local_index: u32,
 }
 
 /// A message or enum type declared in the IDL.
@@ -345,8 +326,8 @@ pub struct FifoEntry {
     pub target: u32,
     /// Id of the `pools[]` entry this FIFO lives in.
     ///
-    /// `None` for a project whose manifests carry no capability table at all;
-    /// the offset is then relative to the raw `(source -> target)` memory.
+    /// `None` for a project whose manifests bind no distribution capability at
+    /// all; the offset is then relative to the raw `(source -> target)` memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
     /// Byte offset inside the pool.

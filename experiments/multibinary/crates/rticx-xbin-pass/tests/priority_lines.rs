@@ -76,30 +76,27 @@ fn pool_id(first: u32, second: u32) -> String {
 }
 
 /// The three-application view: `app-m7` (global core 0) and `app-m5` (global
-/// core 2) produce onto `app-m4` (`core_ids`, global core 1 by default).
-fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> SystemView {
+/// core 2) produce onto `app-m4` (global core 1).
+fn system_view(tasks: &[TaskSpec]) -> SystemView {
     let mut view = SystemView::empty("0.2");
     view.apps = vec![
         AppEntry {
             package: "app-m7".to_string(),
             target: TargetRef::bin("m7"),
             interface_hash: Hash64::ZERO,
-            core_ids: vec![0],
-            external_cores: vec![1],
+            core_id: 0,
         },
         AppEntry {
             package: "app-m5".to_string(),
             target: TargetRef::bin("m5"),
             interface_hash: Hash64::ZERO,
-            core_ids: vec![2],
-            external_cores: vec![1],
+            core_id: 2,
         },
         AppEntry {
             package: "app-m4".to_string(),
             target: TargetRef::bin("m4"),
             interface_hash: Hash64::ZERO,
-            core_ids: core_ids.to_vec(),
-            external_cores: external_cores.to_vec(),
+            core_id: 1,
         },
     ];
     view.cores = vec![
@@ -107,23 +104,18 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
             global_id: 0,
             physical_core: 0,
             app: "app-m7".to_string(),
-            local_index: 0,
         },
         CoreEntry {
             global_id: 2,
             physical_core: 2,
             app: "app-m5".to_string(),
-            local_index: 0,
+        },
+        CoreEntry {
+            global_id: 1,
+            physical_core: 1,
+            app: "app-m4".to_string(),
         },
     ];
-    for (local, &global) in core_ids.iter().enumerate() {
-        view.cores.push(CoreEntry {
-            global_id: global,
-            physical_core: global,
-            app: "app-m4".to_string(),
-            local_index: local as u32,
-        });
-    }
 
     view.types = vec![TypeEntry {
         name: "EncryptReq".to_string(),
@@ -175,7 +167,7 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
         .collect();
 
     // The distro pool of each used dual (the pass does not read the pools
-    // themselves yet; they keep the fixture a valid schema-2 view).
+    // themselves yet; they keep the fixture a valid view).
     let mut pools: Vec<PoolEntry> = Vec::new();
     for task in tasks {
         let (core_a, core_b) = if task.spawner <= task.receiver {
@@ -232,8 +224,7 @@ fn system_view(core_ids: &[u32], tasks: &[TaskSpec], external_cores: &[u32]) -> 
 }
 
 /// Receiver `#[app]` arguments of `app-m4`: `dispatchers` holds one cross
-/// line per `(source, priority)` pair of `tasks`, in order (the core
-/// mapping comes from `rticx.toml`, not from `#[app]`).
+/// line per `(source, priority)` pair of `tasks`, in order.
 fn receiver_args(ipc: TokenStream) -> TokenStream {
     quote!(
         device = mypac,
@@ -241,30 +232,26 @@ fn receiver_args(ipc: TokenStream) -> TokenStream {
     )
 }
 
-/// The receiver application's topology: the local mapping `core_ids` with
-/// global cores 0 and 2 visible.
-fn receiver_topology(core_ids: &[u32]) -> AppTopology {
-    AppTopology::new(core_ids.to_vec(), vec![0, 2])
+/// The receiver application's topology: the binary owns global core 1.
+fn receiver_topology() -> AppTopology {
+    AppTopology::new(1)
 }
 
 /// Writes the fixture view with `app-m4`'s interface fingerprint recorded, as
 /// `cargo xbin sync` would.
 fn write_system(
-    core_ids: &[u32],
     tasks: &[TaskSpec],
-    external_cores: &[u32],
     args: &TokenStream,
     app_mod: &syn::ItemMod,
 ) -> (tempfile::TempDir, PathBuf) {
-    let mut view = system_view(core_ids, tasks, external_cores);
+    let mut view = system_view(tasks);
     let application = view
         .apps
         .iter_mut()
         .find(|application| application.package == "app-m4")
         .expect("fixture app-m4");
-    let topology = AppTopology::new(core_ids.to_vec(), external_cores.to_vec());
     application.interface_hash =
-        rticx_xbin_pass::app_interface_hash(args, app_mod, Some(&topology))
+        rticx_xbin_pass::app_interface_hash(args, app_mod, Some(receiver_topology()))
             .expect("the receiver fingerprint parses");
     view.seal();
 
@@ -287,15 +274,14 @@ fn write_system(
     (dir, path)
 }
 
-/// Runs the codegen pass over `app-m4` with `topology`.
+/// Runs the codegen pass over `app-m4`.
 fn run(
     path: &Path,
-    topology: AppTopology,
     args: TokenStream,
     app_mod: syn::ItemMod,
 ) -> syn::Result<(TokenStream, syn::ItemMod)> {
     XbinPass::with_system(path, "app-m4", "m4")
-        .with_topology(topology)
+        .with_topology(receiver_topology())
         .with_backend(TestBackend)
         .run_pass(args, app_mod)
 }
@@ -355,10 +341,9 @@ fn receiver_module(extra: TokenStream) -> syn::ItemMod {
 fn multi_source_receivers_generate_on_disjoint_lines() {
     let args = receiver_args(quote!([IRQ0, IRQ1]));
     let app_mod = receiver_module(quote!());
-    let (_dir, path) = write_system(&[1], &cross_tasks(), &[0, 2], &args, &app_mod);
+    let (_dir, path) = write_system(&cross_tasks(), &args, &app_mod);
 
-    let (_, module) = run(&path, receiver_topology(&[1]), args, app_mod)
-        .expect("two producer cores are accepted");
+    let (_, module) = run(&path, args, app_mod).expect("two producer cores are accepted");
     let generated = module.to_token_stream().to_string();
 
     // One dispatcher per `(source, priority)` line and one router per pair.
@@ -419,9 +404,9 @@ fn receiver_from_another_producer_on_one_line_is_rejected() {
     // Two distinct lines need two pool entries before the priority check can
     // reject them (the pool is validated first).
     let args = receiver_args(quote!([IRQ0, IRQ1]));
-    let (_dir, path) = write_system(&[1], &tasks, &[0, 2], &args, &app_mod);
+    let (_dir, path) = write_system(&tasks, &args, &app_mod);
 
-    let error = run(&path, receiver_topology(&[1]), args, app_mod)
+    let error = run(&path, args, app_mod)
         .expect_err("producer-vs-producer collisions are rejected at build too")
         .to_string();
     assert!(
@@ -446,9 +431,9 @@ fn a_receiver_colliding_with_a_core_local_sw_task_is_rejected() {
             fn exec(&mut self, _input: u32) {}
         }
     });
-    let (_dir, path) = write_system(&[1], &cross_tasks(), &[0, 2], &args, &app_mod);
+    let (_dir, path) = write_system(&cross_tasks(), &args, &app_mod);
 
-    let error = run(&path, receiver_topology(&[1]), args, app_mod)
+    let error = run(&path, args, app_mod)
         .expect_err("a core-local task owns the line")
         .to_string();
     assert!(
@@ -468,9 +453,9 @@ fn a_receiver_colliding_with_an_async_task_is_rejected() {
         #[async_task(priority = 4)]
         struct AsyncTask;
     });
-    let (_dir, path) = write_system(&[1], &cross_tasks(), &[0, 2], &args, &app_mod);
+    let (_dir, path) = write_system(&cross_tasks(), &args, &app_mod);
 
-    let error = run(&path, receiver_topology(&[1]), args, app_mod)
+    let error = run(&path, args, app_mod)
         .expect_err("an async task owns the line")
         .to_string();
     assert!(
@@ -479,35 +464,6 @@ fn a_receiver_colliding_with_an_async_task_is_rejected() {
     );
     assert!(
         error.contains("the async task `AsyncTask` (spawned by global core 1)"),
-        "{error}"
-    );
-}
-
-#[test]
-fn a_receiver_colliding_with_an_in_app_spawn_by_task_is_rejected() {
-    let args = receiver_args(quote!([IRQ0, IRQ1]));
-    // `spawn_by = 1` is this application's own global core, so the task is an
-    // in-app cross-core task with origin core 1.
-    let app_mod = receiver_module(quote! {
-        #[sw_task(priority = 3, spawn_by = 1)]
-        struct InAppTask;
-
-        impl RticSwTask for InAppTask {
-            type SpawnInput = u32;
-            fn exec(&mut self, _input: u32) {}
-        }
-    });
-    let (_dir, path) = write_system(&[1], &cross_tasks(), &[0, 2], &args, &app_mod);
-
-    let error = run(&path, receiver_topology(&[1]), args, app_mod)
-        .expect_err("an in-app spawn_by task owns the line")
-        .to_string();
-    assert!(
-        error.contains("cross-binary receiver `EncryptTask` is scheduled at priority 3"),
-        "{error}"
-    );
-    assert!(
-        error.contains("the software task `InAppTask` (spawned by global core 1)"),
         "{error}"
     );
 }
@@ -555,10 +511,9 @@ fn receivers_from_the_same_producer_share_a_line() {
         }
     };
     let args = receiver_args(quote!([IRQ0]));
-    let (_dir, path) = write_system(&[1], &tasks, &[0, 2], &args, &app_mod);
+    let (_dir, path) = write_system(&tasks, &args, &app_mod);
 
-    let (_, module) =
-        run(&path, receiver_topology(&[1]), args, app_mod).expect("one producer shares one line");
+    let (_, module) = run(&path, args, app_mod).expect("one producer shares one line");
     let generated = module.to_token_stream().to_string();
     assert!(
         generated.contains("__RticxXbinLine0To1P3") && generated.contains("__RticxXbinRouter0To1"),
@@ -568,57 +523,6 @@ fn receivers_from_the_same_producer_share_a_line() {
         !generated.contains("__RticxXbinRouter2To1"),
         "no other pair is generated: {generated}"
     );
-}
-
-#[test]
-fn the_same_priority_on_different_target_cores_is_accepted() {
-    // `app-m4` is dual-core here: the receivers run on different global cores
-    // (1 and 7), so the same priority is independent on each.
-    let tasks = vec![
-        TaskSpec {
-            name: "AlphaTask",
-            spawner: 0,
-            receiver: 1,
-            priority: 3,
-            capacity: 1,
-        },
-        TaskSpec {
-            name: "BetaTask",
-            spawner: 2,
-            receiver: 7,
-            priority: 3,
-            capacity: 1,
-        },
-    ];
-    let app_mod: syn::ItemMod = syn::parse_quote! {
-        mod app {
-            trait RticSwTask {
-                type SpawnInput;
-                fn exec(&mut self, input: Self::SpawnInput);
-            }
-
-            #[sw_task(core = 0, priority = 3, spawn_by = 0)]
-            struct AlphaTask;
-
-            impl RticSwTask for AlphaTask {
-                type SpawnInput = ipc_types::EncryptReq;
-                fn exec(&mut self, _input: Self::SpawnInput) {}
-            }
-
-            #[sw_task(core = 1, priority = 3, spawn_by = 2)]
-            struct BetaTask;
-
-            impl RticSwTask for BetaTask {
-                type SpawnInput = ipc_types::EncryptReq;
-                fn exec(&mut self, _input: Self::SpawnInput) {}
-            }
-        }
-    };
-    let args = receiver_args(quote!([[IRQ0], [IRQ1]]));
-    let (_dir, path) = write_system(&[1, 7], &tasks, &[0, 2], &args, &app_mod);
-
-    run(&path, receiver_topology(&[1, 7]), args, app_mod)
-        .expect("different target cores do not conflict");
 }
 
 #[test]
@@ -637,7 +541,7 @@ fn metadata_mode_does_not_validate_local_priority_lines() {
     });
     let dir = tempfile::tempdir().expect("tempdir");
     XbinPass::with_manifest(dir.path(), "app-m4", "m4")
-        .with_topology(receiver_topology(&[1]))
+        .with_topology(receiver_topology())
         .with_backend(TestBackend)
         .run_pass(receiver_args(quote!([IRQ0, IRQ1])), app_mod)
         .expect("metadata mode records the manifest without the build-phase check");

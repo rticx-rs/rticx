@@ -144,29 +144,26 @@ impl XbinPassBackend for IdentityBackend {
     inert_bindings!();
 }
 
-/// A multi-core backend with an explicit physical-core mapping and pools,
-/// used to pin the manifest extraction.
+/// A backend with an explicit physical-core id and pools, used to pin the
+/// manifest extraction.
 struct CapabilityBackend {
-    /// Local core index -> physical core id.
-    physical: Vec<u32>,
+    /// Physical core id the binary runs on.
+    physical: u32,
 }
 
 impl XbinPassBackend for CapabilityBackend {
     inert_bindings!();
 
-    fn physical_core(&self, local_core: u32) -> PhysicalCore {
-        PhysicalCore(
-            self.physical
-                .get(local_core as usize)
-                .copied()
-                .unwrap_or(local_core),
-        )
+    fn physical_core(&self, _local_core: u32) -> PhysicalCore {
+        PhysicalCore(self.physical)
     }
 
     fn ipc_pools(&self, local_core: u32) -> Vec<IpcPool> {
         match local_core {
-            0 => vec![pool("sram3", 8, 0x3004_0000, 0x1004_0000, 4096)],
-            1 => vec![pool("sram1", 7, 0x3002_0000, 0x1002_0000, 1024)],
+            0 => vec![
+                pool("sram1", 7, 0x3002_0000, 0x1002_0000, 1024),
+                pool("sram3", 8, 0x3004_0000, 0x1004_0000, 4096),
+            ],
             _ => Vec::new(),
         }
     }
@@ -186,13 +183,7 @@ fn pool(id: &str, peer: u32, base_local: u32, base_peer: u32, budget: u32) -> Ip
 #[test]
 fn receiver_fixture_produces_the_expected_manifest() {
     let args = quote!(device = mypac, dispatchers = [IRQ0]);
-    let (_dir, manifest) = run_manifest(
-        receiver_app(),
-        AppTopology::new(vec![1], vec![0]),
-        args,
-        "app-m4",
-        "m4",
-    );
+    let (_dir, manifest) = run_manifest(receiver_app(), AppTopology::new(1), args, "app-m4", "m4");
 
     assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
     assert_eq!(manifest.package, "app-m4");
@@ -204,13 +195,12 @@ fn receiver_fixture_produces_the_expected_manifest() {
     assert_eq!(receiver.name, "EncryptTask");
     assert_eq!(receiver.priority, 3);
     assert_eq!(receiver.capacity, 2);
-    assert_eq!(receiver.core, 0, "receiver core defaults to 0");
     assert_eq!(receiver.spawn_by, 0, "the global producer core id");
     assert_eq!(receiver.input_type, "EncryptReq");
     assert_eq!(receiver.input_type_name(), "EncryptReq");
 
     assert!(
-        manifest.capabilities.is_empty(),
+        manifest.capability.is_none(),
         "no distribution backend is bound, so the manifest carries no capability binding"
     );
 
@@ -221,10 +211,6 @@ fn receiver_fixture_produces_the_expected_manifest() {
     );
     assert!(json.contains("\"spawn_by\": 0"), "{json}");
     assert!(!json.contains("senders"), "no sender declarations: {json}");
-    assert!(
-        !json.contains("\"core_ids\"") && !json.contains("\"external_cores\""),
-        "schema 3 carries no topology echo: {json}"
-    );
     assert!(json.contains("\"kind\": \"bin\""), "{json}");
     assert!(json.contains("\"interface_hash\": \"0x"), "{json}");
 }
@@ -232,18 +218,12 @@ fn receiver_fixture_produces_the_expected_manifest() {
 #[test]
 fn producer_fixture_produces_an_empty_manifest() {
     let args = quote!(device = mypac);
-    let (_dir, manifest) = run_manifest(
-        producer_app(),
-        AppTopology::new(vec![0], vec![1]),
-        args,
-        "app-m7",
-        "m7",
-    );
+    let (_dir, manifest) = run_manifest(producer_app(), AppTopology::new(0), args, "app-m7", "m7");
 
     assert!(manifest.receivers.is_empty());
     assert!(manifest.types.is_empty());
     assert!(
-        manifest.capabilities.is_empty(),
+        manifest.capability.is_none(),
         "no distribution backend is bound"
     );
 }
@@ -253,18 +233,12 @@ fn manifests_are_deterministic() {
     let args = quote!(device = mypac, dispatchers = [IRQ0]);
     let (first_dir, _) = run_manifest(
         receiver_app(),
-        AppTopology::new(vec![1], vec![0]),
+        AppTopology::new(1),
         args.clone(),
         "app-m4",
         "m4",
     );
-    let (second_dir, _) = run_manifest(
-        receiver_app(),
-        AppTopology::new(vec![1], vec![0]),
-        args,
-        "app-m4",
-        "m4",
-    );
+    let (second_dir, _) = run_manifest(receiver_app(), AppTopology::new(1), args, "app-m4", "m4");
 
     let first = std::fs::read(first_dir.path().join("m4.xbin.json")).expect("first manifest");
     let second = std::fs::read(second_dir.path().join("m4.xbin.json")).expect("second manifest");
@@ -278,11 +252,11 @@ fn manifests_are_deterministic() {
 fn interface_hash_matches_the_computed_fingerprint() {
     let app_mod = receiver_app();
     let args = quote!(device = mypac, dispatchers = [IRQ0]);
-    let topology = AppTopology::new(vec![1], vec![0]);
+    let topology = AppTopology::new(1);
 
     // The manifest records the fingerprint `cargo xbin sync` computes from the
     // current source and the resolved topology.
-    let expected = rticx_xbin_pass::app_interface_hash(&args, &app_mod, Some(&topology))
+    let expected = rticx_xbin_pass::app_interface_hash(&args, &app_mod, Some(topology))
         .expect("the fixture fingerprint parses");
 
     let (dir, manifest) = run_manifest(app_mod, topology, args, "app-m4", "m4");
@@ -375,8 +349,7 @@ fn full_pipeline_writes_the_manifest() {
 
     let mut builder = RticMacroBuilder::new(MockCoreBackend);
     builder.bind_pre_core_pass(
-        XbinPass::with_manifest(dir.path(), "app-m4", "m4")
-            .with_topology(AppTopology::new(vec![1], vec![0])),
+        XbinPass::with_manifest(dir.path(), "app-m4", "m4").with_topology(AppTopology::new(1)),
     );
     let code =
         builder.build_rtic_macro2(quote!(device = mypac, dispatchers = [IRQ0]), app_mod, None);
@@ -414,7 +387,7 @@ fn manifest_declaration_order_is_normalized() {
         }
     };
     XbinPass::with_manifest(dir.path(), "app", "app")
-        .with_topology(AppTopology::new(vec![1], vec![0]))
+        .with_topology(AppTopology::new(1))
         .run_pass(quote!(device = mypac, dispatchers = [IRQ0, IRQ1]), app_mod)
         .expect("pass succeeds");
 
@@ -430,47 +403,9 @@ fn manifest_declaration_order_is_normalized() {
     assert_eq!(names, ["Alpha", "Zeta"]);
 }
 
-#[test]
-fn malformed_extensions_are_rejected_with_precise_errors() {
-    let cases: Vec<(TokenStream, &str)> = vec![
-        (
-            quote!(device = mypac, core_ids = [1, 1, 2]),
-            "`core_ids` moved to `rticx.toml`",
-        ),
-        (
-            quote!(device = mypac, external_cores = 3),
-            "`external_cores` moved to `rticx.toml`",
-        ),
-        (
-            quote!(device = mypac, cores = 0),
-            "The `cores` argument must be at least 1.",
-        ),
-        (
-            quote!(device = mypac, cores = "two"),
-            "`cores` must be an integer literal",
-        ),
-    ];
-
-    for (args, expected) in cases {
-        let error = XbinPass::disabled()
-            .run_pass(
-                args,
-                syn::parse_quote!(
-                    mod app {}
-                ),
-            )
-            .expect_err("must be rejected")
-            .to_string();
-        assert!(
-            error.contains(expected),
-            "expected `{expected}` in `{error}`"
-        );
-    }
-}
-
-/// A multi-core application records one capability entry per local
-/// core, and a backend that leaves `physical_core`/`ipc_pools` at their trait
-/// defaults yields the identity physical id and no pools.
+/// A backend that leaves `physical_core`/`ipc_pools` at their trait defaults
+/// yields the identity physical id (`0` for the single local core) and no
+/// pools.
 #[test]
 fn manifest_records_the_identity_capability_default() {
     let (_dir, manifest) = run_manifest_with_backend(
@@ -478,75 +413,68 @@ fn manifest_records_the_identity_capability_default() {
         syn::parse_quote!(
             mod app {}
         ),
-        AppTopology::new(vec![4, 5], vec![]),
+        AppTopology::new(4),
         quote!(device = mypac),
         "app-m4",
         "m4",
     );
 
     assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
+    let capability = manifest
+        .capability
+        .as_ref()
+        .expect("the bound backend records one capability");
     assert_eq!(
-        manifest.capabilities.len(),
-        2,
-        "one capability entry per local core"
+        capability.physical_core, 0,
+        "the trait default is the identity mapping over the single local core"
     );
-    for (local_core, capability) in manifest.capabilities.iter().enumerate() {
-        assert_eq!(capability.local_core, local_core as u32);
-        assert_eq!(
-            capability.physical_core, local_core as u32,
-            "the trait default is the identity mapping"
-        );
-        assert!(
-            capability.pools.is_empty(),
-            "the trait default exposes no pool"
-        );
-    }
+    assert!(
+        capability.pools.is_empty(),
+        "the trait default exposes no pool"
+    );
 
     let json = manifest.to_json();
     assert!(json.contains("\"physical_core\": 0"), "{json}");
     assert!(!json.contains("\"pools\""), "no pools are recorded: {json}");
 }
 
-/// The manifest records the bound distribution's physical ids and
-/// pools for every local core, with pool entries sorted by `(peer, id)`.
+/// The manifest records the bound distribution's physical id and pools, with
+/// the pool entries sorted by `(peer, id)`.
 #[test]
-fn manifest_records_multi_core_backend_capabilities() {
+fn manifest_records_the_backend_capability() {
     let (_dir, manifest) = run_manifest_with_backend(
-        CapabilityBackend {
-            physical: vec![7, 9],
-        },
+        CapabilityBackend { physical: 7 },
         syn::parse_quote!(
             mod app {}
         ),
-        AppTopology::new(vec![7, 9], vec![]),
+        AppTopology::new(7),
         quote!(device = mypac),
         "app-m4",
         "m4",
     );
 
-    assert_eq!(manifest.capabilities.len(), 2);
+    let capability = manifest
+        .capability
+        .as_ref()
+        .expect("the bound backend records one capability");
+    assert_eq!(capability.physical_core, 7);
 
-    let first = &manifest.capabilities[0];
-    assert_eq!(first.local_core, 0);
-    assert_eq!(first.physical_core, 7);
-    let ids: Vec<&str> = first.pools.iter().map(|pool| pool.id.as_str()).collect();
-    assert_eq!(ids, ["sram3"]);
+    let ids: Vec<&str> = capability
+        .pools
+        .iter()
+        .map(|pool| pool.id.as_str())
+        .collect();
+    assert_eq!(ids, ["sram1", "sram3"], "pools are sorted by `(peer, id)`");
 
-    let sram3 = &first.pools[0];
+    let sram3 = &capability.pools[1];
     assert_eq!(sram3.peer, 8);
     assert_eq!(sram3.base_local, 0x3004_0000);
     assert_eq!(sram3.base_peer, 0x1004_0000);
     assert_eq!(sram3.budget, 4096);
 
-    let second = &manifest.capabilities[1];
-    assert_eq!(second.local_core, 1);
-    assert_eq!(second.physical_core, 9);
-    assert_eq!(second.pools.len(), 1);
-    assert_eq!(second.pools[0].id, "sram1");
-    assert_eq!(second.pools[0].peer, 7);
-
     let json = manifest.to_json();
     assert!(json.contains("\"physical_core\": 7"), "{json}");
     assert!(json.contains("\"id\": \"sram3\""), "{json}");
+    assert!(!json.contains("\"local_core\""), "{json}");
     assert!(!json.contains("\"policy\""), "{json}");
 }

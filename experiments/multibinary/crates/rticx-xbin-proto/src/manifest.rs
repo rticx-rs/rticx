@@ -15,16 +15,15 @@
 //!   application, including the full `SpawnInput` paths. There are no
 //!   sender declarations: the driver infers each task's single producer
 //!   application from the receivers' `spawn_by`;
-//! - the **distro capability binding**: per local core, the physical
-//!   core it runs on and the IPC pools that physical core can reach
-//!   ([`CoreCapability`]). The distro owns the pool addresses and the shared
-//!   per-dual budget; the driver matches the two endpoints' entries when it
-//!   merges the manifests.
+//! - the **distro capability binding**: the one physical core the binary runs on
+//!   and the IPC pools that physical core can reach ([`CoreCapability`]). The
+//!   distro owns the pool addresses and the shared per-dual budget; the driver
+//!   matches the two endpoints' entries when it merges the manifests.
 //!
 //! Like `system.json`, the manifest is JSON with a `schema_version` and is
 //! serialized deterministically: declarations are sorted by task name, the
-//! type list is sorted and deduplicated, and capability entries are ordered by
-//! local core and `(peer, pool id)`.
+//! type list is sorted and deduplicated, and pools are ordered by
+//! `(peer, pool id)`.
 
 use serde::{Deserialize, Serialize};
 
@@ -33,19 +32,7 @@ use crate::hash::Hash64;
 use crate::project::TargetKind;
 
 /// Schema version of `<target>.xbin.json` understood by this crate.
-///
-/// Schema 3 removed the topology echo (`cores`, `core_ids`, `external_cores`):
-/// `rticx.toml` is the single topology source and the driver reads it directly.
-/// The manifest only reports source-discovered facts.
-///
-/// Schema 4 renamed the per-application freshness hash to `interface_hash`
-/// and narrowed it from the whole source to a fingerprint of the cross-binary
-/// interface (resolved topology, the stolen cross-dispatcher front and the
-/// receiver declarations).
-///
-/// Schema 5 removed the redundant per-pool `policy`: v1 has a single supported
-/// cache policy, documented in `rticx-xbin-pass::XbinPassBackend`.
-pub const MANIFEST_SCHEMA_VERSION: u32 = 5;
+pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// File-name suffix of an application manifest.
 pub const MANIFEST_FILE_SUFFIX: &str = ".xbin.json";
@@ -61,11 +48,11 @@ pub struct AppManifest {
     /// Cargo target the `#[app]` module lives in.
     pub target: TargetRef,
     /// Fingerprint of the cross-binary interface as the pass saw it: the
-    /// resolved topology (`cores`, `core_ids`, `external_cores`), the stolen
-    /// cross-dispatcher front and the receiver declarations. Task bodies,
-    /// comments, local sw/async tasks, `shared`, `device`/`pacs` and surplus
-    /// dispatcher entries are deliberately excluded, so editing them does not
-    /// make a synced application look stale.
+    /// resolved topology (the binary's `core_id`), the stolen cross-dispatcher
+    /// front and the receiver declarations. Task bodies, comments, local
+    /// sw/async tasks, `shared`, `device`/`pacs` and surplus dispatcher entries
+    /// are deliberately excluded, so editing them does not make a synced
+    /// application look stale.
     pub interface_hash: Hash64,
     /// Full paths of every IDL type referenced by the declarations below,
     /// sorted and deduplicated.
@@ -74,16 +61,15 @@ pub struct AppManifest {
     /// Native `#[sw_task]` receivers (this application executes them).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub receivers: Vec<ReceiverDecl>,
-    /// Distro capability binding, one entry per local core: the
-    /// physical core it runs on and the IPC pools that physical core can
-    /// reach. Recorded only when the distribution bound a code-generation
-    /// backend; without one the field is absent, because no distro vocabulary
-    /// is available (the driver then has no pool path for any direction).
+    /// Distro capability binding: the physical core this binary runs on and the
+    /// IPC pools that physical core can reach. Recorded only when the
+    /// distribution bound a code-generation backend; without one the field is
+    /// absent, because no distro vocabulary is available (the driver then has
+    /// no pool path for any direction).
     ///
-    /// Entries are ordered by local core index; within an entry, pools are
-    /// ordered by `(peer, id)`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<CoreCapability>,
+    /// Pools are ordered by `(peer, id)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<CoreCapability>,
 }
 
 impl AppManifest {
@@ -143,8 +129,6 @@ pub struct ReceiverDecl {
     pub priority: u16,
     /// Number of pending inputs the task FIFO can hold.
     pub capacity: usize,
-    /// Local core index the task runs on.
-    pub core: u32,
     /// Global id of the single producer core that spawns this task (the
     /// receiver's `spawn_by`, resolved in the global namespace).
     pub spawn_by: u32,
@@ -160,16 +144,14 @@ impl ReceiverDecl {
     }
 }
 
-/// The distro capability binding of one local core.
+/// The distro capability binding of a binary.
 ///
-/// The distribution reports the physical core a local core runs on and the
-/// IPC pools that physical core can reach. The driver matches the two
-/// endpoints of a dual through the physical ids and the pool ids.
+/// The distribution reports the physical core the binary runs on and the IPC
+/// pools that physical core can reach. The driver matches the two endpoints of
+/// a dual through the physical ids and the pool ids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreCapability {
-    /// Local core index (`0..cores`).
-    pub local_core: u32,
-    /// Distro-defined physical core id this local core runs on.
+    /// Distro-defined physical core id this binary runs on.
     pub physical_core: u32,
     /// IPC pools this physical core can reach, ordered by `(peer, id)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

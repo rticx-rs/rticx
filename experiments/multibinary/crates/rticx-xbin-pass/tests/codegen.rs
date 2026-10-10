@@ -28,7 +28,7 @@ use support::{ENV_LOCK, EnvGuard};
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1), priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 3,
+  "schema_version": 1,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -37,20 +37,18 @@ const SYSTEM_JSON: &str = r#"{
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
       "interface_hash": "0x26a74c0569235dd7",
-      "core_ids": [0],
-      "external_cores": [1]
+      "core_id": 0
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
       "interface_hash": "0x70b1fa36c7b61323",
-      "core_ids": [1],
-      "external_cores": [0]
+      "core_id": 1
     }
   ],
   "cores": [
-    { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 },
-    { "global_id": 1, "physical_core": 1, "app": "app-m4", "local_index": 0 }
+    { "global_id": 0, "physical_core": 0, "app": "app-m7" },
+    { "global_id": 1, "physical_core": 1, "app": "app-m4" }
   ],
   "types": [
     {
@@ -152,10 +150,9 @@ fn sender_args() -> TokenStream {
     quote!(device = mypac)
 }
 
-/// The producer fixture's topology: local core 0 -> global 0, global core 1
-/// visible.
+/// The producer fixture's topology: the binary owns global core 0.
 fn sender_topology() -> AppTopology {
-    AppTopology::new(vec![0], vec![1])
+    AppTopology::new(0)
 }
 
 /// The receiver fixture application: one native cross receiver with its
@@ -183,10 +180,10 @@ fn receiver_args() -> TokenStream {
     quote!(device = mypac, dispatchers = [IRQ0])
 }
 
-/// The receiver fixture's topology: local core 0 -> global 1, global core 0
-/// visible.
+/// The receiver fixture's topology: the binary owns global core 1, so
+/// `spawn_by = 0` names the producer in another binary.
 fn receiver_topology() -> AppTopology {
-    AppTopology::new(vec![1], vec![0])
+    AppTopology::new(1)
 }
 
 /// Like [`receiver_args`] for an application without cross declarations: the
@@ -215,7 +212,7 @@ unsafe impl CrossCoreMessage for EncryptReq {}\n";
 /// discovers a project root (and therefore an `ipc-types.toml` location).
 const PROJECT_TOML: &str = "schema = 1\n\n\
      [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-     core_ids = [0]\nexternal_cores = [1]\n";
+     core_id = 0\n";
 
 /// The end-to-end fixture IDL: one `EncryptReq { addr: u32, len: u32, key: u32 }`
 /// message, as `crates/mock/fixtures/e2e/ipc-types.toml` declares it.
@@ -253,7 +250,7 @@ fn with_interface_hashes(
             .find(|application| application.package == *package)
             .unwrap_or_else(|| panic!("fixture has no application `{package}`"));
         application.interface_hash =
-            rticx_xbin_pass::app_interface_hash(args, app_mod, Some(topology))
+            rticx_xbin_pass::app_interface_hash(args, app_mod, Some(*topology))
                 .expect("the fixture patch parses");
     }
     view.seal();
@@ -949,8 +946,8 @@ fn receiver_codegen_router_snapshot() {
     );
 }
 
-/// Receiver args for the two-line fixture: two cross lines on local core 0,
-/// listed in ascending `(source, priority)` order.
+/// Receiver args for the two-line fixture: two cross lines, listed in
+/// ascending `(source, priority)` order.
 fn two_line_receiver_args() -> TokenStream {
     quote!(device = mypac, dispatchers = [IRQ0, IRQ1])
 }
@@ -1115,13 +1112,13 @@ fn owner_codegen_init_hooks_snapshot() {
     let generated = generate_ok(&path);
 
     // The configure hook is inlined at `BeforeInit`, not a generated function;
-    // only the per-core FIFO initializer is emitted.
+    // only the per-application FIFO initializer is emitted.
     assert!(
         !generated.contains("__rticx_xbin_configure_shared_memory"),
         "the configure wrapper function must be gone: {generated}"
     );
 
-    // `app-m7` produces the `0 -> 1` FIFO, so its core 0 gets its own
+    // `app-m7` (global core 0) produces the `0 -> 1` FIFO, so it gets its own
     // argument-less FIFO initializer, run before `post_init`.
     assert_section_present(
         &generated,
@@ -1280,22 +1277,20 @@ fn fifo_init_follows_the_producing_core() {
         }
     };
     let receiver_args = quote!(device = mypac, dispatchers = [IRQ0]);
-    let receiver_topology = AppTopology::new(vec![2], vec![5]);
+    let receiver_topology = AppTopology::new(2);
     let sender_mod: syn::ItemMod = syn::parse_quote! {
         mod app {}
     };
     let sender_args = quote!(device = mypac);
-    let sender_topology = AppTopology::new(vec![5], vec![2]);
+    let sender_topology = AppTopology::new(5);
 
     // app-m7 owns global core 5 and app-m4 owns global core 2: only the
     // producer core 5 initializes the `5 -> 2` FIFO, independently of the
     // global core ordering and of the declaration order.
     let view = system_with_patches(
         |view| {
-            view["apps"][0]["core_ids"] = serde_json::json!([5]);
-            view["apps"][0]["external_cores"] = serde_json::json!([2]);
-            view["apps"][1]["core_ids"] = serde_json::json!([2]);
-            view["apps"][1]["external_cores"] = serde_json::json!([5]);
+            view["apps"][0]["core_id"] = serde_json::json!(5);
+            view["apps"][1]["core_id"] = serde_json::json!(2);
             view["cores"][0]["global_id"] = serde_json::json!(5);
             view["cores"][1]["global_id"] = serde_json::json!(2);
             view["tasks"][0]["receiver_core"] = serde_json::json!(2);
@@ -1308,19 +1303,14 @@ fn fifo_init_follows_the_producing_core() {
             view["doorbells"][0]["target"] = serde_json::json!(2);
         },
         &[
-            (
-                "app-m4",
-                &receiver_args,
-                &receiver_mod,
-                receiver_topology.clone(),
-            ),
-            ("app-m7", &sender_args, &sender_mod, sender_topology.clone()),
+            ("app-m4", &receiver_args, &receiver_mod, receiver_topology),
+            ("app-m7", &sender_args, &sender_mod, sender_topology),
         ],
     );
     let (_dir, path) = write_system(&view);
 
     let receiver = XbinPass::with_system(&path, "app-m4", "m4")
-        .with_topology(receiver_topology.clone())
+        .with_topology(receiver_topology)
         .with_backend(TestBackend);
     let (_, module) = receiver
         .run_pass(receiver_args, receiver_mod)
@@ -1351,7 +1341,7 @@ fn fifo_init_follows_the_producing_core() {
     // The core-5 producer initializes its own `5 -> 2` FIFO before its
     // `post_init`, independently of the global core ordering.
     assert!(
-        sender_tokens.contains("__rticx_xbin_init_fifos_core0"),
+        sender_tokens.contains("__rticx_xbin_init_fifos_core5"),
         "the producer must initialize its region: {sender_tokens}"
     );
     let before_post_init = sender
@@ -1359,7 +1349,7 @@ fn fifo_init_follows_the_producing_core() {
         .expect("the producer core initializes its FIFO before post_init");
     assert_section_present(
         &before_post_init.to_string(),
-        quote! { __rticx_xbin_init_fifos_core0 () ; },
+        quote! { __rticx_xbin_init_fifos_core5 () ; },
         "producer FIFO init injection",
     );
 }
@@ -1520,7 +1510,7 @@ fn stale_receiver_declarations_are_rejected() {
                         fn exec(&mut self, input: Self::SpawnInput);
                     }
 
-                    #[sw_task(priority = 3, capacity = 2, spawn_by = 2)]
+                    #[sw_task(priority = 3, capacity = 2, spawn_by = 3)]
                     struct EncryptTask;
 
                     impl RticSwTask for EncryptTask {
@@ -1529,17 +1519,17 @@ fn stale_receiver_declarations_are_rejected() {
                     }
                 }
             },
-            "declares `spawn_by = 2`, which is not a known core",
+            "declares `spawn_by = 3`, but the synced system view has 0",
         ),
         (
-            quote!(device = mypac, dispatchers = [IRQ0]),
-            AppTopology::new(vec![7], vec![0]),
+            receiver_args(),
+            AppTopology::new(7),
             receiver_app(),
-            "maps its local cores to [7], but the synced system view has [1]",
+            "application `app-m4` owns global core 7, but the synced system view has 1",
         ),
         (
-            quote!(device = mypac, dispatchers = [[], [IRQ0]]),
-            AppTopology::new(vec![1, 7], vec![0]),
+            receiver_args(),
+            receiver_topology(),
             syn::parse_quote! {
                 mod app {
                     trait RticSwTask {
@@ -1547,7 +1537,7 @@ fn stale_receiver_declarations_are_rejected() {
                         fn exec(&mut self, input: Self::SpawnInput);
                     }
 
-                    #[sw_task(core = 1, priority = 3, capacity = 2, spawn_by = 0)]
+                    #[sw_task(priority = 3, capacity = 2, spawn_by = 0, core = 0)]
                     struct EncryptTask;
 
                     impl RticSwTask for EncryptTask {
@@ -1556,21 +1546,14 @@ fn stale_receiver_declarations_are_rejected() {
                     }
                 }
             },
-            "declares local core 1, which maps to global core 7, but the synced system view runs \
-             it on global core 1",
+            "must not declare `core`",
         ),
     ];
 
-    // The `cores = 2` case needs a two-entry mapping in the app entry.
-    let two_cores = system_with(|view| {
-        view["apps"][1]["core_ids"] = serde_json::json!([1, 7]);
-    });
     let (_dir, path) = write_base_system();
-    let (_two_dir, two_path) = write_system(&two_cores);
 
-    for (index, (args, topology, app_mod, expected)) in cases.into_iter().enumerate() {
-        let path = if index == 5 { &two_path } else { &path };
-        let error = XbinPass::with_system(path, "app-m4", "m4")
+    for (args, topology, app_mod, expected) in cases {
+        let error = XbinPass::with_system(&path, "app-m4", "m4")
             .with_topology(topology)
             .with_backend(TestBackend)
             .run_pass(args, app_mod)
@@ -1580,7 +1563,7 @@ fn stale_receiver_declarations_are_rejected() {
             error.contains(expected),
             "expected `{expected}` in `{error}`"
         );
-        if !expected.contains("not a known core") {
+        if !expected.contains("must not declare `core`") {
             assert!(error.contains("cargo xbin sync"), "{error}");
         }
     }
@@ -1740,8 +1723,8 @@ fn codegen_mode_is_detected_from_the_environment() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
     let system = dir.path().join("system.json");
-    // No `rticx.toml` above the crate: the pass falls back to the identity
-    // topology over `#[app(cores)]` (one local core, no external cores).
+    // No `rticx.toml` above the crate: the pass falls back to the standalone
+    // single-core topology (`core_id = 0`).
     std::fs::write(
         &system,
         with_interface_hashes(
@@ -1750,7 +1733,7 @@ fn codegen_mode_is_detected_from_the_environment() {
                 "app-m7",
                 &sender_args(),
                 &sender_app(),
-                AppTopology::identity(1),
+                AppTopology::identity(),
             )],
         ),
     )
@@ -1786,7 +1769,7 @@ fn codegen_mode_resolves_the_application_without_cargo_bin_name() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
     let system = dir.path().join("system.json");
-    // No `rticx.toml`: the resolved topology is the identity over one core.
+    // No `rticx.toml`: the resolved topology is the standalone single core.
     std::fs::write(
         &system,
         with_interface_hashes(
@@ -1795,7 +1778,7 @@ fn codegen_mode_resolves_the_application_without_cargo_bin_name() {
                 "app-m7",
                 &sender_args(),
                 &sender_app(),
-                AppTopology::identity(1),
+                AppTopology::identity(),
             )],
         ),
     )
@@ -2053,7 +2036,7 @@ mod app {{
 
 /// Parses `(args, app_mod)` with `topology` and returns the interface
 /// fingerprint the pass would record, as `cargo xbin sync` does.
-fn interface_hash_of(args: &TokenStream, app_mod: &syn::ItemMod, topology: &AppTopology) -> Hash64 {
+fn interface_hash_of(args: &TokenStream, app_mod: &syn::ItemMod, topology: AppTopology) -> Hash64 {
     rticx_xbin_pass::app_interface_hash(args, app_mod, Some(topology))
         .expect("the fixture interface parses")
 }
@@ -2105,8 +2088,8 @@ fn interface_hash_ignores_task_bodies_and_doc_comments() {
     };
 
     assert_eq!(
-        interface_hash_of(&args, &original, &topology),
-        interface_hash_of(&args, &edited, &topology),
+        interface_hash_of(&args, &original, topology),
+        interface_hash_of(&args, &edited, topology),
     );
 }
 
@@ -2173,22 +2156,22 @@ fn interface_hash_ignores_local_task_declarations() {
         }
     };
 
-    let base = interface_hash_of(&args, &without, &topology);
+    let base = interface_hash_of(&args, &without, topology);
     assert_eq!(
         base,
-        interface_hash_of(&args, &added, &topology),
+        interface_hash_of(&args, &added, topology),
         "adding a local task must not change the interface fingerprint"
     );
     assert_eq!(
         base,
-        interface_hash_of(&args, &changed, &topology),
+        interface_hash_of(&args, &changed, topology),
         "changing a local task priority must not change the interface fingerprint"
     );
 }
 
 #[test]
 fn interface_hash_ignores_shared_and_device() {
-    // `shared` and `device`/`pacs` are re-derived in phase 2 from the current
+    // `shared` and `device`/`pac` are re-derived in phase 2 from the current
     // source and have no cross-binary layout effect.
     let topology = receiver_topology();
     let args_a = quote!(device = pac_a, dispatchers = [IRQ0]);
@@ -2206,13 +2189,13 @@ fn interface_hash_ignores_shared_and_device() {
     );
 
     assert_eq!(
-        interface_hash_of(&args_a, &base, &topology),
-        interface_hash_of(&args_a, &shared, &topology),
+        interface_hash_of(&args_a, &base, topology),
+        interface_hash_of(&args_a, &shared, topology),
         "a receiver's `shared` list must not change the interface fingerprint"
     );
     assert_eq!(
-        interface_hash_of(&args_a, &base, &topology),
-        interface_hash_of(&args_b, &base, &topology),
+        interface_hash_of(&args_a, &base, topology),
+        interface_hash_of(&args_b, &base, topology),
         "the `device` PAC must not change the interface fingerprint"
     );
 }
@@ -2220,14 +2203,14 @@ fn interface_hash_ignores_shared_and_device() {
 #[test]
 fn interface_hash_changes_on_receiver_field() {
     // Every cross-binary-sensitive receiver field must move the fingerprint.
-    let topology = AppTopology::new(vec![1, 2], vec![0, 3]);
-    let args = quote!(device = mypac, dispatchers = [[IRQ0], [IRQ1]]);
+    let topology = receiver_topology();
+    let args = quote!(device = mypac, dispatchers = [IRQ0]);
     let base = receiver_module(
         "EncryptTask",
         "priority = 3, capacity = 2, spawn_by = 0",
         "ipc_types::EncryptReq",
     );
-    let base_hash = interface_hash_of(&args, &base, &topology);
+    let base_hash = interface_hash_of(&args, &base, topology);
 
     let variants = [
         (
@@ -2255,14 +2238,6 @@ fn interface_hash_changes_on_receiver_field() {
             ),
         ),
         (
-            "core",
-            receiver_module(
-                "EncryptTask",
-                "priority = 3, capacity = 2, spawn_by = 0, core = 1",
-                "ipc_types::EncryptReq",
-            ),
-        ),
-        (
             "spawn_by",
             receiver_module(
                 "EncryptTask",
@@ -2283,7 +2258,7 @@ fn interface_hash_changes_on_receiver_field() {
     for (field, variant) in variants {
         assert_ne!(
             base_hash,
-            interface_hash_of(&args, &variant, &topology),
+            interface_hash_of(&args, &variant, topology),
             "changing the receiver `{field}` must change the interface fingerprint",
         );
     }
@@ -2308,42 +2283,37 @@ fn interface_hash_changes_on_stolen_dispatcher_and_ignores_surplus() {
         dispatchers = [IRQ_CROSS, IRQ_LOCAL, IRQ_MORE]
     );
 
-    let base = interface_hash_of(&stolen, &module, &topology);
+    let base = interface_hash_of(&stolen, &module, topology);
     assert_ne!(
         base,
-        interface_hash_of(&stolen_changed, &module, &topology),
+        interface_hash_of(&stolen_changed, &module, topology),
         "the stolen cross dispatcher identity must change the interface fingerprint"
     );
     assert_eq!(
         base,
-        interface_hash_of(&surplus_changed, &module, &topology),
+        interface_hash_of(&surplus_changed, &module, topology),
         "a surplus local dispatcher must not change the interface fingerprint"
     );
     assert_eq!(
         base,
-        interface_hash_of(&surplus_added, &module, &topology),
+        interface_hash_of(&surplus_added, &module, topology),
         "adding a local dispatcher must not change the interface fingerprint"
     );
 }
 
 #[test]
 fn interface_hash_changes_on_topology() {
-    // The resolved topology is part of the interface the driver merges.
+    // The application's `core_id` is part of the interface the driver merges.
     let args = quote!(device = mypac, dispatchers = []);
     let module: syn::ItemMod = syn::parse_quote! {
         mod app {}
     };
 
-    let base = interface_hash_of(&args, &module, &AppTopology::new(vec![0], vec![1]));
+    let base = interface_hash_of(&args, &module, AppTopology::new(0));
     assert_ne!(
         base,
-        interface_hash_of(&args, &module, &AppTopology::new(vec![5], vec![1])),
-        "a different `core_ids` mapping must change the interface fingerprint"
-    );
-    assert_ne!(
-        base,
-        interface_hash_of(&args, &module, &AppTopology::new(vec![0], vec![1, 2])),
-        "a different `external_cores` list must change the interface fingerprint"
+        interface_hash_of(&args, &module, AppTopology::new(5)),
+        "a different `core_id` must change the interface fingerprint"
     );
 }
 
@@ -2398,8 +2368,8 @@ fn interface_hash_ignores_token_spacing() {
     };
 
     assert_eq!(
-        interface_hash_of(&args(Spacing::Joint), &module, &topology),
-        interface_hash_of(&args(Spacing::Alone), &module, &topology),
+        interface_hash_of(&args(Spacing::Joint), &module, topology),
+        interface_hash_of(&args(Spacing::Alone), &module, topology),
     );
 }
 
@@ -2407,13 +2377,7 @@ fn interface_hash_ignores_token_spacing() {
 fn discovered_project_root_without_a_synced_view_is_a_hard_error() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        dir.path().join("rticx.toml"),
-        "schema = 1\n\n\
-         [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\n\
-         core_ids = [0]\nexternal_cores = [1]\n",
-    )
-    .expect("rticx.toml");
+    std::fs::write(dir.path().join("rticx.toml"), PROJECT_TOML).expect("rticx.toml");
 
     // A discovered project root selects codegen mode even before the first
     // `cargo xbin sync` wrote the view, so any application fails instead of

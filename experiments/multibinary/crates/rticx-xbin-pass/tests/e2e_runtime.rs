@@ -66,7 +66,7 @@ use support::{cargo, runtime_and_mock_paths};
 /// A two-application system view: `app-m7` (global core 0) spawns
 /// `EncryptTask` on `app-m4` (global core 1) at priority 3, capacity 2.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 3,
+  "schema_version": 1,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -75,20 +75,18 @@ const SYSTEM_JSON: &str = r#"{
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
       "interface_hash": "0x26a74c0569235dd7",
-      "core_ids": [0],
-      "external_cores": [1]
+      "core_id": 0
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
       "interface_hash": "0x70b1fa36c7b61323",
-      "core_ids": [1],
-      "external_cores": [0]
+      "core_id": 1
     }
   ],
   "cores": [
-    { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 },
-    { "global_id": 1, "physical_core": 1, "app": "app-m4", "local_index": 0 }
+    { "global_id": 0, "physical_core": 0, "app": "app-m7" },
+    { "global_id": 1, "physical_core": 1, "app": "app-m4" }
   ],
   "types": [
     {
@@ -259,6 +257,9 @@ impl SwPassBackend for TestSwBackend {
 /// the target's critical section.
 fn producer_module(core: u32) -> syn::ItemMod {
     let module = format_ident!("producer_{core}");
+    // The generated initializer is named after the application's global core
+    // id, which is `core` in these fixtures.
+    let init_fn = format_ident!("__rticx_xbin_init_fifos_core{core}");
     syn::parse_quote! {
         pub mod #module {
             fn __rticx_xbin_backend() -> rticx_xbin_mock::MockBackend {
@@ -270,7 +271,7 @@ fn producer_module(core: u32) -> syn::ItemMod {
             }
 
             pub fn test_init_fifos() {
-                __rticx_xbin_init_fifos_core0();
+                #init_fn();
             }
 
             /// Builds this producer's own view of the fixture message. Each
@@ -294,10 +295,9 @@ fn producer_args() -> TokenStream {
     quote!(device = pac)
 }
 
-/// The producer's topology: local core 0 -> global `core`, with `external`
-/// visible.
-fn producer_topology(core: u32, external: u32) -> AppTopology {
-    AppTopology::new(vec![core], vec![external])
+/// The producer's topology: the binary owns global core `core`.
+fn producer_topology(core: u32) -> AppTopology {
+    AppTopology::new(core)
 }
 
 /// The two-app receiver fixture application: the task, a log of executed
@@ -472,10 +472,9 @@ fn two_app_receiver_args() -> TokenStream {
     quote!(device = pac, dispatchers = [IRQ0])
 }
 
-/// The two-app receiver's topology: local core 0 -> global 1, global core 0
-/// visible.
+/// The two-app receiver's topology: the binary owns global core 1.
 fn two_app_receiver_topology() -> AppTopology {
-    AppTopology::new(vec![1], vec![0])
+    AppTopology::new(1)
 }
 
 /// The three-app receiver fixture application: two cross receivers fed
@@ -682,10 +681,10 @@ fn three_app_receiver_args() -> TokenStream {
     quote!(device = pac, dispatchers = [IRQ0, IRQ1])
 }
 
-/// The three-app receiver's topology: local core 0 -> global 1, global cores 0
-/// and 2 visible.
+/// The three-app receiver's topology: the binary owns global core 1; global
+/// cores 0 and 2 are the producers of the two pairs.
 fn three_app_receiver_topology() -> AppTopology {
-    AppTopology::new(vec![1], vec![0, 2])
+    AppTopology::new(1)
 }
 
 /// The fixture view with both applications' interface fingerprints recorded,
@@ -697,7 +696,7 @@ fn two_app_system() -> String {
             "app-m7",
             &producer_args(),
             &producer_module(0),
-            producer_topology(0, 1),
+            producer_topology(0),
         ),
         (
             "app-m4",
@@ -712,7 +711,7 @@ fn two_app_system() -> String {
             .find(|application| application.package == package)
             .expect("fixture application");
         application.interface_hash =
-            rticx_xbin_pass::app_interface_hash(args, app_mod, Some(&topology))
+            rticx_xbin_pass::app_interface_hash(args, app_mod, Some(topology))
                 .expect("the fixture fingerprint parses");
     }
     view.seal();
@@ -729,22 +728,19 @@ fn three_app_system() -> String {
             package: "app-m7".to_string(),
             target: TargetRef::bin("m7"),
             interface_hash: Hash64::ZERO,
-            core_ids: vec![0],
-            external_cores: vec![1],
+            core_id: 0,
         },
         AppEntry {
             package: "app-m5".to_string(),
             target: TargetRef::bin("m5"),
             interface_hash: Hash64::ZERO,
-            core_ids: vec![2],
-            external_cores: vec![1],
+            core_id: 2,
         },
         AppEntry {
             package: "app-m4".to_string(),
             target: TargetRef::bin("m4"),
             interface_hash: Hash64::ZERO,
-            core_ids: vec![1],
-            external_cores: vec![0, 2],
+            core_id: 1,
         },
     ];
     view.cores = vec![
@@ -752,19 +748,16 @@ fn three_app_system() -> String {
             global_id: 0,
             physical_core: 0,
             app: "app-m7".to_string(),
-            local_index: 0,
         },
         CoreEntry {
             global_id: 2,
             physical_core: 2,
             app: "app-m5".to_string(),
-            local_index: 0,
         },
         CoreEntry {
             global_id: 1,
             physical_core: 1,
             app: "app-m4".to_string(),
-            local_index: 0,
         },
     ];
     view.types = vec![TypeEntry {
@@ -867,13 +860,13 @@ fn three_app_system() -> String {
             "app-m7",
             producer_args(),
             producer_module(0),
-            producer_topology(0, 1),
+            producer_topology(0),
         ),
         (
             "app-m5",
             producer_args(),
             producer_module(2),
-            producer_topology(2, 1),
+            producer_topology(2),
         ),
         (
             "app-m4",
@@ -888,7 +881,7 @@ fn three_app_system() -> String {
             .find(|application| application.package == package)
             .expect("fixture application");
         application.interface_hash =
-            rticx_xbin_pass::app_interface_hash(&args, &app_mod, Some(&topology))
+            rticx_xbin_pass::app_interface_hash(&args, &app_mod, Some(topology))
                 .expect("the fixture fingerprint parses");
     }
     view.seal();
@@ -896,9 +889,9 @@ fn three_app_system() -> String {
 }
 
 /// Expands a producer fixture through the cross-binary pass (no core pass).
-fn expand_producer(system: &Path, package: &str, target: &str, core: u32, external: u32) -> String {
+fn expand_producer(system: &Path, package: &str, target: &str, core: u32) -> String {
     let pass = XbinPass::with_system(system, package, target)
-        .with_topology(producer_topology(core, external))
+        .with_topology(producer_topology(core))
         .with_backend(TestBackend);
     let (_, module) = pass
         .run_pass(producer_args(), producer_module(core))
@@ -1029,7 +1022,7 @@ fn mock_runtime_spawn_reaches_the_receiver_dispatcher() {
     std::fs::write(&system_path, two_app_system()).expect("system.json");
     std::fs::write(dir.path().join("ipc_types.rs"), IPC_TYPES_RS).expect("ipc_types.rs");
 
-    let sender = expand_producer(&system_path, "app-m7", "m7", 0, 1);
+    let sender = expand_producer(&system_path, "app-m7", "m7", 0);
     assert!(
         !sender.contains("compile_error"),
         "sender code generation failed: {sender}"
@@ -1089,7 +1082,7 @@ fn three_applications_spawn_through_their_own_routers() {
     // Both producers declare nothing: their stubs and ring functions come
     // from the pass. The second producer's stub is generated even
     // though the application never declares it.
-    let first = expand_producer(&system_path, "app-m7", "m7", 0, 1);
+    let first = expand_producer(&system_path, "app-m7", "m7", 0);
     assert!(
         !first.contains("compile_error"),
         "first producer generation failed: {first}"
@@ -1099,7 +1092,7 @@ fn three_applications_spawn_through_their_own_routers() {
         "the first producer stub/ring is missing: {first}"
     );
 
-    let second = expand_producer(&system_path, "app-m5", "m5", 2, 1);
+    let second = expand_producer(&system_path, "app-m5", "m5", 2);
     assert!(
         !second.contains("compile_error"),
         "second producer generation failed: {second}"
@@ -1109,7 +1102,7 @@ fn three_applications_spawn_through_their_own_routers() {
         "the second producer stub/ring is missing: {second}"
     );
     assert!(
-        second.contains("__rticx_xbin_init_fifos_core0"),
+        second.contains("__rticx_xbin_init_fifos_core2"),
         "the producer on core 2 does not initialize its pool: {second}"
     );
 

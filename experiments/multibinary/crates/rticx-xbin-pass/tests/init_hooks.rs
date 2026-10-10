@@ -33,7 +33,7 @@ use support::{cargo, runtime_and_mock_paths};
 /// adds a second FIFO produced by the other core, so the executed test proves
 /// that a core initializes exactly the FIFOs it produces.
 const SYSTEM_JSON: &str = r#"{
-  "schema_version": 3,
+  "schema_version": 1,
   "rticx_generation": "0.2",
   "topology_hash": "0x2b7f11101722fb4e",
   "layout_hash": "0x59021e1c399c4ddb",
@@ -42,20 +42,18 @@ const SYSTEM_JSON: &str = r#"{
       "package": "app-m7",
       "target": { "kind": "bin", "name": "m7" },
       "interface_hash": "0x26a74c0569235dd7",
-      "core_ids": [0],
-      "external_cores": [1]
+      "core_id": 0
     },
     {
       "package": "app-m4",
       "target": { "kind": "bin", "name": "m4" },
       "interface_hash": "0x70b1fa36c7b61323",
-      "core_ids": [1],
-      "external_cores": [0]
+      "core_id": 1
     }
   ],
   "cores": [
-    { "global_id": 0, "physical_core": 0, "app": "app-m7", "local_index": 0 },
-    { "global_id": 1, "physical_core": 1, "app": "app-m4", "local_index": 0 }
+    { "global_id": 0, "physical_core": 0, "app": "app-m7" },
+    { "global_id": 1, "physical_core": 1, "app": "app-m4" }
   ],
   "types": [
     {
@@ -196,10 +194,9 @@ fn owner_args() -> proc_macro2::TokenStream {
     quote!(device = mypac)
 }
 
-/// The owner application's topology: local core 0 -> global 0, global core 1
-/// visible.
+/// The owner application's topology: the binary owns global core 0.
 fn owner_topology() -> AppTopology {
-    AppTopology::new(vec![0], vec![1])
+    AppTopology::new(0)
 }
 
 /// The fixture view with the owner application's interface fingerprint
@@ -212,7 +209,7 @@ fn owner_system() -> String {
         .find(|application| application.package == "app-m7")
         .expect("fixture app-m7");
     application.interface_hash =
-        rticx_xbin_pass::app_interface_hash(&owner_args(), &owner_app(), Some(&owner_topology()))
+        rticx_xbin_pass::app_interface_hash(&owner_args(), &owner_app(), Some(owner_topology()))
             .expect("the owner fingerprint parses");
     view.seal();
     view.to_json()

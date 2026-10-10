@@ -3,61 +3,45 @@
 //! `rticx.toml` is the single user-facing source of project topology. The pass
 //! resolves the compiled application's [`AppTopology`] by walking up from
 //! `CARGO_MANIFEST_DIR` to the nearest project file (the same walk-up codegen
-//! mode uses), so `cores`/`core_ids` no longer have to be repeated in
+//! mode uses), so the application's `core_id` no longer has to be repeated in
 //! `#[app]`. Distribution macros use [`resolve_app_topology`] for their own
 //! backend binding.
 //!
-//! A standalone xbin distribution with no `rticx.toml` above it keeps the
-//! identity mapping ([`AppTopology::identity`]): resolution returns `Ok(None)`
-//! and the caller falls back. A project that exists but does not list the
-//! application is a hard error.
+//! A binary owns exactly one core: [`AppTopology`] is the application's global
+//! core id. A standalone xbin distribution with no `rticx.toml` above it keeps
+//! the [`AppTopology::identity`] fallback (`core_id = 0`): resolution returns
+//! `Ok(None)` and the caller falls back. A project that exists but does not
+//! list the application is a hard error.
 
 use std::path::PathBuf;
 
 use rticx_xbin_proto::parse_project_file;
 
-/// The resolved topology of one application: its local core index -> global
-/// core id mapping and the foreign cores it can see.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The resolved topology of one application: the single global core id the
+/// binary runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppTopology {
-    core_ids: Vec<u32>,
-    external_cores: Vec<u32>,
+    core_id: u32,
 }
 
 impl AppTopology {
-    /// Creates a topology from an explicit mapping and visibility list.
-    pub fn new(core_ids: impl Into<Vec<u32>>, external_cores: impl Into<Vec<u32>>) -> Self {
-        Self {
-            core_ids: core_ids.into(),
-            external_cores: external_cores.into(),
-        }
+    /// Creates a topology for the application owning the global core
+    /// `core_id`.
+    pub fn new(core_id: u32) -> Self {
+        Self { core_id }
     }
 
-    /// The identity mapping over `cores` local cores (`0..cores`, no foreign
-    /// cores).
+    /// The standalone single-core topology (`core_id = 0`).
     ///
     /// Used when no `rticx.toml` governs the application, so a standalone
     /// distribution keeps working unchanged.
-    pub fn identity(cores: u32) -> Self {
-        Self {
-            core_ids: (0..cores).collect(),
-            external_cores: Vec::new(),
-        }
+    pub fn identity() -> Self {
+        Self { core_id: 0 }
     }
 
-    /// The application's local core count (`core_ids.len()`).
-    pub fn cores(&self) -> u32 {
-        self.core_ids.len() as u32
-    }
-
-    /// The local core index -> global core id mapping.
-    pub fn core_ids(&self) -> &[u32] {
-        &self.core_ids
-    }
-
-    /// The foreign global core ids the application can see.
-    pub fn external_cores(&self) -> &[u32] {
-        &self.external_cores
+    /// The application's single, globally unique core id.
+    pub fn core_id(self) -> u32 {
+        self.core_id
     }
 }
 
@@ -112,10 +96,7 @@ pub fn resolve_app_topology(
         })?;
 
     Ok(Some(ResolvedTopology {
-        topology: AppTopology::new(
-            application.core_ids().to_vec(),
-            application.external_cores().to_vec(),
-        ),
+        topology: AppTopology::new(application.core_id()),
         manifest_path,
     }))
 }
@@ -163,19 +144,15 @@ mod tests {
     }
 
     #[test]
-    fn identity_maps_every_local_core() {
-        let topology = AppTopology::identity(2);
-        assert_eq!(topology.cores(), 2);
-        assert_eq!(topology.core_ids(), &[0, 1]);
-        assert!(topology.external_cores().is_empty());
+    fn identity_is_the_standalone_single_core() {
+        let topology = AppTopology::identity();
+        assert_eq!(topology.core_id(), 0);
     }
 
     #[test]
-    fn new_keeps_the_declared_mapping() {
-        let topology = AppTopology::new(vec![4, 2], vec![7]);
-        assert_eq!(topology.cores(), 2);
-        assert_eq!(topology.core_ids(), &[4, 2]);
-        assert_eq!(topology.external_cores(), &[7]);
+    fn new_keeps_the_declared_core_id() {
+        let topology = AppTopology::new(4);
+        assert_eq!(topology.core_id(), 4);
     }
 
     #[test]
@@ -187,14 +164,14 @@ mod tests {
         write_project(
             root,
             "schema = 1\n\
-             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_ids = [9]\n",
+             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_id = 9\n",
         );
         let inner = root.join("app");
         std::fs::create_dir_all(&inner).expect("inner dir");
         let manifest_path = write_project(
             &inner,
             "schema = 1\n\
-             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_ids = [0]\nexternal_cores = [1]\n",
+             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_id = 0\n",
         );
         let start = inner.join("src");
         std::fs::create_dir_all(&start).expect("start dir");
@@ -203,9 +180,7 @@ mod tests {
         let resolved = resolve_app_topology("app-m7", Some("m7"))
             .expect("resolution succeeds")
             .expect("a project is found");
-        assert_eq!(resolved.topology.core_ids(), &[0], "nearest wins");
-        assert_eq!(resolved.topology.external_cores(), &[1]);
-        assert_eq!(resolved.topology.cores(), 1);
+        assert_eq!(resolved.topology.core_id(), 0, "nearest wins");
         assert_eq!(resolved.manifest_path, manifest_path);
     }
 
@@ -216,14 +191,14 @@ mod tests {
         write_project(
             dir.path(),
             "schema = 1\n\
-             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_ids = [0]\n",
+             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_id = 0\n",
         );
 
         let _env = EnvGuard::set(dir.path());
         let resolved = resolve_app_topology("app-m7", None)
             .expect("resolution succeeds")
             .expect("a project is found");
-        assert_eq!(resolved.topology.core_ids(), &[0]);
+        assert_eq!(resolved.topology.core_id(), 0);
     }
 
     #[test]
@@ -233,7 +208,7 @@ mod tests {
         let manifest_path = write_project(
             dir.path(),
             "schema = 1\n\
-             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_ids = [0]\n",
+             [[application]]\npackage = \"app-m7\"\ntarget = { kind = \"bin\", name = \"m7\" }\ncore_id = 0\n",
         );
 
         let _env = EnvGuard::set(dir.path());

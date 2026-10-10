@@ -2,8 +2,7 @@
 //!
 //! Accepted manifests are asserted structurally and round-tripped through the
 //! canonical rendering; rejected manifests assert the exact, deterministic
-//! error message. The manifest declares no IPC memory: the
-//! `[ipc.regions]` table is rejected with an error naming the removal.
+//! error message. Each application declares exactly one scalar `core_id`
 
 use std::io::Write;
 
@@ -17,14 +16,12 @@ schema = 1
 [[application]]
 package = "app-m7"
 target = { kind = "bin", name = "m7" }
-core_ids = [0]
-external_cores = [1]
+core_id = 0
 
 [[application]]
 package = "app-m4"
 target = { kind = "bin", name = "m4", triple = "thumbv7em-none-eabihf" }
-core_ids = [1]
-external_cores = [0]
+core_id = 1
 "#;
 
 const CANONICAL: &str = "\
@@ -33,14 +30,12 @@ schema = 1
 [[application]]
 package = \"app-m7\"
 target = { kind = \"bin\", name = \"m7\" }
-core_ids = [0]
-external_cores = [1]
+core_id = 0
 
 [[application]]
 package = \"app-m4\"
 target = { kind = \"bin\", name = \"m4\", triple = \"thumbv7em-none-eabihf\" }
-core_ids = [1]
-external_cores = [0]
+core_id = 1
 ";
 
 fn err(source: &str) -> String {
@@ -62,7 +57,7 @@ fn parses_minimal_project() {
         [[application]]
         package = "app-m7"
         target = { kind = "bin", name = "m7" }
-        core_ids = [0]
+        core_id = 0
         "#,
     )
     .expect("valid manifest");
@@ -75,32 +70,7 @@ fn parses_minimal_project() {
     assert_eq!(application.target().kind(), TargetKind::Bin);
     assert_eq!(application.target().name(), "m7");
     assert_eq!(application.target().triple(), None);
-    assert_eq!(application.core_ids(), &[0]);
-    assert_eq!(application.external_cores(), &[] as &[u32]);
-}
-
-#[test]
-fn parses_external_cores() {
-    let config = parse_project_str(
-        r#"
-        schema = 1
-
-        [[application]]
-        package = "app-m7"
-        target = { kind = "bin", name = "m7" }
-        core_ids = [0]
-        external_cores = [2, 1]
-        "#,
-    )
-    .expect("valid manifest");
-
-    let application = config.application("app-m7").expect("application exists");
-    assert_eq!(application.core_ids(), &[0]);
-    assert_eq!(
-        application.external_cores(),
-        &[2, 1],
-        "declaration order is kept"
-    );
+    assert_eq!(application.core_id(), 0);
 }
 
 #[test]
@@ -126,20 +96,20 @@ fn parses_multi_application_project() {
         config
             .application("app-m7")
             .expect("application exists")
-            .external_cores(),
-        &[1]
+            .core_id(),
+        0
     );
     assert_eq!(
         config
             .application("app-m4")
             .expect("application exists")
-            .external_cores(),
-        &[0]
+            .core_id(),
+        1
     );
 }
 
 #[test]
-fn preserves_application_and_core_id_order() {
+fn preserves_application_order() {
     let config = parse_project_str(
         r#"
         schema = 1
@@ -147,12 +117,12 @@ fn preserves_application_and_core_id_order() {
         [[application]]
         package = "z-app"
         target = { kind = "bin", name = "z" }
-        core_ids = [4, 2]
+        core_id = 4
 
         [[application]]
         package = "a-app"
         target = { kind = "bin", name = "a" }
-        core_ids = [1]
+        core_id = 1
         "#,
     )
     .expect("valid manifest");
@@ -171,9 +141,8 @@ fn preserves_application_and_core_id_order() {
         config
             .application("z-app")
             .expect("application exists")
-            .core_ids(),
-        &[4, 2],
-        "local index order is kept"
+            .core_id(),
+        4
     );
 }
 
@@ -236,7 +205,7 @@ fn empty_project_round_trips() {
 fn rejects_missing_schema() {
     assert_eq!(
         err(
-            "[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\n"
+            "[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = 0\n"
         ),
         "missing required top-level key `schema` (expected `schema = 1`)"
     );
@@ -275,29 +244,6 @@ fn rejects_malformed_toml() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Rejected manifests: the removed `[ipc.regions]` table
-// ---------------------------------------------------------------------------
-
-#[test]
-fn rejects_the_removed_ipc_regions_table() {
-    // Both the fully explicit and the shorthand forms name the removal.
-    let expected = "`[ipc.regions]` was removed: IPC memory is owned by the distribution's \
-                    capability binding, not declared in rticx.toml. \
-                    Remove the `[ipc.regions]` table";
-    assert_eq!(
-        err("schema = 1\n[ipc.regions]\n\"0->1\" = { base = 0x30040000, size = 4096 }\n"),
-        expected
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[ipc.regions]\n\"0->1\" = { base_from_source = 0x30040000, base_from_target = 0x30040000, size = 4096 }\n"
-        ),
-        expected
-    );
-    // An `[ipc]` table with any content is the same removed section.
-    assert_eq!(err("schema = 1\n[ipc]\nregions = {}\n"), expected);
-}
 
 // ---------------------------------------------------------------------------
 // Rejected manifests: applications
@@ -327,7 +273,7 @@ fn rejects_application_entry_that_is_not_a_table() {
 fn rejects_unknown_application_key() {
     assert_eq!(
         err("schema = 1\n[[application]]\npackages = \"app\"\n"),
-        "`application[0]` has unknown key `packages`; expected `package`, `target`, `core_ids` or `external_cores`"
+        "`application[0]` has unknown key `packages`; expected `package`, `target` or `core_id`"
     );
 }
 
@@ -335,19 +281,19 @@ fn rejects_unknown_application_key() {
 fn rejects_missing_application_keys() {
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = 0\n"
         ),
         "`application[0]` is missing the required `package` key"
     );
     assert_eq!(
-        err("schema = 1\n[[application]]\npackage = \"app\"\ncore_ids = [0]\n"),
+        err("schema = 1\n[[application]]\npackage = \"app\"\ncore_id = 0\n"),
         "`application[0]` is missing the required `target` key"
     );
     assert_eq!(
         err(
             "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\n"
         ),
-        "`application[0]` is missing the required `core_ids` key"
+        "`application[0]` is missing the required `core_id` key"
     );
 }
 
@@ -355,19 +301,19 @@ fn rejects_missing_application_keys() {
 fn rejects_invalid_package_name() {
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = 3\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = 3\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = 0\n"
         ),
         "`application[0].package` must be a string, found an integer"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = 0\n"
         ),
         "`application[0].package` must not be empty"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app m7\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app m7\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = 0\n"
         ),
         "`application[0].package` `app m7` is not a valid cargo package name \
          (expected ASCII letters, digits, `-` or `_`)"
@@ -378,8 +324,8 @@ fn rejects_invalid_package_name() {
 fn rejects_duplicate_package() {
     assert_eq!(
         err("schema = 1\n\
-             [[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\n\
-             [[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"b\" }\ncore_ids = [1]\n"),
+             [[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = 0\n\
+             [[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"b\" }\ncore_id = 1\n"),
         "package `app` is declared by more than one `[[application]]`"
     );
 }
@@ -387,86 +333,67 @@ fn rejects_duplicate_package() {
 #[test]
 fn rejects_invalid_target() {
     assert_eq!(
-        err("schema = 1\n[[application]]\npackage = \"app\"\ntarget = 3\ncore_ids = [0]\n"),
+        err("schema = 1\n[[application]]\npackage = \"app\"\ntarget = 3\ncore_id = 0\n"),
         "`application[0].target` must be a table, found an integer"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\", tripples = \"x\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\", tripples = \"x\" }\ncore_id = 0\n"
         ),
         "`application[0].target` has unknown key `tripples`; expected `kind`, `name` or `triple`"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { name = \"a\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { name = \"a\" }\ncore_id = 0\n"
         ),
         "`application[0].target` is missing the required `kind` key"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\" }\ncore_id = 0\n"
         ),
         "`application[0].target` is missing the required `name` key"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = 3, name = \"a\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = 3, name = \"a\" }\ncore_id = 0\n"
         ),
         "`application[0].target.kind` must be a string, found an integer"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"lib\", name = \"a\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"lib\", name = \"a\" }\ncore_id = 0\n"
         ),
         "`application[0].target.kind` must be `\"bin\"`, found `\"lib\"`"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"m 7\" }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"m 7\" }\ncore_id = 0\n"
         ),
         "`application[0].target.name` `m 7` is not a valid cargo target name \
          (expected ASCII letters, digits, `-` or `_`)"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\", triple = 3 }\ncore_ids = [0]\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\", triple = 3 }\ncore_id = 0\n"
         ),
         "`application[0].target.triple` must be a string, found an integer"
     );
 }
 
 #[test]
-fn rejects_invalid_core_ids() {
+fn rejects_invalid_core_id() {
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = \"0\"\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = \"0\"\n"
         ),
-        "`application[0].core_ids` must be an array of integers, found a string"
+        "`application[0].core_id` must be an integer, found a string"
     );
     assert_eq!(
         err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = []\n"
+            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = -1\n"
         ),
-        "`application[0].core_ids` must not be empty; \
-         it maps each local core index to a global core id"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0, \"1\"]\n"
-        ),
-        "`application[0].core_ids[1]` must be an integer, found a string"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [-1]\n"
-        ),
-        "`application[0].core_ids[0]` = -1 is out of range 0..=4294967295"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0, 0]\n"
-        ),
-        "`application[0].core_ids` lists core id 0 more than once"
+        "`application[0].core_id` = -1 is out of range 0..=4294967295"
     );
 }
 
@@ -474,45 +401,10 @@ fn rejects_invalid_core_ids() {
 fn rejects_duplicate_global_core_id_across_applications() {
     assert_eq!(
         err("schema = 1\n\
-             [[application]]\npackage = \"app-a\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\n\
-             [[application]]\npackage = \"app-b\"\ntarget = { kind = \"bin\", name = \"b\" }\ncore_ids = [1, 0]\n"),
+             [[application]]\npackage = \"app-a\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_id = 0\n\
+             [[application]]\npackage = \"app-b\"\ntarget = { kind = \"bin\", name = \"b\" }\ncore_id = 0\n"),
         "global core id 0 is declared by both `app-a` and `app-b`; \
          core ids must be unique across applications"
     );
 }
 
-#[test]
-fn rejects_duplicate_external_core() {
-    assert_eq!(
-        err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\nexternal_cores = [1, 1]\n"
-        ),
-        "`application[0].external_cores` lists core id 1 more than once"
-    );
-}
-
-#[test]
-fn rejects_external_core_owned_by_the_application() {
-    assert_eq!(
-        err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0, 2]\nexternal_cores = [1, 2]\n"
-        ),
-        "`application[0].external_cores` lists core id 2, which this application owns via `core_ids`"
-    );
-}
-
-#[test]
-fn rejects_invalid_external_cores() {
-    assert_eq!(
-        err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\nexternal_cores = \"1\"\n"
-        ),
-        "`application[0].external_cores` must be an array of integers, found a string"
-    );
-    assert_eq!(
-        err(
-            "schema = 1\n[[application]]\npackage = \"app\"\ntarget = { kind = \"bin\", name = \"a\" }\ncore_ids = [0]\nexternal_cores = [-1]\n"
-        ),
-        "`application[0].external_cores[0]` = -1 is out of range 0..=4294967295"
-    );
-}

@@ -52,11 +52,16 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
     assert_eq!(receiver.receivers.len(), 1);
     let task = &receiver.receivers[0];
     assert_eq!(task.name, "EncryptTask");
-    assert_eq!(task.core, 0, "receiver `core` is a local index");
     assert_eq!(task.spawn_by, 0, "the global producer core id");
     assert_eq!(task.priority, 3);
     assert_eq!(task.capacity, 2);
     assert_eq!(task.input_type_name(), "EncryptReq");
+    let capability = receiver
+        .capability
+        .as_ref()
+        .expect("the mock distribution binds the receiver's capability");
+    assert_eq!(capability.physical_core, 1, "app-m4 runs on global core 1");
+    assert!(!capability.pools.is_empty(), "the dual's pool is reported");
 
     for target in ["m7", "m4"] {
         assert!(
@@ -105,16 +110,9 @@ fn sync_collects_a_manifest_for_every_fixture_application() {
         merged
             .apps()
             .iter()
-            .map(|app| (
-                app.package.as_str(),
-                app.core_ids.as_slice(),
-                app.external_cores.as_slice()
-            ))
+            .map(|app| (app.package.as_str(), app.core_id))
             .collect::<Vec<_>>(),
-        [
-            ("app-m7", &[0][..], &[1][..]),
-            ("app-m4", &[1][..], &[0][..]),
-        ],
+        [("app-m7", 0), ("app-m4", 1)],
         "the merged view carries the topology from rticx.toml"
     );
     assert_eq!(merged.tasks().len(), 1);
@@ -259,7 +257,7 @@ fn sync_reports_a_failing_cargo_check() {
     std::fs::write(
         dir.path().join("rticx.toml"),
         "schema = 1\n\n[[application]]\npackage = \"broken\"\n\
-         target = { kind = \"bin\", name = \"broken\" }\ncore_ids = [0]\n",
+         target = { kind = \"bin\", name = \"broken\" }\ncore_id = 0\n",
     )
     .expect("project manifest");
 
