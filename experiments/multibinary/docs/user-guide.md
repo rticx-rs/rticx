@@ -289,16 +289,64 @@ pass injects `core = 0` on the generated `#[task]`.
 | `spawn_by` | yes | the single **global** producer core id |
 | `init` | no (default `generated`) | must be `generated`; the build generates the receiver's init |
 | `shared` | no | passed to the core pass, which computes the SRP ceilings |
+| `ipc` | no | path of the spawn-input type, for a receiver whose `impl RticSwTask` is outside `#[app]`; must resolve inside `#[app]` (for example `ipc_types::PingMsg`). Absent by default — see below |
 
 A cross receiver may **not** declare `core`: it always runs on the application's
 single core, and the pass injects `core = 0` on the generated `#[task]`. Invalid
 arguments (unknown or duplicate keys, non-integer values, `capacity = 0`,
-`priority = 0` on a cross receiver, a `spawn_by` array or a `core` key, a
-receiver with no `impl RticSwTask`, or a malformed `dispatchers` list) are
-reported with a precise error.
+`priority = 0` on a cross receiver, a `spawn_by` array or a `core` key, an `ipc`
+value that is not a type path, `ipc` without `spawn_by`, a receiver with no
+`impl RticSwTask` and no `ipc`, or a malformed `dispatchers` list) are reported
+with a precise error.
 
 Cross-binary code requires the distribution's `swtasks` feature; without it
 `RticSwTask` is undefined and the receiver fails to compile.
+
+### Implementing a receiver outside the `#[app]` module
+
+By default the pass reads `type SpawnInput = …;` from the receiver's
+`impl RticSwTask` block, which must then live inside `#[app]`. When the
+implementation lives elsewhere — a sibling module, or a module shared by both
+binaries — name the input type on the declaration with `ipc`:
+
+```rust
+use my_distro::app;
+
+#[app(
+    device = my_pac,
+    dispatchers = [IPC_LINE_0]
+)]
+mod app {
+    #[sw_task(priority = 3, capacity = 2, spawn_by = 0, ipc = ipc_types::PingMsg)]
+    pub struct PingTask;
+}
+
+mod external {
+    use embedded_io::Write as _; // only when the console is a `Usart`
+    use crate::app::{PingTask, RticMutex, RticSwTask, ipc_types};
+
+    impl RticSwTask for PingTask {
+        type SpawnInput = ipc_types::PingMsg;
+
+        fn exec(&mut self, input: Self::SpawnInput) {
+            self.shared().console.lock(|console| {
+                let _ = writeln!(console, "ping seq={}", input.seq);
+            });
+        }
+    }
+}
+```
+
+`ipc` must resolve **inside `#[app]`**: write `ipc = ipc_types::PingMsg`, not
+`crate::app::ipc_types::PingMsg`. The build emits a compile-time assertion that
+`<PingTask as RticSwTask>::SpawnInput` is exactly the declared type, so a
+mismatch fails the build instead of silently sending the wrong layout; the
+`CrossCoreMessage` assertion of [section 5](#5-shared-types-ipc-typestoml)
+applies as well. The external module needs `RticSwTask` in scope for the `impl`
+and `RticMutex` (the trait providing `.lock`) to reach a `shared` resource
+through the generated `self.shared()`. A `Usart` console implements
+`embedded_io::Write` rather than `core::fmt::Write`, so `writeln!` needs
+`embedded_io::Write as _` in scope.
 
 ## 7. Worked example
 

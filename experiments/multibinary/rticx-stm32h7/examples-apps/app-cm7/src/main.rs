@@ -44,44 +44,6 @@ pub mod app {
         console: Usart<pac::USART1>,
     }
 
-    /// Cross-binary receiver: the M4 (global core 1) spawns a pong here. The
-    /// M7 source never declares the `PingTask` sender stub; the cross-binary
-    /// pass generates it from the synced system view.
-    #[sw_task(priority = 3, capacity = 2, spawn_by = 1, shared = [console])]
-    struct PongTask;
-
-    impl RticSwTask for PongTask {
-        type SpawnInput = ipc_types::PingMsg;
-
-        fn exec(&mut self, input: Self::SpawnInput) {
-            self.shared().console.lock(|console| {
-                let _ = writeln!(
-                    console,
-                    "[M7] rx pong seq={} value={:#010x}",
-                    input.seq, input.value
-                );
-            });
-
-            if input.seq >= PING_PONG_LIMIT {
-                self.shared().console.lock(|console| {
-                    let _ = writeln!(
-                        console,
-                        "[M7] cross-binary ping-pong complete after {PING_PONG_LIMIT} hops"
-                    );
-                });
-                return;
-            }
-
-            // Answer the M4 through the generated `PingTask` sender stub: the
-            // input is enqueued in the `(0 -> 1)` FIFO and the M4's HSEM1 router
-            // is rung.
-            let _ = PingTask::cross_spawn(ipc_types::PingMsg {
-                seq: input.seq + 1,
-                value: input.value.wrapping_add(1),
-            });
-        }
-    }
-
     #[init]
     fn init() -> (Shared, TaskInits) {
         let dp = pac::Peripherals::take().unwrap();
@@ -123,6 +85,44 @@ pub mod app {
             loop {
                 core::hint::spin_loop();
             }
+        }
+    }
+
+    /// Cross-binary receiver: the M4 (global core 1) spawns a pong here. The
+    /// M7 source never declares the `PingTask` sender stub; the cross-binary
+    /// pass generates it from the synced system view.
+    #[sw_task(priority = 3, capacity = 2, spawn_by = 1, shared = [console])]
+    struct PongTask;
+
+    impl RticSwTask for PongTask {
+        type SpawnInput = ipc_types::PingMsg;
+
+        fn exec(&mut self, input: Self::SpawnInput) {
+            self.shared().console.lock(|console| {
+                let _ = writeln!(
+                    console,
+                    "[M7] rx pong seq={} value={:#010x}",
+                    input.seq, input.value
+                );
+            });
+
+            if input.seq >= PING_PONG_LIMIT {
+                self.shared().console.lock(|console| {
+                    let _ = writeln!(
+                        console,
+                        "[M7] cross-binary ping-pong complete after {PING_PONG_LIMIT} hops"
+                    );
+                });
+                return;
+            }
+
+            // Answer the M4 through the generated `PingTask` sender stub: the
+            // input is enqueued in the `(0 -> 1)` FIFO and the M4's HSEM1 router
+            // is rung.
+            let _ = PingTask::cross_spawn(ipc_types::PingMsg {
+                seq: input.seq + 1,
+                value: input.value.wrapping_add(1),
+            });
         }
     }
 }

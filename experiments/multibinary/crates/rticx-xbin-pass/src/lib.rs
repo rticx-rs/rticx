@@ -491,6 +491,7 @@ impl RticPass for XbinPass {
                 &view,
                 application,
                 &decls.receivers,
+                &decls.ipc_receivers,
                 &extensions,
                 self.backend.as_deref(),
             )?);
@@ -1025,6 +1026,4 @@ mod tests {
             .to_string();
         assert!(error.contains("unknown argument `bogus`"), "{error}");
     }
-
-    
 }

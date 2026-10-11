@@ -471,6 +471,7 @@ pub(crate) fn generate_receiver_items(
     view: &SystemView,
     application: &AppEntry,
     receivers: &[ReceiverDecl],
+    ipc_receivers: &BTreeSet<String>,
     extensions: &AppExtensions,
     backend: Option<&dyn XbinPassBackend>,
 ) -> syn::Result<Vec<Item>> {
@@ -532,7 +533,10 @@ pub(crate) fn generate_receiver_items(
     // ~ The receiver's `SpawnInput` must be a cross-core message; a generated
     // const assertion pins the guarantee to the injected `CrossCoreMessage`
     // marker trait instead of relying on a bound in its
-    // definition.
+    // definition. A receiver that named its input type with `ipc` gets a
+    // second assertion: the declared type must be exactly
+    // `<Task as RticSwTask>::SpawnInput`, which is the only check the pass can
+    // make when the `impl RticSwTask` lives outside the `#[app]` module.
     let assertions = receivers
         .iter()
         .map(|receiver| {
@@ -542,8 +546,26 @@ pub(crate) fn generate_receiver_items(
             })
         })
         .collect::<syn::Result<Vec<TokenStream>>>()?;
-    let assert_doc = "Compile-time assertion that every cross-binary receiver's `SpawnInput` \
-         implements `CrossCoreMessage`.";
+    let same_input_assertions = receivers
+        .iter()
+        .filter(|receiver| ipc_receivers.contains(&receiver.name))
+        .map(|receiver| {
+            let task_ident = ident(&receiver.name)?;
+            let input_ty: Type = syn::parse_str(&receiver.input_type).map_err(|parse_error| {
+                error(format!(
+                    "cannot parse the `ipc` type `{}` of receiver `{}`: {parse_error}",
+                    receiver.input_type, receiver.name
+                ))
+            })?;
+            Ok(quote! {
+                __rticx_xbin_assert_same_input::<#input_ty,
+                                               <#task_ident as RticSwTask>::SpawnInput>();
+            })
+        })
+        .collect::<syn::Result<Vec<TokenStream>>>()?;
+    let assert_doc = "Compile-time assertions on the cross-binary receivers: every receiver's \
+         `SpawnInput` implements `CrossCoreMessage`, and every receiver that declared \
+         `ipc = <type>` has `<Task as RticSwTask>::SpawnInput` exactly equal to that type.";
     let mut items = Vec::with_capacity(receivers.len() * 2 + groups.len() * 3 + 1);
     items.push(syn::parse_quote! {
         #[doc = #assert_doc]
@@ -551,8 +573,14 @@ pub(crate) fn generate_receiver_items(
         #[allow(non_snake_case)]
         const _: () = {
             fn __rticx_xbin_assert_cross_core_message<T: CrossCoreMessage>() {}
+
+            trait __RticxXbinIsSame<T> {}
+            impl<T> __RticxXbinIsSame<T> for T {}
+            fn __rticx_xbin_assert_same_input<A: __RticxXbinIsSame<B>, B>() {}
+
             fn __rticx_xbin_check() {
                 #(#assertions)*
+                #(#same_input_assertions)*
             }
         };
     });

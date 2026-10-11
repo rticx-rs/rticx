@@ -134,6 +134,46 @@ fn receiver_syntax_parses_all_keys_and_defaults() {
 }
 
 #[test]
+fn ipc_supplies_the_input_type_without_an_impl_block() {
+    // A receiver whose `impl RticSwTask` lives outside the `#[app]` module
+    // names its spawn-input type explicitly with `ipc`, so the pass does not
+    // need to see the impl block.
+    let app_mod: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[sw_task(priority = 3, spawn_by = 7, ipc = ipc_types::Msg)]
+            pub struct Cross;
+        }
+    };
+    let (_dir, manifest) = manifest_for(receiver_topology(), receiver_args(), app_mod.clone());
+    assert_eq!(manifest.receivers.len(), 1);
+    assert_eq!(manifest.receivers[0].input_type, "ipc_types::Msg");
+
+    let (_, out) = run(receiver_topology(), receiver_args(), app_mod).expect("pass succeeds");
+    let tokens = out.to_token_stream().to_string();
+    assert!(!tokens.contains("ipc"), "`ipc` is consumed: {tokens}");
+    assert!(!tokens.contains("spawn_by"), "{tokens}");
+}
+
+#[test]
+fn ipc_without_spawn_by_is_rejected() {
+    // `ipc` names the spawn-input type of a *cross-binary receiver*, so it is
+    // meaningless on a core-local `#[sw_task]` without a producer core.
+    let app_mod: syn::ItemMod = syn::parse_quote! {
+        mod app {
+            #[sw_task(ipc = ipc_types::Msg)]
+            struct Local;
+        }
+    };
+    let error = rejected(receiver_topology(), quote!(device = mypac), app_mod);
+    assert!(error.contains("ipc"), "{error}");
+    assert!(error.contains("spawn_by"), "{error}");
+    assert!(
+        error.contains("declares `ipc` without `spawn_by`"),
+        "the error must explain that `ipc` requires a producer core: {error}"
+    );
+}
+
+#[test]
 fn any_spawn_by_is_a_cross_binary_receiver() {
     // With one core per binary there is no in-app cross-core task anymore:
     // any `spawn_by` that is not the application's own core names a producer
@@ -314,7 +354,20 @@ fn malformed_task_values_are_rejected() {
                     struct Task;
                 }
             },
-            "must have an `impl RticSwTask for Task` block declaring `type SpawnInput = …;`",
+            "must have either an `impl RticSwTask for Task` block declaring `type SpawnInput = …;`",
+        ),
+        (
+            syn::parse_quote! {
+                mod app {
+                    #[sw_task(priority = 3, spawn_by = 7, ipc = 3)]
+                    struct Task;
+
+                    impl RticSwTask for Task {
+                        type SpawnInput = ipc_types::Msg;
+                    }
+                }
+            },
+            "`ipc` must be a type path, e.g. `ipc = ipc_types::Msg`",
         ),
         (
             syn::parse_quote! {
@@ -353,7 +406,7 @@ fn malformed_task_values_are_rejected() {
 fn unknown_task_keys_are_rejected_with_the_supported_list() {
     let app_mod: syn::ItemMod = syn::parse_quote! {
         mod app {
-            #[sw_task(priority = 3, spawn_by = 7, bogus = 1)]
+            #[sw_task(priority = 3, spawn_by = 7, ipc = ipc_types::Msg, bogus = 1)]
             struct Task;
 
             impl RticSwTask for Task {
@@ -364,7 +417,8 @@ fn unknown_task_keys_are_rejected_with_the_supported_list() {
     let error = rejected(receiver_topology(), receiver_args(), app_mod);
     assert!(
         error.contains(
-            "unknown argument `bogus`; expected one of: priority, capacity, core, spawn_by, init, shared"
+            "unknown argument `bogus`; expected one of: priority, capacity, core, spawn_by, init, \
+             shared, ipc"
         ),
         "{error}"
     );

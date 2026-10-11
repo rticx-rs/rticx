@@ -244,7 +244,6 @@ fn rejects_malformed_toml() {
     );
 }
 
-
 // ---------------------------------------------------------------------------
 // Rejected manifests: applications
 // ---------------------------------------------------------------------------
@@ -407,4 +406,3 @@ fn rejects_duplicate_global_core_id_across_applications() {
          core ids must be unique across applications"
     );
 }
-

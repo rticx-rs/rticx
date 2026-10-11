@@ -370,4 +370,3 @@ fn sync_rejects_an_unknown_input_type() {
          `ipc-types.toml`"
     );
 }
-

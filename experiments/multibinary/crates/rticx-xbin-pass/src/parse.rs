@@ -98,6 +98,10 @@ pub(crate) const SW_TASK_ATTR: &str = "sw_task";
 pub(crate) const ASYNC_TASK_ATTR: &str = "async_task";
 /// `#[sw_task(spawn_by = G)]`: the global producer core id.
 pub(crate) const SPAWN_BY_ARG: &str = "spawn_by";
+/// `#[sw_task(ipc = <type path>)]`: the spawn-input type of a cross-binary
+/// receiver whose `impl RticSwTask` lives outside the `#[app]` module, where
+/// the pass cannot read its `type SpawnInput = …;` declaration.
+pub(crate) const IPC_ARG: &str = "ipc";
 /// `#[sw_task(init = generated)]`: accepted for parity with the native
 /// software-task syntax; the pass generates the receiver's init.
 pub(crate) const INIT_ARG: &str = "init";
@@ -153,6 +157,12 @@ pub(crate) struct ModuleDecls {
     /// Span of every cross-binary receiver declaration, keyed by task name,
     /// so the priority-line validation can point at the receiver.
     pub receiver_spans: BTreeMap<String, Span>,
+    /// Names of the cross-binary receivers that declared `ipc = <type>`.
+    ///
+    /// Their `impl RticSwTask` may live outside the `#[app]` module, so codegen
+    /// emits an extra compile-time assertion that the declared type equals
+    /// `<Task as RticSwTask>::SpawnInput`. Pass-local: never serialized.
+    pub ipc_receivers: BTreeSet<String>,
 }
 
 /// Whether a local task declaration is a `#[sw_task]` or an `#[async_task]`.
@@ -431,11 +441,24 @@ pub(crate) fn parse_module(
             SPAWN_BY_ARG,
             INIT_ARG,
             "shared",
+            IPC_ARG,
         ])?;
 
         // `spawn_by` absent: a plain local software task, untouched; recorded
         // with its own core as the origin for the priority-line validation.
         let Some(span) = attr.get_expr(SPAWN_BY_ARG).map(Spanned::span) else {
+            // `ipc` names the spawn-input type of a *cross-binary* receiver, so
+            // it is meaningless without a producer core.
+            if let Some(expr) = attr.get_expr(IPC_ARG) {
+                return Err(syn::Error::new(
+                    expr.span(),
+                    format!(
+                        "`{name}` declares `{IPC_ARG}` without `{SPAWN_BY_ARG}`; `{IPC_ARG}` names \
+                         the spawn-input type of a cross-binary receiver, so it requires a producer \
+                         core"
+                    ),
+                ));
+            }
             record_local_task(
                 &mut decls,
                 &name,
@@ -459,10 +482,16 @@ pub(crate) fn parse_module(
             ));
         }
 
-        // Cross-binary receiver: recorded here, invisible to sw-pass.
+        // Cross-binary receiver: recorded here, invisible to sw-pass. An
+        // explicit `ipc` names the input type, so the `impl RticSwTask` may
+        // live outside the `#[app]` module.
+        let ipc = take_ipc(&mut attr)?;
+        if ipc.is_some() {
+            decls.ipc_receivers.insert(name.to_string());
+        }
         decls.receiver_spans.insert(name.to_string(), name.span());
         decls.receivers.push(parse_receiver(
-            name, &attr, &inputs, extensions, producer, span,
+            name, &attr, &inputs, extensions, producer, span, ipc,
         )?);
 
         // Re-render the rewritten attribute (minus `spawn_by`) in place for the
@@ -544,6 +573,28 @@ fn take_spawn_by(attr: &mut RticAttr, span: Span) -> syn::Result<u32> {
     })
 }
 
+/// Reads and removes the `ipc` spawn-input type of a cross-binary receiver.
+///
+/// The value must be a plain type path (`ipc = ipc_types::Msg`); it is rendered
+/// through [`type_path_string`] so the recorded `input_type` is canonical and
+/// identical to the one an in-module `type SpawnInput = …;` would produce.
+fn take_ipc(attr: &mut RticAttr) -> syn::Result<Option<String>> {
+    match attr.take_expr(IPC_ARG) {
+        None => Ok(None),
+        Some(Expr::Path(p)) if p.qself.is_none() => {
+            let ty = Type::Path(syn::TypePath {
+                qself: None,
+                path: p.path,
+            });
+            Ok(Some(type_path_string(&ty)))
+        }
+        Some(other) => Err(syn::Error::new(
+            other.span(),
+            format!("`{IPC_ARG}` must be a type path, e.g. `{IPC_ARG} = ipc_types::Msg`"),
+        )),
+    }
+}
+
 /// Rejects an `init` argument other than `init = generated`.
 ///
 /// Cross-binary receivers always run through the pass-generated init (their
@@ -574,6 +625,7 @@ fn parse_receiver(
     extensions: &AppExtensions,
     spawn_by: u32,
     spawn_by_span: Span,
+    ipc: Option<String>,
 ) -> syn::Result<ReceiverDecl> {
     check_init_generated(attr, &name)?;
 
@@ -610,15 +662,18 @@ fn parse_receiver(
         ));
     }
 
-    let input_type = inputs.get(&name.to_string()).cloned().ok_or_else(|| {
-        syn::Error::new(
-            name.span(),
-            format!(
-                "cross-binary receiver `{name}` must have an `impl {SW_TASK_TRAIT} for {name}` \
-                 block declaring `type {SPAWN_INPUT_ASSOC} = …;` inside the `#[app]` module"
-            ),
-        )
-    })?;
+    let input_type = ipc
+        .or_else(|| inputs.get(&name.to_string()).cloned())
+        .ok_or_else(|| {
+            syn::Error::new(
+                name.span(),
+                format!(
+                    "cross-binary receiver `{name}` must have either an `impl {SW_TASK_TRAIT} for {name}` \
+                     block declaring `type {SPAWN_INPUT_ASSOC} = …;` inside the `#[app]` module, \
+                     or an explicit `{IPC_ARG} = <type>` argument"
+                ),
+            )
+        })?;
 
     Ok(ReceiverDecl {
         name: name.to_string(),

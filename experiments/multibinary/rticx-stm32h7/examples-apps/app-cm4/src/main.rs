@@ -31,43 +31,10 @@ pub mod app {
 
     use stm32_hal2::{clocks::Clocks, pac, usart::Usart};
 
-    /// Cross-binary hops the demo runs before it stops; see the M7 side.
-    const PING_PONG_LIMIT: u32 = 4;
-
     /// Console shared (under the SRP lock) by `init`, `PingTask` and `Idle`.
     #[shared]
     struct Shared {
         console: Usart<pac::USART2>,
-    }
-
-    /// Cross-binary receiver: the M7 (global core 0) spawns a ping here.
-    #[sw_task(priority = 3, capacity = 2, spawn_by = 0, shared = [console])]
-    struct PingTask;
-
-    impl RticSwTask for PingTask {
-        type SpawnInput = ipc_types::PingMsg;
-
-        fn exec(&mut self, input: Self::SpawnInput) {
-            self.shared().console.lock(|console| {
-                let _ = writeln!(
-                    console,
-                    "[M4] rx ping seq={} value={:#010x}",
-                    input.seq, input.value
-                );
-            });
-
-            if input.seq >= PING_PONG_LIMIT {
-                return;
-            }
-
-            // Answer the M7 through the generated `PongTask` sender stub: the
-            // input is enqueued in the `(1 -> 0)` FIFO and the M7's HSEM0 router
-            // is rung.
-            let _ = PongTask::cross_spawn(ipc_types::PingMsg {
-                seq: input.seq + 1,
-                value: input.value.wrapping_add(1),
-            });
-        }
     }
 
     #[init]
@@ -96,6 +63,47 @@ pub mod app {
             loop {
                 core::hint::spin_loop();
             }
+        }
+    }
+
+    /// Cross-binary receiver: the M7 (global core 0) spawns a ping here.
+    /// Note the additional `ipc` parameter which when mentioned explicitly allows defining the task's implementation outside the app module
+    #[sw_task(priority = 3, capacity = 2, spawn_by = 0, shared = [console], ipc = ipc_types::PingMsg)]
+    pub struct PingTask;
+}
+
+/// Example where a cross-core task implementation resides outside the `app` module
+pub mod external {
+    use embedded_io::Write as _;
+
+    use crate::app::{PingTask, PongTask, RticMutex, RticSwTask, ipc_types};
+
+    /// Cross-binary hops the demo runs before it stops; see the M7 side.
+    const PING_PONG_LIMIT: u32 = 4;
+
+    impl RticSwTask for PingTask {
+        type SpawnInput = ipc_types::PingMsg;
+
+        fn exec(&mut self, input: Self::SpawnInput) {
+            self.shared().console.lock(|console| {
+                let _ = writeln!(
+                    console,
+                    "[M4] rx ping seq={} value={:#010x}",
+                    input.seq, input.value
+                );
+            });
+
+            if input.seq >= PING_PONG_LIMIT {
+                return;
+            }
+
+            // Answer the M7 through the generated `PongTask` sender stub: the
+            // input is enqueued in the `(1 -> 0)` FIFO and the M7's HSEM0 router
+            // is rung.
+            let _ = PongTask::cross_spawn(ipc_types::PingMsg {
+                seq: input.seq + 1,
+                value: input.value.wrapping_add(1),
+            });
         }
     }
 }
